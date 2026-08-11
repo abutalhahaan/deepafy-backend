@@ -40,3 +40,37 @@ class UserIdentity(models.Model):
 
     def __str__(self):
         return str(self.user_id)
+
+
+class AccountType(models.Model):
+    class Type(models.TextChoices):
+        PERSONAL = "personal", "Personal Account"
+        PROFESSIONAL = "professional", "Professional Account"
+        COMPANY = "company", "Company Account"
+
+    identity = models.ForeignKey(
+        UserIdentity,
+        on_delete=models.CASCADE,
+        related_name="account_types",
+    )
+    account_type = models.CharField(
+        max_length=30,
+        choices=Type.choices,
+    )
+    is_primary = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["identity", "account_type"],
+                name="unique_account_type_per_identity",
+            )
+        ]
+        ordering = ["account_type"]
+
+    def __str__(self):
+        return f"{self.identity.user_id} - {self.get_account_type_display()}"
