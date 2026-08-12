@@ -74,3 +74,17 @@ class AccountType(models.Model):
 
     def __str__(self):
         return f"{self.identity.user_id} - {self.get_account_type_display()}"
+
+class PersonalAccount(models.Model):
+    identity = models.OneToOneField(
+        UserIdentity,
+        on_delete=models.CASCADE,
+        related_name="personal_account",
+    )
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Personal Account - {self.identity.user_id}"
