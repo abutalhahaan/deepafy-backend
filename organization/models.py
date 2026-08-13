@@ -81,3 +81,53 @@ class OrganizationRelationship(models.Model):
             f"{self.organization.name} - "
             f"{self.get_relationship_type_display()}"
         )
+class AdministrativeRole(models.Model):
+    class RoleType(models.TextChoices):
+        OWNER = "owner", "Owner"
+        CO_OWNER = "co_owner", "Co-Owner"
+        SUPER_ADMIN = "super_admin", "Super Admin"
+        CO_SUPER_ADMIN = "co_super_admin", "Co-Super Admin"
+        GLOBAL_DEPARTMENT_ADMIN = (
+            "global_department_admin",
+            "Global Department Admin",
+        )
+        CO_GLOBAL_DEPARTMENT_ADMIN = (
+            "co_global_department_admin",
+            "Co-Global Department Admin",
+        )
+        REGIONAL_ADMIN = "regional_admin", "Regional Admin"
+        CO_REGIONAL_ADMIN = "co_regional_admin", "Co-Regional Admin"
+        COUNTRY_ADMIN = "country_admin", "Country Admin"
+        CO_COUNTRY_ADMIN = "co_country_admin", "Co-Country Admin"
+        COUNTRY_DEPARTMENT_ADMIN = (
+            "country_department_admin",
+            "Country Department Admin",
+        )
+        CO_COUNTRY_DEPARTMENT_ADMIN = (
+            "co_country_department_admin",
+            "Co-Country Department Admin",
+        )
+        STAFF = "staff", "Staff"
+
+    identity = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.CASCADE,
+        related_name="administrative_roles",
+    )
+    role_type = models.CharField(
+        max_length=40,
+        choices=RoleType.choices,
+    )
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["role_type"]
+
+    def __str__(self):
+        return (
+            f"{self.identity.user_id} - "
+            f"{self.get_role_type_display()}"
+        )
