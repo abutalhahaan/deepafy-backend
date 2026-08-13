@@ -163,3 +163,20 @@ class AdministrativeAssignment(models.Model):
             f"{self.identity.user_id} - "
             f"{self.role.get_role_type_display()}"
         )
+class Region(models.Model):
+    region_id = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        editable=False,
+    )
+    name = models.CharField(max_length=255)
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
