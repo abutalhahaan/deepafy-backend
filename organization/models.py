@@ -213,3 +213,36 @@ class Country(models.Model):
 
     def __str__(self):
         return self.name
+class CountryDepartment(models.Model):
+    department_id = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        editable=False,
+    )
+    country = models.ForeignKey(
+        Country,
+        on_delete=models.PROTECT,
+        related_name="departments",
+    )
+    name = models.CharField(max_length=255)
+    code = models.CharField(max_length=50)
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["country", "name"],
+                name="unique_department_per_country",
+            ),
+            models.UniqueConstraint(
+                fields=["country", "code"],
+                name="unique_department_code_per_country",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.country.name} - {self.name}"
