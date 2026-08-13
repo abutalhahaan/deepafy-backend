@@ -180,3 +180,36 @@ class Region(models.Model):
 
     def __str__(self):
         return self.name
+class Country(models.Model):
+    country_id = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        editable=False,
+    )
+    region = models.ForeignKey(
+        Region,
+        on_delete=models.PROTECT,
+        related_name="countries",
+    )
+    name = models.CharField(max_length=255)
+    code = models.CharField(max_length=10)
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["region", "name"],
+                name="unique_country_per_region",
+            ),
+            models.UniqueConstraint(
+                fields=["code"],
+                name="unique_country_code",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
