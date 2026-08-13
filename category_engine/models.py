@@ -4,6 +4,16 @@ from django.db import models
 
 
 class Category(models.Model):
+    VISIBILITY_PUBLIC = "public"
+    VISIBILITY_HIDDEN = "hidden"
+    VISIBILITY_DISABLED = "disabled"
+
+    VISIBILITY_CHOICES = [
+        (VISIBILITY_PUBLIC, "Public"),
+        (VISIBILITY_HIDDEN, "Hidden"),
+        (VISIBILITY_DISABLED, "Disabled"),
+    ]
+
     category_id = models.UUIDField(
         default=uuid.uuid4,
         unique=True,
@@ -21,7 +31,11 @@ class Category(models.Model):
     description = models.TextField(blank=True)
     is_featured = models.BooleanField(default=False)
     display_order = models.PositiveIntegerField(default=0)
-    is_active = models.BooleanField(default=True)
+    visibility = models.CharField(
+         max_length=20,
+         choices=VISIBILITY_CHOICES,
+         default=VISIBILITY_PUBLIC,
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
