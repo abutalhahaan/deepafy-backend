@@ -131,3 +131,35 @@ class AdministrativeRole(models.Model):
             f"{self.identity.user_id} - "
             f"{self.get_role_type_display()}"
         )
+class AdministrativeAssignment(models.Model):
+    identity = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.CASCADE,
+        related_name="administrative_assignments",
+    )
+    role = models.ForeignKey(
+        AdministrativeRole,
+        on_delete=models.CASCADE,
+        related_name="assignments",
+    )
+    reporting_boss = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="subordinate_administrative_assignments",
+    )
+    is_primary = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return (
+            f"{self.identity.user_id} - "
+            f"{self.role.get_role_type_display()}"
+        )
