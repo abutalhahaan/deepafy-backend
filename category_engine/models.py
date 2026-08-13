@@ -41,3 +41,27 @@ class Category(models.Model):
 
     def __str__(self):
         return self.name
+class CategoryTranslation(models.Model):
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.CASCADE,
+        related_name="translations",
+    )
+    language_code = models.CharField(max_length=10)
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["language_code"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["category", "language_code"],
+                name="unique_category_translation_language",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.category.name} - {self.language_code}"
