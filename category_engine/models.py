@@ -41,6 +41,8 @@ class Category(models.Model):
 
     def __str__(self):
         return self.name
+
+
 class CategoryTranslation(models.Model):
     category = models.ForeignKey(
         Category,
@@ -65,3 +67,33 @@ class CategoryTranslation(models.Model):
 
     def __str__(self):
         return f"{self.category.name} - {self.language_code}"
+
+
+class CategoryCountryOverride(models.Model):
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.CASCADE,
+        related_name="country_overrides",
+    )
+    country = models.ForeignKey(
+        "organization.Country",
+        on_delete=models.PROTECT,
+        related_name="category_overrides",
+    )
+    is_enabled = models.BooleanField(default=True)
+    display_order = models.PositiveIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["display_order", "category"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["category", "country"],
+                name="unique_category_country_override",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.category.name} - {self.country.name}"
