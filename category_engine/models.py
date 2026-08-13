@@ -19,6 +19,8 @@ class Category(models.Model):
     name = models.CharField(max_length=255)
     slug = models.SlugField(max_length=255)
     description = models.TextField(blank=True)
+    is_featured = models.BooleanField(default=False)
+    display_order = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
