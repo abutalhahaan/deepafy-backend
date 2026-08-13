@@ -36,6 +36,8 @@ class Category(models.Model):
          choices=VISIBILITY_CHOICES,
          default=VISIBILITY_PUBLIC,
     )
+    is_deleted = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
