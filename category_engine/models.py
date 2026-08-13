@@ -69,6 +69,7 @@ class CategoryTranslation(models.Model):
         return f"{self.category.name} - {self.language_code}"
 
 
+
 class CategoryCountryOverride(models.Model):
     category = models.ForeignKey(
         Category,
@@ -97,3 +98,27 @@ class CategoryCountryOverride(models.Model):
 
     def __str__(self):
         return f"{self.category.name} - {self.country.name}"
+class CategoryVersion(models.Model):
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.CASCADE,
+        related_name="versions",
+    )
+    country = models.ForeignKey(
+        "organization.Country",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="category_versions",
+    )
+ 
+    previous_configuration = models.JSONField(default=dict)
+    current_configuration = models.JSONField(default=dict)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.category.name} - {self.created_at}"
