@@ -1,5 +1,7 @@
 from django.core.exceptions import ValidationError
 
+from .models import Category, CategoryRelationship
+
 
 def validate_category_name(name):
     if not name or not name.strip():
@@ -20,8 +22,6 @@ def validate_category_slug(slug):
             "Category slug cannot exceed 255 characters."
         )
 
-from .models import Category
-
 
 def validate_category_visibility(visibility):
     valid_values = {
@@ -31,38 +31,50 @@ def validate_category_visibility(visibility):
     }
 
     if visibility not in valid_values:
+        raise ValidationError("Invalid category visibility.")
+
+
+def validate_category_relationship(parent, child):
+    if parent is None or child is None:
         raise ValidationError(
-            "Invalid category visibility."
+            "Both parent and child categories are required."
         )
 
-def validate_category_parent(category, parent):
-    if parent is None:
-        return
-
-    if category is not None and category.pk == parent.pk:
+    if parent.pk == child.pk:
         raise ValidationError(
-            "A category cannot be its own parent."
+            "A category cannot be related to itself."
         )
-
-def validate_category_parent_status(parent):
-    if parent is None:
-        return
 
     if parent.is_deleted:
         raise ValidationError(
             "A deleted category cannot be used as a parent."
         )
 
-def validate_category_parent_hierarchy(category, parent):
-    if parent is None:
-        return
+    if child.is_deleted:
+        raise ValidationError(
+            "A deleted category cannot be used as a child."
+        )
 
-    current = parent
+    stack = [child]
+    visited = set()
 
-    while current is not None:
-        if category is not None and current.pk == category.pk:
+    while stack:
+        current = stack.pop()
+
+        if current.pk in visited:
+            continue
+
+        visited.add(current.pk)
+
+        if current.pk == parent.pk:
             raise ValidationError(
-                "A category cannot be placed under its own descendant."
+                "This relationship would create a circular category hierarchy."
             )
 
-        current = current.parent
+        relationships = CategoryRelationship.objects.filter(
+            parent=current,
+            is_active=True,
+        ).select_related("child")
+
+        for relationship in relationships:
+            stack.append(relationship.child)

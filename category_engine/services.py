@@ -2,6 +2,12 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from .models import Category, CategoryRelationship
+from .validators import (
+    validate_category_name,
+    validate_category_relationship,
+    validate_category_slug,
+    validate_category_visibility,
+)
 
 
 @transaction.atomic
@@ -15,15 +21,28 @@ def create_category(
     display_order=0,
     visibility=Category.VISIBILITY_PUBLIC,
 ):
-    return Category.objects.create(
-        name=name,
-        slug=slug,
+    validate_category_name(name)
+    validate_category_slug(slug)
+    validate_category_visibility(visibility)
+
+    category = Category.objects.create(
+        name=name.strip(),
+        slug=slug.strip(),
         description=description,
-        parent=parent,
         is_featured=is_featured,
         display_order=display_order,
         visibility=visibility,
     )
+
+    if parent is not None:
+        add_category_relationship(
+            parent=parent,
+            child=category,
+            display_order=display_order,
+        )
+
+    return category
+
 
 @transaction.atomic
 def update_category(category, **changes):
@@ -31,18 +50,31 @@ def update_category(category, **changes):
         "name",
         "slug",
         "description",
-        "parent",
         "is_featured",
         "display_order",
         "visibility",
     }
 
     for field, value in changes.items():
-        if field in allowed_fields:
-            setattr(category, field, value)
+        if field not in allowed_fields:
+            continue
+
+        if field == "name":
+            validate_category_name(value)
+            value = value.strip()
+
+        elif field == "slug":
+            validate_category_slug(value)
+            value = value.strip()
+
+        elif field == "visibility":
+            validate_category_visibility(value)
+
+        setattr(category, field, value)
 
     category.save()
     return category
+
 
 @transaction.atomic
 def delete_category(category):
@@ -55,55 +87,14 @@ def restore_category(category):
     category.restore()
     return category
 
+
 @transaction.atomic
-def add_category_relationship(parent, child, display_order=0):
-    if parent.is_deleted:
-        raise ValidationError(
-            "A deleted category cannot be used as a parent."
-        )
-
-    if child.is_deleted:
-        raise ValidationError(
-            "A deleted category cannot be used as a child."
-        )
-
-    if parent.pk == child.pk:
-        raise ValidationError(
-            "A category cannot be related to itself."
-        )
-
-    def has_path(start, target):
-        if start.pk == target.pk:
-            return True
-
-        stack = [start]
-        visited = set()
-
-        while stack:
-            current = stack.pop()
-
-            if current.pk in visited:
-                continue
-
-            visited.add(current.pk)
-
-            children = CategoryRelationship.objects.filter(
-                parent=current,
-                is_active=True,
-            ).select_related("child")
-
-            for relationship in children:
-                if relationship.child.pk == target.pk:
-                    return True
-
-                stack.append(relationship.child)
-
-        return False
-
-    if has_path(child, parent):
-        raise ValidationError(
-            "This relationship would create a circular category hierarchy."
-        )
+def add_category_relationship(
+    parent,
+    child,
+    display_order=0,
+):
+    validate_category_relationship(parent, child)
 
     relationship, created = CategoryRelationship.objects.get_or_create(
         parent=parent,
@@ -139,6 +130,11 @@ def remove_category_relationship(parent, child):
         return None
 
     relationship.is_active = False
-    relationship.save(update_fields=["is_active", "updated_at"])
+    relationship.save(
+        update_fields=[
+            "is_active",
+            "updated_at",
+        ]
+    )
 
     return relationship
