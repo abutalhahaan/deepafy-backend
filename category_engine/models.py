@@ -3,6 +3,25 @@ import uuid
 from django.db import models
 
 
+class CategoryQuerySet(models.QuerySet):
+    def active(self):
+        return self.filter(is_deleted=False)
+
+    def deleted(self):
+        return self.filter(is_deleted=True)
+
+
+class CategoryManager(models.Manager):
+    def get_queryset(self):
+        return CategoryQuerySet(self.model, using=self._db).active()
+
+    def all_with_deleted(self):
+        return CategoryQuerySet(self.model, using=self._db)
+
+    def deleted_only(self):
+        return self.all_with_deleted().deleted()
+
+
 class Category(models.Model):
     VISIBILITY_PUBLIC = "public"
     VISIBILITY_HIDDEN = "hidden"
@@ -66,6 +85,8 @@ class Category(models.Model):
         self.is_deleted = False
         self.deleted_at = None
         self.save(update_fields=["is_deleted", "deleted_at", "updated_at"])
+
+    objects = CategoryManager()
 
     def __str__(self):
         return self.name
