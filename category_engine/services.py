@@ -72,15 +72,38 @@ def add_category_relationship(parent, child, display_order=0):
             "A category cannot be related to itself."
         )
 
-    current = parent
+    def has_path(start, target):
+        if start.pk == target.pk:
+            return True
 
-    while current is not None:
-        if current.pk == child.pk:
-            raise ValidationError(
-                "This relationship would create a circular category hierarchy."
-            )
+        stack = [start]
+        visited = set()
 
-        current = current.parent
+        while stack:
+            current = stack.pop()
+
+            if current.pk in visited:
+                continue
+
+            visited.add(current.pk)
+
+            children = CategoryRelationship.objects.filter(
+                parent=current,
+                is_active=True,
+            ).select_related("child")
+
+            for relationship in children:
+                if relationship.child.pk == target.pk:
+                    return True
+
+                stack.append(relationship.child)
+
+        return False
+
+    if has_path(child, parent):
+        raise ValidationError(
+            "This relationship would create a circular category hierarchy."
+        )
 
     relationship, created = CategoryRelationship.objects.get_or_create(
         parent=parent,
