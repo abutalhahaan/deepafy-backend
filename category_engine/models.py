@@ -38,13 +38,7 @@ class Category(models.Model):
         unique=True,
         editable=False,
     )
-    parent = models.ForeignKey(
-        "self",
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="children",
-    )
+
     name = models.CharField(max_length=255)
     slug = models.SlugField(max_length=255)
     description = models.TextField(blank=True)
@@ -63,16 +57,7 @@ class Category(models.Model):
 
     class Meta:
         ordering = ["name"]
-        constraints = [
-            models.UniqueConstraint(
-                fields=["parent", "name"],
-                name="unique_category_name_per_parent",
-            ),
-            models.UniqueConstraint(
-                fields=["parent", "slug"],
-                name="unique_category_slug_per_parent",
-            ),
-        ]
+
 
     def soft_delete(self):
         from django.utils import timezone
