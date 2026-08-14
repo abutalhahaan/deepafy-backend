@@ -91,6 +91,35 @@ class Category(models.Model):
     def __str__(self):
         return self.name
 
+class CategoryRelationship(models.Model):
+    parent = models.ForeignKey(
+        Category,
+        on_delete=models.CASCADE,
+        related_name="child_relationships",
+    )
+    child = models.ForeignKey(
+        Category,
+        on_delete=models.CASCADE,
+        related_name="parent_relationships",
+    )
+    display_order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["display_order", "child"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["parent", "child"],
+                name="unique_category_relationship",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.parent.name} -> {self.child.name}"
+
 
 class CategoryTranslation(models.Model):
     category = models.ForeignKey(
