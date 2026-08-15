@@ -291,6 +291,7 @@ def category_relationship_create(request):
         )
 
 
+@csrf_exempt
 @require_http_methods(["DELETE"])
 def category_relationship_delete(request):
     import json
