@@ -1,3 +1,4 @@
+
 from django.contrib import admin
 from django.urls import include, path
 
@@ -12,4 +13,9 @@ urlpatterns = [
         "api/organizations/",
         include("organization.urls"),
     ),
+    path(
+        "api/identity/",
+        include("identity.urls"),
+    ),
 ]
+
