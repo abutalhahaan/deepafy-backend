@@ -1,6 +1,7 @@
 from django.core.exceptions import ValidationError
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
+from django.views.decorators.csrf import csrf_exempt
 
 from .models import Category, CategoryRelationship
 from .services import (
@@ -60,6 +61,7 @@ def category_detail(request, category_id):
     return JsonResponse(_category_data(category))
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 def category_create(request):
     import json
@@ -109,6 +111,7 @@ def category_create(request):
         )
 
 
+@csrf_exempt
 @require_http_methods(["PATCH"])
 def category_update(request, category_id):
     import json
