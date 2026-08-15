@@ -234,6 +234,7 @@ def category_relationships(request, category_id):
     )
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 def category_relationship_create(request):
     import json
