@@ -156,6 +156,7 @@ def category_update(request, category_id):
         )
 
 
+@csrf_exempt
 @require_http_methods(["DELETE"])
 def category_delete(request, category_id):
     try:
@@ -176,6 +177,7 @@ def category_delete(request, category_id):
     )
 
 
+@csrf_exempt
 @require_http_methods(["POST"])
 def category_restore(request, category_id):
     try:
