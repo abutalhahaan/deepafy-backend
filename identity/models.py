@@ -73,7 +73,11 @@ class AccountType(models.Model):
         ordering = ["account_type"]
 
     def __str__(self):
-        return f"{self.identity.user_id} - {self.get_account_type_display()}"
+        return (
+            f"{self.identity.user_id} - "
+            f"{self.get_account_type_display()}"
+        )
+
 
 class PersonalAccount(models.Model):
     identity = models.OneToOneField(
@@ -88,3 +92,63 @@ class PersonalAccount(models.Model):
 
     def __str__(self):
         return f"Personal Account - {self.identity.user_id}"
+
+
+class PersonalInterestedCategory(models.Model):
+    personal_account = models.ForeignKey(
+        PersonalAccount,
+        on_delete=models.CASCADE,
+        related_name="interested_categories",
+    )
+    category = models.ForeignKey(
+        "category_engine.Category",
+        on_delete=models.PROTECT,
+        related_name="personal_interested_categories",
+    )
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["personal_account", "category"],
+                name="unique_personal_interested_category",
+            )
+        ]
+        ordering = ["category__name"]
+
+    def __str__(self):
+        return (
+            f"{self.personal_account.identity.user_id} - "
+            f"{self.category.name}"
+        )
+
+
+class PersonalHobby(models.Model):
+    personal_account = models.ForeignKey(
+        PersonalAccount,
+        on_delete=models.CASCADE,
+        related_name="hobbies",
+    )
+    name = models.CharField(max_length=100)
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["personal_account", "name"],
+                name="unique_personal_hobby",
+            )
+        ]
+        ordering = ["name"]
+
+    def __str__(self):
+        return (
+            f"{self.personal_account.identity.user_id} - "
+            f"{self.name}"
+        )

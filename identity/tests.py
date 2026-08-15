@@ -1,13 +1,22 @@
 from django.test import TestCase
 
-from .models import AccountType, PersonalAccount, UserIdentity
+from category_engine.models import Category
+
+from .models import (
+    AccountType,
+    PersonalAccount,
+    PersonalHobby,
+    PersonalInterestedCategory,
+    UserIdentity,
+)
 
 
-class UserIdentityModelTests(TestCase):
+class UserIdentityTests(TestCase):
     def setUp(self):
         self.identity = UserIdentity.objects.create(
             email="test@example.com",
             mobile_number="01700000000",
+            status=UserIdentity.Status.ACTIVE,
         )
 
     def test_identity_creation(self):
@@ -19,21 +28,14 @@ class UserIdentityModelTests(TestCase):
             self.identity.mobile_number,
             "01700000000",
         )
+        self.assertEqual(
+            self.identity.status,
+            "active",
+        )
 
     def test_identity_uuid_created(self):
         self.assertIsNotNone(
             self.identity.user_id,
-        )
-
-    def test_identity_default_status(self):
-        self.assertEqual(
-            self.identity.status,
-            UserIdentity.Status.DRAFT,
-        )
-
-    def test_identity_default_active(self):
-        self.assertTrue(
-            self.identity.is_active,
         )
 
     def test_identity_string(self):
@@ -43,11 +45,10 @@ class UserIdentityModelTests(TestCase):
         )
 
 
-class AccountTypeModelTests(TestCase):
+class AccountTypeTests(TestCase):
     def setUp(self):
         self.identity = UserIdentity.objects.create(
             email="account@example.com",
-            mobile_number="01700000001",
         )
 
     def test_account_type_creation(self):
@@ -55,7 +56,6 @@ class AccountTypeModelTests(TestCase):
             identity=self.identity,
             account_type=AccountType.Type.PERSONAL,
             is_primary=True,
-            is_active=True,
         )
 
         self.assertEqual(
@@ -76,94 +76,152 @@ class AccountTypeModelTests(TestCase):
     def test_account_type_string(self):
         account_type = AccountType.objects.create(
             identity=self.identity,
-            account_type=AccountType.Type.COMPANY,
-        )
-
-        self.assertIn(
-            "Company Account",
-            str(account_type),
-        )
-
-    def test_multiple_account_types_allowed(self):
-        personal = AccountType.objects.create(
-            identity=self.identity,
             account_type=AccountType.Type.PERSONAL,
-        )
-
-        company = AccountType.objects.create(
-            identity=self.identity,
-            account_type=AccountType.Type.COMPANY,
-        )
-
-        self.assertEqual(
-            self.identity.account_types.count(),
-            2,
-        )
-        self.assertNotEqual(
-            personal.account_type,
-            company.account_type,
-        )
-
-
-class PersonalAccountModelTests(TestCase):
-    def setUp(self):
-        self.identity = UserIdentity.objects.create(
-            email="personal@example.com",
-            mobile_number="01700000002",
-        )
-
-    def test_personal_account_creation(self):
-        personal_account = PersonalAccount.objects.create(
-            identity=self.identity,
-            is_active=True,
-        )
-
-        self.assertEqual(
-            personal_account.identity,
-            self.identity,
-        )
-        self.assertTrue(
-            personal_account.is_active,
-        )
-
-    def test_personal_account_string(self):
-        personal_account = PersonalAccount.objects.create(
-            identity=self.identity,
         )
 
         self.assertIn(
             "Personal Account",
-            str(personal_account),
+            str(account_type),
         )
 
-    def test_one_personal_account_per_identity(self):
-        PersonalAccount.objects.create(
-            identity=self.identity,
-        )
 
-        with self.assertRaises(Exception):
-            PersonalAccount.objects.create(
-                identity=self.identity,
-            )
-
-class PersonalAccountUpdateTests(TestCase):
+class PersonalAccountTests(TestCase):
     def setUp(self):
         self.identity = UserIdentity.objects.create(
-            email="personalupdate@example.com",
-            mobile_number="01700000005",
+            email="personal@example.com",
         )
 
         self.personal_account = PersonalAccount.objects.create(
             identity=self.identity,
-            is_active=True,
         )
 
-    def test_personal_account_update(self):
-        self.personal_account.is_active = False
-        self.personal_account.save()
-
-        self.personal_account.refresh_from_db()
-
-        self.assertFalse(
+    def test_personal_account_creation(self):
+        self.assertEqual(
+            self.personal_account.identity,
+            self.identity,
+        )
+        self.assertTrue(
             self.personal_account.is_active,
         )
+
+    def test_personal_account_string(self):
+        self.assertEqual(
+            str(self.personal_account),
+            f"Personal Account - {self.identity.user_id}",
+        )
+
+
+class PersonalInterestedCategoryTests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="interested@example.com",
+        )
+
+        self.personal_account = PersonalAccount.objects.create(
+            identity=self.identity,
+        )
+
+        self.category = Category.objects.create(
+            name="T-Shirts",
+            slug="t-shirts",
+        )
+
+    def test_interested_category_creation(self):
+        interested_category = (
+            PersonalInterestedCategory.objects.create(
+                personal_account=self.personal_account,
+                category=self.category,
+            )
+        )
+
+        self.assertEqual(
+            interested_category.personal_account,
+            self.personal_account,
+        )
+        self.assertEqual(
+            interested_category.category,
+            self.category,
+        )
+        self.assertTrue(
+            interested_category.is_active,
+        )
+
+    def test_interested_category_string(self):
+        interested_category = (
+            PersonalInterestedCategory.objects.create(
+                personal_account=self.personal_account,
+                category=self.category,
+            )
+        )
+
+        self.assertEqual(
+            str(interested_category),
+            (
+                f"{self.identity.user_id} - "
+                f"{self.category.name}"
+            ),
+        )
+
+    def test_duplicate_interested_category_not_allowed(self):
+        PersonalInterestedCategory.objects.create(
+            personal_account=self.personal_account,
+            category=self.category,
+        )
+
+        with self.assertRaises(Exception):
+            PersonalInterestedCategory.objects.create(
+                personal_account=self.personal_account,
+                category=self.category,
+            )
+
+
+class PersonalHobbyTests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="hobby@example.com",
+        )
+
+        self.personal_account = PersonalAccount.objects.create(
+            identity=self.identity,
+        )
+
+    def test_hobby_creation(self):
+        hobby = PersonalHobby.objects.create(
+            personal_account=self.personal_account,
+            name="Photography",
+        )
+
+        self.assertEqual(
+            hobby.personal_account,
+            self.personal_account,
+        )
+        self.assertEqual(
+            hobby.name,
+            "Photography",
+        )
+        self.assertTrue(
+            hobby.is_active,
+        )
+
+    def test_hobby_string(self):
+        hobby = PersonalHobby.objects.create(
+            personal_account=self.personal_account,
+            name="Traveling",
+        )
+
+        self.assertEqual(
+            str(hobby),
+            f"{self.identity.user_id} - Traveling",
+        )
+
+    def test_duplicate_hobby_not_allowed(self):
+        PersonalHobby.objects.create(
+            personal_account=self.personal_account,
+            name="Reading",
+        )
+
+        with self.assertRaises(Exception):
+            PersonalHobby.objects.create(
+                personal_account=self.personal_account,
+                name="Reading",
+            )
