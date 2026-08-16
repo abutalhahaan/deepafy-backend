@@ -4,7 +4,12 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from .models import AccountType, PersonalAccount, UserIdentity
+from .models import (
+    AccountType,
+    PersonalAccount,
+    ProfessionalAccount,
+    UserIdentity,
+)
 
 
 def serialize_identity(identity):
@@ -465,4 +470,186 @@ def personal_account_update(request, identity_id):
             "created_at": personal_account.created_at.isoformat(),
             "updated_at": personal_account.updated_at.isoformat(),
         }
+    )
+
+
+
+def serialize_professional_account(professional_account):
+    return {
+        "id": professional_account.id,
+        "identity_id": professional_account.identity_id,
+        "professional_title": professional_account.professional_title,
+        "profession": professional_account.profession,
+        "industry": professional_account.industry,
+        "professional_summary": professional_account.professional_summary,
+        "focus_job_area": professional_account.focus_job_area,
+        "future_goal": professional_account.future_goal,
+        "background_color": professional_account.background_color,
+        "tab_colors": professional_account.tab_colors,
+        "is_active": professional_account.is_active,
+        "created_at": professional_account.created_at.isoformat(),
+        "updated_at": professional_account.updated_at.isoformat(),
+    }
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def professional_account_create(request):
+    try:
+        data = json.loads(request.body or "{}")
+
+        identity_id = data.get("identity_id")
+
+        if not identity_id:
+            return JsonResponse(
+                {"detail": "identity_id is required."},
+                status=400,
+            )
+
+        try:
+            identity = UserIdentity.objects.get(
+                id=identity_id
+            )
+        except UserIdentity.DoesNotExist:
+            return JsonResponse(
+                {"detail": "Identity not found."},
+                status=404,
+            )
+
+        if ProfessionalAccount.objects.filter(
+            identity=identity
+        ).exists():
+            return JsonResponse(
+                {"detail": "Professional account already exists."},
+                status=400,
+            )
+
+        professional_account = ProfessionalAccount.objects.create(
+            identity=identity,
+            professional_title=data.get(
+                "professional_title",
+                "",
+            ),
+            profession=data.get(
+                "profession",
+                "",
+            ),
+            industry=data.get(
+                "industry",
+                "",
+            ),
+            professional_summary=data.get(
+                "professional_summary",
+                "",
+            ),
+            focus_job_area=data.get(
+                "focus_job_area",
+                "",
+            ),
+            future_goal=data.get(
+                "future_goal",
+                "",
+            ),
+            background_color=data.get(
+                "background_color",
+                "#FFFFFF",
+            ),
+            tab_colors=data.get(
+                "tab_colors",
+                {},
+            ),
+            is_active=data.get(
+                "is_active",
+                True,
+            ),
+        )
+
+        return JsonResponse(
+            serialize_professional_account(
+                professional_account
+            ),
+            status=201,
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"detail": "Invalid JSON."},
+            status=400,
+        )
+
+
+@require_http_methods(["GET"])
+def professional_account_detail(request, identity_id):
+    try:
+        professional_account = ProfessionalAccount.objects.get(
+            identity_id=identity_id
+        )
+    except ProfessionalAccount.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Professional account not found."},
+            status=404,
+        )
+
+    return JsonResponse(
+        serialize_professional_account(
+            professional_account
+        )
+    )
+
+
+@csrf_exempt
+@require_http_methods(["PATCH"])
+def professional_account_update(request, identity_id):
+    try:
+        identity = UserIdentity.objects.get(
+            id=identity_id
+        )
+        professional_account = identity.professional_account
+
+    except UserIdentity.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Identity not found."},
+            status=404,
+        )
+
+    except ProfessionalAccount.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Professional account not found."},
+            status=404,
+        )
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"detail": "Invalid JSON."},
+            status=400,
+        )
+
+    fields = [
+        "professional_title",
+        "profession",
+        "industry",
+        "professional_summary",
+        "focus_job_area",
+        "future_goal",
+        "background_color",
+        "tab_colors",
+        "is_active",
+    ]
+
+    for field in fields:
+        if field in data:
+            setattr(
+                professional_account,
+                field,
+                data[field],
+            )
+
+    professional_account.save()
+
+    return JsonResponse(
+        serialize_professional_account(
+            professional_account
+        )
     )
