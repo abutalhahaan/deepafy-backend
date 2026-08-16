@@ -5,6 +5,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from .models import (
+    AcademicBackground,
     AccountType,
     PersonalAccount,
     ProfessionalAccount,
@@ -652,4 +653,213 @@ def professional_account_update(request, identity_id):
         serialize_professional_account(
             professional_account
         )
+    )
+
+def serialize_academic_background(academic):
+    return {
+        "id": academic.id,
+        "professional_account_id": academic.professional_account_id,
+        "qualification": academic.qualification,
+        "institution": academic.institution,
+        "field_of_study": academic.field_of_study,
+        "country_id": academic.country_id,
+        "city": academic.city,
+        "start_date": (
+            academic.start_date.isoformat()
+            if academic.start_date
+            else None
+        ),
+        "end_date": (
+            academic.end_date.isoformat()
+            if academic.end_date
+            else None
+        ),
+        "is_current": academic.is_current,
+        "result": academic.result,
+        "description": academic.description,
+        "display_order": academic.display_order,
+        "is_active": academic.is_active,
+        "created_at": academic.created_at.isoformat(),
+        "updated_at": academic.updated_at.isoformat(),
+    }
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def academic_background_create(request):
+    try:
+        data = json.loads(request.body or "{}")
+
+        professional_account_id = data.get(
+            "professional_account_id"
+        )
+
+        if not professional_account_id:
+            return JsonResponse(
+                {"detail": "professional_account_id is required."},
+                status=400,
+            )
+
+        try:
+            professional_account = ProfessionalAccount.objects.get(
+                id=professional_account_id
+            )
+        except ProfessionalAccount.DoesNotExist:
+            return JsonResponse(
+                {"detail": "Professional account not found."},
+                status=404,
+            )
+
+        academic = AcademicBackground.objects.create(
+            professional_account=professional_account,
+            qualification=data.get("qualification", ""),
+            institution=data.get("institution", ""),
+            field_of_study=data.get("field_of_study", ""),
+            country_id=data.get("country_id"),
+            city=data.get("city", ""),
+            start_date=data.get("start_date"),
+            end_date=data.get("end_date"),
+            is_current=data.get("is_current", False),
+            result=data.get("result", ""),
+            description=data.get("description", ""),
+            display_order=data.get("display_order", 0),
+            is_active=data.get("is_active", True),
+        )
+
+        return JsonResponse(
+            serialize_academic_background(academic),
+            status=201,
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"detail": "Invalid JSON."},
+            status=400,
+        )
+
+
+@require_http_methods(["GET"])
+def academic_background_list(request, identity_id):
+    try:
+        professional_account = ProfessionalAccount.objects.get(
+            identity_id=identity_id
+        )
+    except ProfessionalAccount.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Professional account not found."},
+            status=404,
+        )
+
+    academics = AcademicBackground.objects.filter(
+        professional_account=professional_account
+    )
+
+    results = [
+        serialize_academic_background(academic)
+        for academic in academics
+    ]
+
+    return JsonResponse(
+        {
+            "professional_account_id": professional_account.id,
+            "count": len(results),
+            "results": results,
+        }
+    )
+
+
+@require_http_methods(["GET"])
+def academic_background_detail(request, academic_id):
+    try:
+        academic = AcademicBackground.objects.get(
+            id=academic_id
+        )
+    except AcademicBackground.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Academic background not found."},
+            status=404,
+        )
+
+    return JsonResponse(
+        serialize_academic_background(academic)
+    )
+
+
+@csrf_exempt
+@require_http_methods(["PATCH"])
+def academic_background_update(request, academic_id):
+    try:
+        academic = AcademicBackground.objects.get(
+            id=academic_id
+        )
+    except AcademicBackground.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Academic background not found."},
+            status=404,
+        )
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"detail": "Invalid JSON."},
+            status=400,
+        )
+
+    fields = [
+        "qualification",
+        "institution",
+        "field_of_study",
+        "city",
+        "start_date",
+        "end_date",
+        "is_current",
+        "result",
+        "description",
+        "display_order",
+        "is_active",
+    ]
+
+    for field in fields:
+        if field in data:
+            setattr(
+                academic,
+                field,
+                data[field],
+            )
+
+    if "country_id" in data:
+        country_id = data.get("country_id")
+
+        if country_id:
+            academic.country_id = country_id
+        else:
+            academic.country = None
+
+    academic.save()
+
+    return JsonResponse(
+        serialize_academic_background(academic)
+    )
+
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+def academic_background_delete(request, academic_id):
+    try:
+        academic = AcademicBackground.objects.get(
+            id=academic_id
+        )
+    except AcademicBackground.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Academic background not found."},
+            status=404,
+        )
+
+    academic.delete()
+
+    return JsonResponse(
+        {
+            "detail": "Academic background deleted successfully."
+        }
     )
