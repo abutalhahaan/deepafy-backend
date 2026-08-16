@@ -282,3 +282,84 @@ class ProfessionalAccount(models.Model):
 
     def __str__(self):
         return f"Professional Account - {self.identity.user_id}"
+
+class AcademicBackground(models.Model):
+    professional_account = models.ForeignKey(
+        ProfessionalAccount,
+        on_delete=models.CASCADE,
+        related_name="academic_backgrounds",
+    )
+
+    qualification = models.CharField(
+        max_length=255,
+    )
+
+    institution = models.CharField(
+        max_length=255,
+    )
+
+    field_of_study = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    country = models.ForeignKey(
+        "organization.Country",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="academic_backgrounds",
+    )
+
+    city = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    start_date = models.DateField(
+        null=True,
+        blank=True,
+    )
+
+    end_date = models.DateField(
+        null=True,
+        blank=True,
+    )
+
+    is_current = models.BooleanField(
+        default=False,
+    )
+
+    result = models.CharField(
+        max_length=100,
+        blank=True,
+    )
+
+    description = models.TextField(
+        blank=True,
+    )
+
+    display_order = models.PositiveIntegerField(
+        default=0,
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        ordering = ["display_order", "-start_date", "qualification"]
+
+    def __str__(self):
+        return (
+            f"{self.qualification} - "
+            f"{self.institution}"
+        )

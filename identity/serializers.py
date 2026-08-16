@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from .models import (
+    AcademicBackground,
     AccountType,
     Hobby,
     PersonalAccount,
@@ -188,6 +189,35 @@ class ProfessionalAccountSerializer(
         read_only_fields = [
             "id",
             "identity",
+            "created_at",
+            "updated_at",
+        ]
+
+
+
+class AcademicBackgroundSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AcademicBackground
+        fields = [
+            "id",
+            "professional_account",
+            "qualification",
+            "institution",
+            "field_of_study",
+            "country",
+            "city",
+            "start_date",
+            "end_date",
+            "is_current",
+            "result",
+            "description",
+            "display_order",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
             "created_at",
             "updated_at",
         ]

@@ -3,11 +3,13 @@ from django.test import TestCase
 from category_engine.models import Category
 
 from .models import (
+    AcademicBackground,
     AccountType,
     Hobby,
     PersonalAccount,
     PersonalHobby,
     PersonalInterestedCategory,
+    ProfessionalAccount,
     UserIdentity,
 )
 
@@ -231,3 +233,83 @@ class PersonalHobbyTests(TestCase):
                 personal_account=self.personal_account,
                 hobby=self.hobby,
             )
+
+class AcademicBackgroundTests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="academic@example.com",
+        )
+
+        self.professional_account = ProfessionalAccount.objects.create(
+            identity=self.identity,
+            professional_title="Software Engineer",
+        )
+
+    def test_academic_background_creation(self):
+        academic = AcademicBackground.objects.create(
+            professional_account=self.professional_account,
+            qualification="Bachelor of Science",
+            institution="University of Dhaka",
+            field_of_study="Computer Science",
+            city="Dhaka",
+            result="CGPA 3.75",
+        )
+
+        self.assertEqual(
+            academic.qualification,
+            "Bachelor of Science",
+        )
+        self.assertEqual(
+            academic.institution,
+            "University of Dhaka",
+        )
+        self.assertEqual(
+            academic.field_of_study,
+            "Computer Science",
+        )
+
+    def test_multiple_academic_backgrounds_allowed(self):
+        AcademicBackground.objects.create(
+            professional_account=self.professional_account,
+            qualification="Bachelor of Science",
+            institution="University of Dhaka",
+        )
+
+        AcademicBackground.objects.create(
+            professional_account=self.professional_account,
+            qualification="Master of Science",
+            institution="BUET",
+        )
+
+        self.assertEqual(
+            AcademicBackground.objects.filter(
+                professional_account=self.professional_account
+            ).count(),
+            2,
+        )
+
+    def test_academic_background_string(self):
+        academic = AcademicBackground.objects.create(
+            professional_account=self.professional_account,
+            qualification="Bachelor of Science",
+            institution="University of Dhaka",
+        )
+
+        self.assertEqual(
+            str(academic),
+            "Bachelor of Science - University of Dhaka",
+        )
+
+    def test_academic_background_deleted_with_professional_account(self):
+        AcademicBackground.objects.create(
+            professional_account=self.professional_account,
+            qualification="Bachelor of Science",
+            institution="University of Dhaka",
+        )
+
+        self.professional_account.delete()
+
+        self.assertEqual(
+            AcademicBackground.objects.count(),
+            0,
+        )
