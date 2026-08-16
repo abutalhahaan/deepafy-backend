@@ -363,3 +363,65 @@ class AcademicBackground(models.Model):
             f"{self.qualification} - "
             f"{self.institution}"
         )
+
+class JobExperience(models.Model):
+    professional_account = models.ForeignKey(
+        ProfessionalAccount,
+        on_delete=models.CASCADE,
+        related_name="job_experiences",
+    )
+
+    company = models.CharField(
+        max_length=255,
+    )
+
+    job_title = models.CharField(
+        max_length=255,
+    )
+
+    employment_type = models.CharField(
+        max_length=100,
+        blank=True,
+    )
+
+    location = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    start_date = models.DateField(
+        null=True,
+        blank=True,
+    )
+
+    end_date = models.DateField(
+        null=True,
+        blank=True,
+    )
+
+    is_current = models.BooleanField(
+        default=False,
+    )
+
+    description = models.TextField(
+        blank=True,
+    )
+
+    display_order = models.PositiveIntegerField(
+        default=0,
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    def __str__(self):
+        return f"{self.job_title} - {self.company}"

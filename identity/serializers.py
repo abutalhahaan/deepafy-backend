@@ -4,13 +4,13 @@ from .models import (
     AcademicBackground,
     AccountType,
     Hobby,
+    JobExperience,
     PersonalAccount,
     PersonalHobby,
     PersonalInterestedCategory,
     ProfessionalAccount,
     UserIdentity,
 )
-
 
 class UserIdentitySerializer(serializers.ModelSerializer):
     class Meta:
@@ -210,6 +210,31 @@ class AcademicBackgroundSerializer(serializers.ModelSerializer):
             "end_date",
             "is_current",
             "result",
+            "description",
+            "display_order",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "updated_at",
+        ]
+
+class JobExperienceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = JobExperience
+        fields = [
+            "id",
+            "professional_account",
+            "company",
+            "job_title",
+            "employment_type",
+            "location",
+            "start_date",
+            "end_date",
+            "is_current",
             "description",
             "display_order",
             "is_active",
