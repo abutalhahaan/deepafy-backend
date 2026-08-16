@@ -85,13 +85,68 @@ class PersonalAccount(models.Model):
         on_delete=models.CASCADE,
         related_name="personal_account",
     )
+
+    display_name = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    username = models.CharField(
+        max_length=100,
+        unique=True,
+        null=True,
+        blank=True,
+    )
+
+    permanent_country = models.ForeignKey(
+        "organization.Country",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="personal_permanent_addresses",
+    )
+    permanent_city = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+    permanent_area = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+    permanent_full_address = models.TextField(
+        blank=True,
+    )
+
+    present_country = models.ForeignKey(
+        "organization.Country",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="personal_present_addresses",
+    )
+    present_city = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+    present_area = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+    present_full_address = models.TextField(
+        blank=True,
+    )
+
     is_active = models.BooleanField(default=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"Personal Account - {self.identity.user_id}"
+        return (
+            self.display_name
+            or self.username
+            or f"Personal Account - {self.identity.user_id}"
+        )
 
 
 class PersonalInterestedCategory(models.Model):
@@ -125,6 +180,22 @@ class PersonalInterestedCategory(models.Model):
             f"{self.category.name}"
         )
 
+class Hobby(models.Model):
+    name = models.CharField(max_length=100)
+    slug = models.SlugField(max_length=120, unique=True)
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    display_order = models.PositiveIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["display_order", "name"]
+
+    def __str__(self):
+        return self.name
+
 
 class PersonalHobby(models.Model):
     personal_account = models.ForeignKey(
@@ -132,7 +203,13 @@ class PersonalHobby(models.Model):
         on_delete=models.CASCADE,
         related_name="hobbies",
     )
-    name = models.CharField(max_length=100)
+    hobby = models.ForeignKey(
+        Hobby,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="personal_selections",
+    )
     is_active = models.BooleanField(default=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -141,14 +218,67 @@ class PersonalHobby(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["personal_account", "name"],
+                fields=["personal_account", "hobby"],
                 name="unique_personal_hobby",
             )
         ]
-        ordering = ["name"]
+        ordering = ["hobby__display_order", "hobby__name"]
 
     def __str__(self):
         return (
             f"{self.personal_account.identity.user_id} - "
-            f"{self.name}"
+            f"{self.hobby.name}"
         )
+
+class ProfessionalAccount(models.Model):
+    identity = models.OneToOneField(
+        UserIdentity,
+        on_delete=models.CASCADE,
+        related_name="professional_account",
+    )
+
+    professional_title = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+    profession = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+    industry = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+    professional_summary = models.TextField(
+        blank=True,
+    )
+    focus_job_area = models.TextField(
+        blank=True,
+    )
+    future_goal = models.TextField(
+        blank=True,
+    )
+
+    background_color = models.CharField(
+        max_length=20,
+        default="#FFFFFF",
+    )
+
+    tab_colors = models.JSONField(
+        default=dict,
+        blank=True,
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    def __str__(self):
+        return f"Professional Account - {self.identity.user_id}"

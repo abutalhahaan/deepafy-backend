@@ -4,6 +4,7 @@ from category_engine.models import Category
 
 from .models import (
     AccountType,
+    Hobby,
     PersonalAccount,
     PersonalHobby,
     PersonalInterestedCategory,
@@ -185,43 +186,48 @@ class PersonalHobbyTests(TestCase):
             identity=self.identity,
         )
 
-    def test_hobby_creation(self):
-        hobby = PersonalHobby.objects.create(
-            personal_account=self.personal_account,
+        self.hobby = Hobby.objects.create(
             name="Photography",
+            slug="photography",
+        )
+
+    def test_hobby_creation(self):
+        personal_hobby = PersonalHobby.objects.create(
+            personal_account=self.personal_account,
+            hobby=self.hobby,
         )
 
         self.assertEqual(
-            hobby.personal_account,
+            personal_hobby.personal_account,
             self.personal_account,
         )
         self.assertEqual(
-            hobby.name,
-            "Photography",
+            personal_hobby.hobby,
+            self.hobby,
         )
         self.assertTrue(
-            hobby.is_active,
+            personal_hobby.is_active,
         )
 
     def test_hobby_string(self):
-        hobby = PersonalHobby.objects.create(
+        personal_hobby = PersonalHobby.objects.create(
             personal_account=self.personal_account,
-            name="Traveling",
+            hobby=self.hobby,
         )
 
         self.assertEqual(
-            str(hobby),
-            f"{self.identity.user_id} - Traveling",
+            str(personal_hobby),
+            f"{self.identity.user_id} - {self.hobby.name}",
         )
 
     def test_duplicate_hobby_not_allowed(self):
         PersonalHobby.objects.create(
             personal_account=self.personal_account,
-            name="Reading",
+            hobby=self.hobby,
         )
 
         with self.assertRaises(Exception):
             PersonalHobby.objects.create(
                 personal_account=self.personal_account,
-                name="Reading",
+                hobby=self.hobby,
             )
