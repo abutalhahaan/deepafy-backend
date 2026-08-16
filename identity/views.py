@@ -360,13 +360,8 @@ def personal_account_detail(request, identity_id):
     )
 
 @csrf_exempt
+@require_http_methods(["PATCH"])
 def personal_account_update(request, identity_id):
-    if request.method != "PATCH":
-        return JsonResponse(
-            {"detail": "Only PATCH method is allowed."},
-            status=405,
-        )
-
     try:
         identity = UserIdentity.objects.get(id=identity_id)
         personal_account = identity.personal_account
@@ -382,15 +377,65 @@ def personal_account_update(request, identity_id):
         )
 
     try:
-        data = json.loads(request.body)
+        data = json.loads(request.body or "{}")
     except json.JSONDecodeError:
         return JsonResponse(
             {"detail": "Invalid JSON."},
             status=400,
         )
 
-    if "is_active" in data:
-        personal_account.is_active = data["is_active"]
+    fields = [
+        "display_name",
+        "username",
+        "permanent_city",
+        "permanent_area",
+        "permanent_full_address",
+        "present_city",
+        "present_area",
+        "present_full_address",
+        "is_active",
+    ]
+
+    for field in fields:
+        if field in data:
+            setattr(personal_account, field, data[field])
+
+    if "username" in data:
+        username = data.get("username")
+
+        if username:
+            username_exists = (
+                PersonalAccount.objects
+                .filter(username=username)
+                .exclude(id=personal_account.id)
+                .exists()
+            )
+
+            if username_exists:
+                return JsonResponse(
+                    {"detail": "This username already exists."},
+                    status=400,
+                )
+
+    if "permanent_country_id" in data:
+        permanent_country_id = data.get("permanent_country_id")
+
+        if permanent_country_id:
+            personal_account.permanent_country_id = (
+                permanent_country_id
+            )
+        else:
+            personal_account.permanent_country = None
+
+    if "present_country_id" in data:
+        present_country_id = data.get("present_country_id")
+
+        if present_country_id:
+            personal_account.present_country_id = (
+                present_country_id
+            )
+        else:
+            personal_account.present_country = None
 
     personal_account.save()
 
@@ -398,8 +443,26 @@ def personal_account_update(request, identity_id):
         {
             "id": personal_account.id,
             "identity_id": personal_account.identity_id,
+            "display_name": personal_account.display_name,
+            "username": personal_account.username,
+            "permanent_country_id": (
+                personal_account.permanent_country_id
+            ),
+            "permanent_city": personal_account.permanent_city,
+            "permanent_area": personal_account.permanent_area,
+            "permanent_full_address": (
+                personal_account.permanent_full_address
+            ),
+            "present_country_id": (
+                personal_account.present_country_id
+            ),
+            "present_city": personal_account.present_city,
+            "present_area": personal_account.present_area,
+            "present_full_address": (
+                personal_account.present_full_address
+            ),
             "is_active": personal_account.is_active,
-            "created_at": personal_account.created_at,
-            "updated_at": personal_account.updated_at,
+            "created_at": personal_account.created_at.isoformat(),
+            "updated_at": personal_account.updated_at.isoformat(),
         }
     )
