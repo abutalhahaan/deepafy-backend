@@ -7,7 +7,11 @@ from django.views.decorators.http import require_http_methods
 from .models import (
     AcademicBackground,
     AccountType,
+    Hobby,
+    JobExperience,
     PersonalAccount,
+    PersonalHobby,
+    PersonalInterestedCategory,
     ProfessionalAccount,
     UserIdentity,
 )
@@ -665,15 +669,19 @@ def serialize_academic_background(academic):
         "country_id": academic.country_id,
         "city": academic.city,
         "start_date": (
-            academic.start_date.isoformat()
-            if academic.start_date
-            else None
-        ),
-        "end_date": (
-            academic.end_date.isoformat()
-            if academic.end_date
-            else None
-        ),
+    experience.start_date.isoformat()
+    if hasattr(experience.start_date, "isoformat")
+    else experience.start_date
+    if experience.start_date
+    else None
+),
+"end_date": (
+    experience.end_date.isoformat()
+    if hasattr(experience.end_date, "isoformat")
+    else experience.end_date
+    if experience.end_date
+    else None
+),
         "is_current": academic.is_current,
         "result": academic.result,
         "description": academic.description,
@@ -861,5 +869,243 @@ def academic_background_delete(request, academic_id):
     return JsonResponse(
         {
             "detail": "Academic background deleted successfully."
+        }
+    )
+
+def serialize_job_experience(experience):
+    return {
+        "id": experience.id,
+        "professional_account_id": experience.professional_account_id,
+        "company": experience.company,
+        "job_title": experience.job_title,
+        "employment_type": experience.employment_type,
+        "location": experience.location,
+        "start_date": (
+    experience.start_date.isoformat()
+    if hasattr(experience.start_date, "isoformat")
+    else experience.start_date
+    if experience.start_date
+    else None
+),
+"end_date": (
+    experience.end_date.isoformat()
+    if hasattr(experience.end_date, "isoformat")
+    else experience.end_date
+    if experience.end_date
+    else None
+),
+        "is_current": experience.is_current,
+        "description": experience.description,
+        "display_order": experience.display_order,
+        "is_active": experience.is_active,
+        "created_at": experience.created_at.isoformat(),
+        "updated_at": experience.updated_at.isoformat(),
+    }
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def job_experience_create(request):
+    try:
+        data = json.loads(request.body or "{}")
+
+        professional_account_id = data.get(
+            "professional_account_id"
+        )
+
+        if not professional_account_id:
+            return JsonResponse(
+                {
+                    "detail":
+                    "professional_account_id is required."
+                },
+                status=400,
+            )
+
+        try:
+            professional_account = ProfessionalAccount.objects.get(
+                id=professional_account_id
+            )
+        except ProfessionalAccount.DoesNotExist:
+            return JsonResponse(
+                {
+                    "detail":
+                    "Professional account not found."
+                },
+                status=404,
+            )
+
+        experience = JobExperience.objects.create(
+            professional_account=professional_account,
+            company=data.get("company", ""),
+            job_title=data.get("job_title", ""),
+            employment_type=data.get(
+                "employment_type",
+                "",
+            ),
+            location=data.get(
+                "location",
+                "",
+            ),
+            start_date=data.get("start_date"),
+            end_date=data.get("end_date"),
+            is_current=data.get(
+                "is_current",
+                False,
+            ),
+            description=data.get(
+                "description",
+                "",
+            ),
+            display_order=data.get(
+                "display_order",
+                0,
+            ),
+            is_active=data.get(
+                "is_active",
+                True,
+            ),
+        )
+
+        return JsonResponse(
+            serialize_job_experience(experience),
+            status=201,
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"detail": "Invalid JSON."},
+            status=400,
+        )
+
+
+@require_http_methods(["GET"])
+def job_experience_list(request, identity_id):
+    try:
+        professional_account = ProfessionalAccount.objects.get(
+            identity_id=identity_id
+        )
+    except ProfessionalAccount.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Professional account not found."
+            },
+            status=404,
+        )
+
+    experiences = JobExperience.objects.filter(
+        professional_account=professional_account
+    )
+
+    results = [
+        serialize_job_experience(experience)
+        for experience in experiences
+    ]
+
+    return JsonResponse(
+        {
+            "professional_account_id":
+            professional_account.id,
+            "count": len(results),
+            "results": results,
+        }
+    )
+
+
+@require_http_methods(["GET"])
+def job_experience_detail(request, experience_id):
+    try:
+        experience = JobExperience.objects.get(
+            id=experience_id
+        )
+    except JobExperience.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Job experience not found."
+            },
+            status=404,
+        )
+
+    return JsonResponse(
+        serialize_job_experience(experience)
+    )
+
+
+@csrf_exempt
+@require_http_methods(["PATCH"])
+def job_experience_update(request, experience_id):
+    try:
+        experience = JobExperience.objects.get(
+            id=experience_id
+        )
+    except JobExperience.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Job experience not found."
+            },
+            status=404,
+        )
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"detail": "Invalid JSON."},
+            status=400,
+        )
+
+    fields = [
+        "company",
+        "job_title",
+        "employment_type",
+        "location",
+        "start_date",
+        "end_date",
+        "is_current",
+        "description",
+        "display_order",
+        "is_active",
+    ]
+
+    for field in fields:
+        if field in data:
+            setattr(
+                experience,
+                field,
+                data[field],
+            )
+
+    experience.save()
+
+    return JsonResponse(
+        serialize_job_experience(experience)
+    )
+
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+def job_experience_delete(request, experience_id):
+    try:
+        experience = JobExperience.objects.get(
+            id=experience_id
+        )
+    except JobExperience.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Job experience not found."
+            },
+            status=404,
+        )
+
+    experience.delete()
+
+    return JsonResponse(
+        {
+            "detail":
+            "Job experience deleted successfully."
         }
     )

@@ -11,6 +11,7 @@ from .models import (
     PersonalInterestedCategory,
     ProfessionalAccount,
     UserIdentity,
+    JobExperience,
 )
 
 
@@ -312,4 +313,227 @@ class AcademicBackgroundTests(TestCase):
         self.assertEqual(
             AcademicBackground.objects.count(),
             0,
+        )
+
+class JobExperienceTests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="job@example.com",
+        )
+
+        self.professional_account = ProfessionalAccount.objects.create(
+            identity=self.identity,
+            professional_title="Software Engineer",
+        )
+
+    def test_job_experience_creation(self):
+        experience = JobExperience.objects.create(
+            professional_account=self.professional_account,
+            company="ABC Technologies",
+            job_title="Software Engineer",
+            employment_type="Full-time",
+            location="Dhaka",
+            start_date="2022-01-01",
+            end_date="2024-12-31",
+            is_current=False,
+            description="Backend and API development.",
+        )
+
+        self.assertEqual(
+            experience.professional_account,
+            self.professional_account,
+        )
+        self.assertEqual(
+            experience.company,
+            "ABC Technologies",
+        )
+        self.assertEqual(
+            experience.job_title,
+            "Software Engineer",
+        )
+        self.assertEqual(
+            experience.employment_type,
+            "Full-time",
+        )
+        self.assertEqual(
+            experience.location,
+            "Dhaka",
+        )
+
+    def test_multiple_job_experiences_allowed(self):
+        JobExperience.objects.create(
+            professional_account=self.professional_account,
+            company="ABC Technologies",
+            job_title="Software Engineer",
+        )
+
+        JobExperience.objects.create(
+            professional_account=self.professional_account,
+            company="XYZ Solutions",
+            job_title="Senior Software Engineer",
+        )
+
+        self.assertEqual(
+            JobExperience.objects.filter(
+                professional_account=self.professional_account
+            ).count(),
+            2,
+        )
+
+    def test_current_job_experience(self):
+        experience = JobExperience.objects.create(
+            professional_account=self.professional_account,
+            company="Current Company",
+            job_title="Senior Engineer",
+            is_current=True,
+        )
+
+        self.assertTrue(experience.is_current)
+        self.assertIsNone(experience.end_date)
+
+    def test_job_experience_string(self):
+        experience = JobExperience.objects.create(
+            professional_account=self.professional_account,
+            company="ABC Technologies",
+            job_title="Software Engineer",
+        )
+
+        self.assertEqual(
+            str(experience),
+            "Software Engineer - ABC Technologies",
+        )
+
+    def test_job_experience_deleted_with_professional_account(self):
+        JobExperience.objects.create(
+            professional_account=self.professional_account,
+            company="ABC Technologies",
+            job_title="Software Engineer",
+        )
+
+        self.professional_account.delete()
+
+        self.assertEqual(
+            JobExperience.objects.count(),
+            0,
+        )
+
+class JobExperienceAPITests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="api-job@example.com",
+        )
+
+        self.professional_account = ProfessionalAccount.objects.create(
+            identity=self.identity,
+            professional_title="Software Engineer",
+        )
+
+    def test_job_experience_create_api(self):
+        response = self.client.post(
+            "/api/identity/job-experiences/create/",
+            data={
+                "professional_account_id": self.professional_account.id,
+                "company": "ABC Technologies",
+                "job_title": "Software Engineer",
+                "employment_type": "Full-time",
+                "location": "Dhaka",
+                "start_date": "2022-01-01",
+                "is_current": True,
+                "description": "Backend development.",
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+
+        self.assertEqual(
+            response.json()["company"],
+            "ABC Technologies",
+        )
+
+        self.assertTrue(
+            JobExperience.objects.filter(
+                professional_account=self.professional_account,
+                company="ABC Technologies",
+            ).exists()
+        )
+
+    def test_job_experience_list_api(self):
+        JobExperience.objects.create(
+            professional_account=self.professional_account,
+            company="ABC Technologies",
+            job_title="Software Engineer",
+        )
+
+        response = self.client.get(
+            f"/api/identity/{self.identity.id}/job-experiences/"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["count"], 1)
+
+    def test_job_experience_detail_api(self):
+        experience = JobExperience.objects.create(
+            professional_account=self.professional_account,
+            company="ABC Technologies",
+            job_title="Software Engineer",
+        )
+
+        response = self.client.get(
+            f"/api/identity/job-experiences/{experience.id}/"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["job_title"],
+            "Software Engineer",
+        )
+
+    def test_job_experience_update_api(self):
+        experience = JobExperience.objects.create(
+            professional_account=self.professional_account,
+            company="ABC Technologies",
+            job_title="Software Engineer",
+        )
+
+        response = self.client.patch(
+            f"/api/identity/job-experiences/{experience.id}/update/",
+            data={
+                "job_title": "Senior Software Engineer",
+                "company": "XYZ Solutions",
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        experience.refresh_from_db()
+
+        self.assertEqual(
+            experience.job_title,
+            "Senior Software Engineer",
+        )
+
+        self.assertEqual(
+            experience.company,
+            "XYZ Solutions",
+        )
+
+    def test_job_experience_delete_api(self):
+        experience = JobExperience.objects.create(
+            professional_account=self.professional_account,
+            company="ABC Technologies",
+            job_title="Software Engineer",
+        )
+
+        response = self.client.delete(
+            f"/api/identity/job-experiences/{experience.id}/delete/"
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.assertFalse(
+            JobExperience.objects.filter(
+                id=experience.id
+            ).exists()
         )
