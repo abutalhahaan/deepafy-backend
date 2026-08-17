@@ -9,6 +9,8 @@ from .models import (
     AccountType,
     Hobby,
     JobExperience,
+    ProfessionalSkill,
+    Skill,
     PersonalAccount,
     PersonalHobby,
     PersonalInterestedCategory,
@@ -1107,5 +1109,354 @@ def job_experience_delete(request, experience_id):
         {
             "detail":
             "Job experience deleted successfully."
+        }
+    )
+
+def serialize_skill(skill):
+    return {
+        "id": skill.id,
+        "name": skill.name,
+        "slug": skill.slug,
+        "is_active": skill.is_active,
+        "created_at": skill.created_at.isoformat(),
+        "updated_at": skill.updated_at.isoformat(),
+    }
+
+
+def serialize_professional_skill(professional_skill):
+    return {
+        "id": professional_skill.id,
+        "professional_account_id": (
+            professional_skill.professional_account_id
+        ),
+        "skill_id": professional_skill.skill_id,
+        "skill_name": professional_skill.skill.name,
+        "skill_level": professional_skill.skill_level,
+        "years_of_experience": (
+            professional_skill.years_of_experience
+        ),
+        "is_active": professional_skill.is_active,
+        "created_at": (
+            professional_skill.created_at.isoformat()
+        ),
+        "updated_at": (
+            professional_skill.updated_at.isoformat()
+        ),
+    }
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def skill_create(request):
+    try:
+        data = json.loads(request.body or "{}")
+
+        name = data.get("name", "").strip()
+        slug = data.get("slug", "").strip()
+
+        if not name:
+            return JsonResponse(
+                {"detail": "Skill name is required."},
+                status=400,
+            )
+
+        if not slug:
+            return JsonResponse(
+                {"detail": "Skill slug is required."},
+                status=400,
+            )
+
+        if Skill.objects.filter(name=name).exists():
+            return JsonResponse(
+                {"detail": "This skill already exists."},
+                status=400,
+            )
+
+        if Skill.objects.filter(slug=slug).exists():
+            return JsonResponse(
+                {"detail": "This skill slug already exists."},
+                status=400,
+            )
+
+        skill = Skill.objects.create(
+            name=name,
+            slug=slug,
+            is_active=data.get("is_active", True),
+        )
+
+        return JsonResponse(
+            serialize_skill(skill),
+            status=201,
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"detail": "Invalid JSON."},
+            status=400,
+        )
+
+
+@require_http_methods(["GET"])
+def skill_list(request):
+    skills = Skill.objects.all()
+
+    results = [
+        serialize_skill(skill)
+        for skill in skills
+    ]
+
+    return JsonResponse(
+        {
+            "count": len(results),
+            "results": results,
+        }
+    )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def professional_skill_create(request):
+    try:
+        data = json.loads(request.body or "{}")
+
+        professional_account_id = data.get(
+            "professional_account_id"
+        )
+        skill_id = data.get("skill_id")
+
+        if not professional_account_id:
+            return JsonResponse(
+                {
+                    "detail":
+                    "professional_account_id is required."
+                },
+                status=400,
+            )
+
+        if not skill_id:
+            return JsonResponse(
+                {
+                    "detail":
+                    "skill_id is required."
+                },
+                status=400,
+            )
+
+        try:
+            professional_account = (
+                ProfessionalAccount.objects.get(
+                    id=professional_account_id
+                )
+            )
+        except ProfessionalAccount.DoesNotExist:
+            return JsonResponse(
+                {
+                    "detail":
+                    "Professional account not found."
+                },
+                status=404,
+            )
+
+        try:
+            skill = Skill.objects.get(
+                id=skill_id,
+                is_active=True,
+            )
+        except Skill.DoesNotExist:
+            return JsonResponse(
+                {
+                    "detail":
+                    "Skill not found."
+                },
+                status=404,
+            )
+
+        if ProfessionalSkill.objects.filter(
+            professional_account=professional_account,
+            skill=skill,
+        ).exists():
+            return JsonResponse(
+                {
+                    "detail":
+                    "This skill is already added."
+                },
+                status=400,
+            )
+
+        professional_skill = ProfessionalSkill.objects.create(
+            professional_account=professional_account,
+            skill=skill,
+            skill_level=data.get(
+                "skill_level",
+                ProfessionalSkill.SkillLevel.INTERMEDIATE,
+            ),
+            years_of_experience=data.get(
+                "years_of_experience",
+                0,
+            ),
+            is_active=data.get(
+                "is_active",
+                True,
+            ),
+        )
+
+        return JsonResponse(
+            serialize_professional_skill(
+                professional_skill
+            ),
+            status=201,
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"detail": "Invalid JSON."},
+            status=400,
+        )
+
+
+@require_http_methods(["GET"])
+def professional_skill_list(request, identity_id):
+    try:
+        professional_account = (
+            ProfessionalAccount.objects.get(
+                identity_id=identity_id
+            )
+        )
+    except ProfessionalAccount.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Professional account not found."
+            },
+            status=404,
+        )
+
+    professional_skills = ProfessionalSkill.objects.filter(
+        professional_account=professional_account
+    )
+
+    results = [
+        serialize_professional_skill(
+            professional_skill
+        )
+        for professional_skill in professional_skills
+    ]
+
+    return JsonResponse(
+        {
+            "professional_account_id":
+            professional_account.id,
+            "count": len(results),
+            "results": results,
+        }
+    )
+
+
+@require_http_methods(["GET"])
+def professional_skill_detail(
+    request,
+    professional_skill_id,
+):
+    try:
+        professional_skill = (
+            ProfessionalSkill.objects.get(
+                id=professional_skill_id
+            )
+        )
+    except ProfessionalSkill.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Professional skill not found."
+            },
+            status=404,
+        )
+
+    return JsonResponse(
+        serialize_professional_skill(
+            professional_skill
+        )
+    )
+
+
+@csrf_exempt
+@require_http_methods(["PATCH"])
+def professional_skill_update(
+    request,
+    professional_skill_id,
+):
+    try:
+        professional_skill = (
+            ProfessionalSkill.objects.get(
+                id=professional_skill_id
+            )
+        )
+    except ProfessionalSkill.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Professional skill not found."
+            },
+            status=404,
+        )
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"detail": "Invalid JSON."},
+            status=400,
+        )
+
+    fields = [
+        "skill_level",
+        "years_of_experience",
+        "is_active",
+    ]
+
+    for field in fields:
+        if field in data:
+            setattr(
+                professional_skill,
+                field,
+                data[field],
+            )
+
+    professional_skill.save()
+
+    return JsonResponse(
+        serialize_professional_skill(
+            professional_skill
+        )
+    )
+
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+def professional_skill_delete(
+    request,
+    professional_skill_id,
+):
+    try:
+        professional_skill = (
+            ProfessionalSkill.objects.get(
+                id=professional_skill_id
+            )
+        )
+    except ProfessionalSkill.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Professional skill not found."
+            },
+            status=404,
+        )
+
+    professional_skill.delete()
+
+    return JsonResponse(
+        {
+            "detail":
+            "Professional skill deleted successfully."
         }
     )

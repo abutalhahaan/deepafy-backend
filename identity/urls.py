@@ -81,4 +81,41 @@ urlpatterns = [
         views.job_experience_delete,
         name="job-experience-delete",
     ),
+
+    # Skills
+    path(
+        "skills/create/",
+        views.skill_create,
+        name="skill-create",
+    ),
+    path(
+        "skills/",
+        views.skill_list,
+        name="skill-list",
+    ),
+    path(
+        "professional-skills/create/",
+        views.professional_skill_create,
+        name="professional-skill-create",
+    ),
+    path(
+        "<int:identity_id>/professional-skills/",
+        views.professional_skill_list,
+        name="professional-skill-list",
+    ),
+    path(
+        "professional-skills/<int:professional_skill_id>/",
+        views.professional_skill_detail,
+        name="professional-skill-detail",
+    ),
+    path(
+        "professional-skills/<int:professional_skill_id>/update/",
+        views.professional_skill_update,
+        name="professional-skill-update",
+    ),
+    path(
+        "professional-skills/<int:professional_skill_id>/delete/",
+        views.professional_skill_delete,
+        name="professional-skill-delete",
+    ),
 ]

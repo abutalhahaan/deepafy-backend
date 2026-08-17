@@ -6,12 +6,14 @@ from .models import (
     AcademicBackground,
     AccountType,
     Hobby,
+    JobExperience,
     PersonalAccount,
     PersonalHobby,
     PersonalInterestedCategory,
     ProfessionalAccount,
+    ProfessionalSkill,
+    Skill,
     UserIdentity,
-    JobExperience,
 )
 
 
@@ -235,6 +237,7 @@ class PersonalHobbyTests(TestCase):
                 hobby=self.hobby,
             )
 
+
 class AcademicBackgroundTests(TestCase):
     def setUp(self):
         self.identity = UserIdentity.objects.create(
@@ -314,6 +317,7 @@ class AcademicBackgroundTests(TestCase):
             AcademicBackground.objects.count(),
             0,
         )
+
 
 class JobExperienceTests(TestCase):
     def setUp(self):
@@ -416,6 +420,7 @@ class JobExperienceTests(TestCase):
             JobExperience.objects.count(),
             0,
         )
+
 
 class JobExperienceAPITests(TestCase):
     def setUp(self):
@@ -535,5 +540,341 @@ class JobExperienceAPITests(TestCase):
         self.assertFalse(
             JobExperience.objects.filter(
                 id=experience.id
+            ).exists()
+        )
+
+
+class SkillTests(TestCase):
+    def setUp(self):
+        self.skill = Skill.objects.create(
+            name="Python",
+            slug="python",
+        )
+
+    def test_skill_creation(self):
+        self.assertEqual(
+            self.skill.name,
+            "Python",
+        )
+        self.assertEqual(
+            self.skill.slug,
+            "python",
+        )
+        self.assertTrue(
+            self.skill.is_active,
+        )
+
+    def test_skill_string(self):
+        self.assertEqual(
+            str(self.skill),
+            "Python",
+        )
+
+    def test_multiple_skills_allowed(self):
+        Skill.objects.create(
+            name="Django",
+            slug="django",
+        )
+
+        self.assertEqual(
+            Skill.objects.count(),
+            2,
+        )
+
+    def test_skill_deleted(self):
+        skill_id = self.skill.id
+
+        self.skill.delete()
+
+        self.assertFalse(
+            Skill.objects.filter(
+                id=skill_id
+            ).exists()
+        )
+
+
+class ProfessionalSkillTests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="skill@example.com",
+        )
+
+        self.professional_account = ProfessionalAccount.objects.create(
+            identity=self.identity,
+            professional_title="Software Engineer",
+        )
+
+        self.skill = Skill.objects.create(
+            name="Python",
+            slug="python",
+        )
+
+    def test_professional_skill_creation(self):
+        professional_skill = ProfessionalSkill.objects.create(
+            professional_account=self.professional_account,
+            skill=self.skill,
+            skill_level=ProfessionalSkill.SkillLevel.INTERMEDIATE,
+            years_of_experience=3,
+        )
+
+        self.assertEqual(
+            professional_skill.professional_account,
+            self.professional_account,
+        )
+        self.assertEqual(
+            professional_skill.skill,
+            self.skill,
+        )
+        self.assertEqual(
+            professional_skill.skill_level,
+            ProfessionalSkill.SkillLevel.INTERMEDIATE,
+        )
+        self.assertEqual(
+            professional_skill.years_of_experience,
+            3,
+        )
+        self.assertTrue(
+            professional_skill.is_active,
+        )
+
+    def test_professional_skill_string(self):
+        professional_skill = ProfessionalSkill.objects.create(
+            professional_account=self.professional_account,
+            skill=self.skill,
+        )
+
+        self.assertIn(
+            "Python",
+            str(professional_skill),
+        )
+
+    def test_multiple_professional_skills_allowed(self):
+        django_skill = Skill.objects.create(
+            name="Django",
+            slug="django",
+        )
+
+        ProfessionalSkill.objects.create(
+            professional_account=self.professional_account,
+            skill=self.skill,
+        )
+
+        ProfessionalSkill.objects.create(
+            professional_account=self.professional_account,
+            skill=django_skill,
+        )
+
+        self.assertEqual(
+            ProfessionalSkill.objects.filter(
+                professional_account=self.professional_account
+            ).count(),
+            2,
+        )
+
+    def test_duplicate_professional_skill_not_allowed(self):
+        ProfessionalSkill.objects.create(
+            professional_account=self.professional_account,
+            skill=self.skill,
+        )
+
+        with self.assertRaises(Exception):
+            ProfessionalSkill.objects.create(
+                professional_account=self.professional_account,
+                skill=self.skill,
+            )
+
+    def test_professional_skill_deleted_with_professional_account(self):
+        ProfessionalSkill.objects.create(
+            professional_account=self.professional_account,
+            skill=self.skill,
+        )
+
+        self.professional_account.delete()
+
+        self.assertEqual(
+            ProfessionalSkill.objects.count(),
+            0,
+        )
+
+
+class SkillAPITests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="api-skill@example.com",
+        )
+
+        self.professional_account = ProfessionalAccount.objects.create(
+            identity=self.identity,
+            professional_title="Software Engineer",
+        )
+
+        self.skill = Skill.objects.create(
+            name="Python",
+            slug="python",
+        )
+
+    def test_skill_create_api(self):
+        response = self.client.post(
+            "/api/identity/skills/create/",
+            data={
+                "name": "Django",
+                "slug": "django",
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            201,
+        )
+
+        self.assertEqual(
+            response.json()["name"],
+            "Django",
+        )
+
+        self.assertTrue(
+            Skill.objects.filter(
+                name="Django"
+            ).exists()
+        )
+
+    def test_skill_list_api(self):
+        response = self.client.get(
+            "/api/identity/skills/"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.assertEqual(
+            response.json()["count"],
+            1,
+        )
+
+    def test_professional_skill_create_api(self):
+        response = self.client.post(
+            "/api/identity/professional-skills/create/",
+            data={
+                "professional_account_id":
+                    self.professional_account.id,
+                "skill_id": self.skill.id,
+                "skill_level":
+                    ProfessionalSkill.SkillLevel.EXPERT,
+                "years_of_experience": 5,
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            201,
+        )
+
+        self.assertEqual(
+            response.json()["skill_name"],
+            "Python",
+        )
+
+        self.assertEqual(
+            response.json()["years_of_experience"],
+            5,
+        )
+
+    def test_professional_skill_list_api(self):
+        ProfessionalSkill.objects.create(
+            professional_account=self.professional_account,
+            skill=self.skill,
+        )
+
+        response = self.client.get(
+            f"/api/identity/{self.identity.id}/professional-skills/"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.assertEqual(
+            response.json()["count"],
+            1,
+        )
+
+    def test_professional_skill_detail_api(self):
+        professional_skill = ProfessionalSkill.objects.create(
+            professional_account=self.professional_account,
+            skill=self.skill,
+        )
+
+        response = self.client.get(
+            f"/api/identity/professional-skills/{professional_skill.id}/"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.assertEqual(
+            response.json()["skill_name"],
+            "Python",
+        )
+
+    def test_professional_skill_update_api(self):
+        professional_skill = ProfessionalSkill.objects.create(
+            professional_account=self.professional_account,
+            skill=self.skill,
+            skill_level=ProfessionalSkill.SkillLevel.INTERMEDIATE,
+            years_of_experience=2,
+        )
+
+        response = self.client.patch(
+            f"/api/identity/professional-skills/{professional_skill.id}/update/",
+            data={
+                "skill_level":
+                    ProfessionalSkill.SkillLevel.EXPERT,
+                "years_of_experience": 6,
+            },
+            content_type="application/json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        professional_skill.refresh_from_db()
+
+        self.assertEqual(
+            professional_skill.skill_level,
+            ProfessionalSkill.SkillLevel.EXPERT,
+        )
+
+        self.assertEqual(
+            professional_skill.years_of_experience,
+            6,
+        )
+
+    def test_professional_skill_delete_api(self):
+        professional_skill = ProfessionalSkill.objects.create(
+            professional_account=self.professional_account,
+            skill=self.skill,
+        )
+
+        response = self.client.delete(
+            f"/api/identity/professional-skills/{professional_skill.id}/delete/"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.assertFalse(
+            ProfessionalSkill.objects.filter(
+                id=professional_skill.id
             ).exists()
         )
