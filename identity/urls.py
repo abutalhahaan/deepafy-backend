@@ -118,4 +118,16 @@ urlpatterns = [
         views.professional_skill_delete,
         name="professional-skill-delete",
     ),
+
+    # Personal Languages
+    path(
+        "<int:personal_account_id>/personal-languages/",
+        views.personal_languages,
+        name="personal-languages",
+    ),
+    path(
+        "personal-languages/<int:language_id>/",
+        views.personal_language_detail,
+        name="personal-language-detail",
+    ),
 ]
