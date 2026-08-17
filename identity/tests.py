@@ -7,9 +7,11 @@ from .models import (
     AccountType,
     Hobby,
     JobExperience,
+    Language,
     PersonalAccount,
     PersonalHobby,
     PersonalInterestedCategory,
+    PersonalLanguage,
     ProfessionalAccount,
     ProfessionalSkill,
     Skill,
@@ -26,23 +28,12 @@ class UserIdentityTests(TestCase):
         )
 
     def test_identity_creation(self):
-        self.assertEqual(
-            self.identity.email,
-            "test@example.com",
-        )
-        self.assertEqual(
-            self.identity.mobile_number,
-            "01700000000",
-        )
-        self.assertEqual(
-            self.identity.status,
-            "active",
-        )
+        self.assertEqual(self.identity.email, "test@example.com")
+        self.assertEqual(self.identity.mobile_number, "01700000000")
+        self.assertEqual(self.identity.status, "active")
 
     def test_identity_uuid_created(self):
-        self.assertIsNotNone(
-            self.identity.user_id,
-        )
+        self.assertIsNotNone(self.identity.user_id)
 
     def test_identity_string(self):
         self.assertEqual(
@@ -64,20 +55,10 @@ class AccountTypeTests(TestCase):
             is_primary=True,
         )
 
-        self.assertEqual(
-            account_type.identity,
-            self.identity,
-        )
-        self.assertEqual(
-            account_type.account_type,
-            "personal",
-        )
-        self.assertTrue(
-            account_type.is_primary,
-        )
-        self.assertTrue(
-            account_type.is_active,
-        )
+        self.assertEqual(account_type.identity, self.identity)
+        self.assertEqual(account_type.account_type, "personal")
+        self.assertTrue(account_type.is_primary)
+        self.assertTrue(account_type.is_active)
 
     def test_account_type_string(self):
         account_type = AccountType.objects.create(
@@ -85,10 +66,7 @@ class AccountTypeTests(TestCase):
             account_type=AccountType.Type.PERSONAL,
         )
 
-        self.assertIn(
-            "Personal Account",
-            str(account_type),
-        )
+        self.assertIn("Personal Account", str(account_type))
 
 
 class PersonalAccountTests(TestCase):
@@ -106,9 +84,7 @@ class PersonalAccountTests(TestCase):
             self.personal_account.identity,
             self.identity,
         )
-        self.assertTrue(
-            self.personal_account.is_active,
-        )
+        self.assertTrue(self.personal_account.is_active)
 
     def test_personal_account_bio(self):
         self.personal_account.bio = (
@@ -128,6 +104,111 @@ class PersonalAccountTests(TestCase):
             str(self.personal_account),
             f"Personal Account - {self.identity.user_id}",
         )
+
+
+class PersonalLanguageTests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="language@example.com",
+        )
+
+        self.personal_account = PersonalAccount.objects.create(
+            identity=self.identity,
+        )
+
+        self.language = Language.objects.create(
+            name="English",
+            code="en",
+        )
+
+    def test_language_creation(self):
+        self.assertEqual(self.language.name, "English")
+        self.assertEqual(self.language.code, "en")
+        self.assertTrue(self.language.is_active)
+
+    def test_language_string(self):
+        self.assertEqual(
+            str(self.language),
+            "English",
+        )
+
+    def test_personal_language_creation(self):
+        personal_language = PersonalLanguage.objects.create(
+            personal_account=self.personal_account,
+            language=self.language,
+            proficiency="fluent",
+        )
+
+        self.assertEqual(
+            personal_language.personal_account,
+            self.personal_account,
+        )
+
+        self.assertEqual(
+            personal_language.language,
+            self.language,
+        )
+
+        self.assertEqual(
+            personal_language.proficiency,
+            "fluent",
+        )
+
+        self.assertTrue(personal_language.is_active)
+
+    def test_personal_language_string(self):
+        personal_language = PersonalLanguage.objects.create(
+            personal_account=self.personal_account,
+            language=self.language,
+            proficiency="fluent",
+        )
+
+        self.assertEqual(
+            str(personal_language),
+            (
+                f"{self.identity.user_id} - "
+                f"{self.language.name}"
+            ),
+        )
+
+    def test_multiple_personal_languages_allowed(self):
+        second_language = Language.objects.create(
+            name="Bangla",
+            code="bn",
+        )
+
+        PersonalLanguage.objects.create(
+            personal_account=self.personal_account,
+            language=self.language,
+            proficiency="fluent",
+        )
+
+        PersonalLanguage.objects.create(
+            personal_account=self.personal_account,
+            language=second_language,
+            proficiency="native",
+        )
+
+        self.assertEqual(
+            PersonalLanguage.objects.filter(
+                personal_account=self.personal_account
+            ).count(),
+            2,
+        )
+
+    def test_duplicate_personal_language_not_allowed(self):
+        PersonalLanguage.objects.create(
+            personal_account=self.personal_account,
+            language=self.language,
+            proficiency="fluent",
+        )
+
+        with self.assertRaises(Exception):
+            PersonalLanguage.objects.create(
+                personal_account=self.personal_account,
+                language=self.language,
+                proficiency="fluent",
+            )
 
 
 class PersonalInterestedCategoryTests(TestCase):
@@ -157,13 +238,13 @@ class PersonalInterestedCategoryTests(TestCase):
             interested_category.personal_account,
             self.personal_account,
         )
+
         self.assertEqual(
             interested_category.category,
             self.category,
         )
-        self.assertTrue(
-            interested_category.is_active,
-        )
+
+        self.assertTrue(interested_category.is_active)
 
     def test_interested_category_string(self):
         interested_category = (
@@ -219,13 +300,13 @@ class PersonalHobbyTests(TestCase):
             personal_hobby.personal_account,
             self.personal_account,
         )
+
         self.assertEqual(
             personal_hobby.hobby,
             self.hobby,
         )
-        self.assertTrue(
-            personal_hobby.is_active,
-        )
+
+        self.assertTrue(personal_hobby.is_active)
 
     def test_hobby_string(self):
         personal_hobby = PersonalHobby.objects.create(
@@ -276,10 +357,12 @@ class AcademicBackgroundTests(TestCase):
             academic.qualification,
             "Bachelor of Science",
         )
+
         self.assertEqual(
             academic.institution,
             "University of Dhaka",
         )
+
         self.assertEqual(
             academic.field_of_study,
             "Computer Science",
@@ -360,18 +443,22 @@ class JobExperienceTests(TestCase):
             experience.professional_account,
             self.professional_account,
         )
+
         self.assertEqual(
             experience.company,
             "ABC Technologies",
         )
+
         self.assertEqual(
             experience.job_title,
             "Software Engineer",
         )
+
         self.assertEqual(
             experience.employment_type,
             "Full-time",
         )
+
         self.assertEqual(
             experience.location,
             "Dhaka",
@@ -450,7 +537,8 @@ class JobExperienceAPITests(TestCase):
         response = self.client.post(
             "/api/identity/job-experiences/create/",
             data={
-                "professional_account_id": self.professional_account.id,
+                "professional_account_id":
+                    self.professional_account.id,
                 "company": "ABC Technologies",
                 "job_title": "Software Engineer",
                 "employment_type": "Full-time",
@@ -502,6 +590,7 @@ class JobExperienceAPITests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+
         self.assertEqual(
             response.json()["job_title"],
             "Software Engineer",
@@ -565,17 +654,9 @@ class SkillTests(TestCase):
         )
 
     def test_skill_creation(self):
-        self.assertEqual(
-            self.skill.name,
-            "Python",
-        )
-        self.assertEqual(
-            self.skill.slug,
-            "python",
-        )
-        self.assertTrue(
-            self.skill.is_active,
-        )
+        self.assertEqual(self.skill.name, "Python")
+        self.assertEqual(self.skill.slug, "python")
+        self.assertTrue(self.skill.is_active)
 
     def test_skill_string(self):
         self.assertEqual(
@@ -634,18 +715,22 @@ class ProfessionalSkillTests(TestCase):
             professional_skill.professional_account,
             self.professional_account,
         )
+
         self.assertEqual(
             professional_skill.skill,
             self.skill,
         )
+
         self.assertEqual(
             professional_skill.skill_level,
             ProfessionalSkill.SkillLevel.INTERMEDIATE,
         )
+
         self.assertEqual(
             professional_skill.years_of_experience,
             3,
         )
+
         self.assertTrue(
             professional_skill.is_active,
         )
@@ -806,10 +891,7 @@ class SkillAPITests(TestCase):
             f"/api/identity/{self.identity.id}/professional-skills/"
         )
 
-        self.assertEqual(
-            response.status_code,
-            200,
-        )
+        self.assertEqual(response.status_code, 200)
 
         self.assertEqual(
             response.json()["count"],
@@ -826,10 +908,7 @@ class SkillAPITests(TestCase):
             f"/api/identity/professional-skills/{professional_skill.id}/"
         )
 
-        self.assertEqual(
-            response.status_code,
-            200,
-        )
+        self.assertEqual(response.status_code, 200)
 
         self.assertEqual(
             response.json()["skill_name"],
@@ -854,10 +933,7 @@ class SkillAPITests(TestCase):
             content_type="application/json",
         )
 
-        self.assertEqual(
-            response.status_code,
-            200,
-        )
+        self.assertEqual(response.status_code, 200)
 
         professional_skill.refresh_from_db()
 
@@ -881,13 +957,11 @@ class SkillAPITests(TestCase):
             f"/api/identity/professional-skills/{professional_skill.id}/delete/"
         )
 
-        self.assertEqual(
-            response.status_code,
-            200,
-        )
+        self.assertEqual(response.status_code, 200)
 
         self.assertFalse(
             ProfessionalSkill.objects.filter(
                 id=professional_skill.id
             ).exists()
         )
+
