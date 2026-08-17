@@ -79,6 +79,36 @@ class AccountType(models.Model):
         )
 
 
+class Language(models.Model):
+    name = models.CharField(
+        max_length=100,
+        unique=True,
+    )
+
+    code = models.CharField(
+        max_length=20,
+        unique=True,
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
 class PersonalAccount(models.Model):
     identity = models.OneToOneField(
         UserIdentity,
@@ -98,6 +128,18 @@ class PersonalAccount(models.Model):
         blank=True,
     )
 
+    bio = models.TextField(
+        blank=True,
+    )
+
+    mother_tongue = models.ForeignKey(
+        Language,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="mother_tongue_users",
+    )
+
     permanent_country = models.ForeignKey(
         "organization.Country",
         on_delete=models.PROTECT,
@@ -105,14 +147,17 @@ class PersonalAccount(models.Model):
         blank=True,
         related_name="personal_permanent_addresses",
     )
+
     permanent_city = models.CharField(
         max_length=255,
         blank=True,
     )
+
     permanent_area = models.CharField(
         max_length=255,
         blank=True,
     )
+
     permanent_full_address = models.TextField(
         blank=True,
     )
@@ -124,14 +169,17 @@ class PersonalAccount(models.Model):
         blank=True,
         related_name="personal_present_addresses",
     )
+
     present_city = models.CharField(
         max_length=255,
         blank=True,
     )
+
     present_area = models.CharField(
         max_length=255,
         blank=True,
     )
+
     present_full_address = models.TextField(
         blank=True,
     )
@@ -155,11 +203,13 @@ class PersonalInterestedCategory(models.Model):
         on_delete=models.CASCADE,
         related_name="interested_categories",
     )
+
     category = models.ForeignKey(
         "category_engine.Category",
         on_delete=models.PROTECT,
         related_name="personal_interested_categories",
     )
+
     is_active = models.BooleanField(default=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -180,15 +230,36 @@ class PersonalInterestedCategory(models.Model):
             f"{self.category.name}"
         )
 
-class Hobby(models.Model):
-    name = models.CharField(max_length=100)
-    slug = models.SlugField(max_length=120, unique=True)
-    description = models.TextField(blank=True)
-    is_active = models.BooleanField(default=True)
-    display_order = models.PositiveIntegerField(default=0)
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+class Hobby(models.Model):
+    name = models.CharField(
+        max_length=100,
+    )
+
+    slug = models.SlugField(
+        max_length=120,
+        unique=True,
+    )
+
+    description = models.TextField(
+        blank=True,
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    display_order = models.PositiveIntegerField(
+        default=0,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
 
     class Meta:
         ordering = ["display_order", "name"]
@@ -203,6 +274,7 @@ class PersonalHobby(models.Model):
         on_delete=models.CASCADE,
         related_name="hobbies",
     )
+
     hobby = models.ForeignKey(
         Hobby,
         on_delete=models.PROTECT,
@@ -210,10 +282,18 @@ class PersonalHobby(models.Model):
         blank=True,
         related_name="personal_selections",
     )
-    is_active = models.BooleanField(default=True)
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
 
     class Meta:
         constraints = [
@@ -230,6 +310,7 @@ class PersonalHobby(models.Model):
             f"{self.hobby.name}"
         )
 
+
 class ProfessionalAccount(models.Model):
     identity = models.OneToOneField(
         UserIdentity,
@@ -241,20 +322,25 @@ class ProfessionalAccount(models.Model):
         max_length=255,
         blank=True,
     )
+
     profession = models.CharField(
         max_length=255,
         blank=True,
     )
+
     industry = models.CharField(
         max_length=255,
         blank=True,
     )
+
     professional_summary = models.TextField(
         blank=True,
     )
+
     focus_job_area = models.TextField(
         blank=True,
     )
+
     future_goal = models.TextField(
         blank=True,
     )
@@ -276,12 +362,14 @@ class ProfessionalAccount(models.Model):
     created_at = models.DateTimeField(
         auto_now_add=True,
     )
+
     updated_at = models.DateTimeField(
         auto_now=True,
     )
 
     def __str__(self):
         return f"Professional Account - {self.identity.user_id}"
+
 
 class AcademicBackground(models.Model):
     professional_account = models.ForeignKey(
@@ -356,13 +444,18 @@ class AcademicBackground(models.Model):
     )
 
     class Meta:
-        ordering = ["display_order", "-start_date", "qualification"]
+        ordering = [
+            "display_order",
+            "-start_date",
+            "qualification",
+        ]
 
     def __str__(self):
         return (
             f"{self.qualification} - "
             f"{self.institution}"
         )
+
 
 class JobExperience(models.Model):
     professional_account = models.ForeignKey(
@@ -425,6 +518,7 @@ class JobExperience(models.Model):
 
     def __str__(self):
         return f"{self.job_title} - {self.company}"
+
 
 class Skill(models.Model):
     name = models.CharField(
