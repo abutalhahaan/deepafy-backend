@@ -110,6 +110,19 @@ class PersonalAccountTests(TestCase):
             self.personal_account.is_active,
         )
 
+    def test_personal_account_bio(self):
+        self.personal_account.bio = (
+            "Professional sourcing and marketplace specialist."
+        )
+        self.personal_account.save()
+
+        self.personal_account.refresh_from_db()
+
+        self.assertEqual(
+            self.personal_account.bio,
+            "Professional sourcing and marketplace specialist.",
+        )
+
     def test_personal_account_string(self):
         self.assertEqual(
             str(self.personal_account),
