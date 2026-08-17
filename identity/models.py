@@ -425,3 +425,81 @@ class JobExperience(models.Model):
 
     def __str__(self):
         return f"{self.job_title} - {self.company}"
+
+class Skill(models.Model):
+    name = models.CharField(
+        max_length=200,
+        unique=True,
+    )
+
+    slug = models.SlugField(
+        unique=True,
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    def __str__(self):
+        return self.name
+
+
+class ProfessionalSkill(models.Model):
+
+    class SkillLevel(models.TextChoices):
+        BEGINNER = "beginner", "Beginner"
+        INTERMEDIATE = "intermediate", "Intermediate"
+        EXPERT = "expert", "Expert"
+
+    professional_account = models.ForeignKey(
+        ProfessionalAccount,
+        on_delete=models.CASCADE,
+        related_name="skills",
+    )
+
+    skill = models.ForeignKey(
+        Skill,
+        on_delete=models.CASCADE,
+    )
+
+    skill_level = models.CharField(
+        max_length=20,
+        choices=SkillLevel.choices,
+        default=SkillLevel.INTERMEDIATE,
+    )
+
+    years_of_experience = models.PositiveIntegerField(
+        default=0,
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        unique_together = (
+            "professional_account",
+            "skill",
+        )
+
+    def __str__(self):
+        return (
+            f"{self.professional_account.id} - "
+            f"{self.skill.name}"
+        )
