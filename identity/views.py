@@ -1460,3 +1460,220 @@ def professional_skill_delete(
             "Professional skill deleted successfully."
         }
     )
+
+# Personal Languages
+
+@require_http_methods(["GET", "POST"])
+def personal_languages(request, personal_account_id):
+    try:
+        personal_account = PersonalAccount.objects.get(
+            id=personal_account_id,
+            is_active=True,
+        )
+    except PersonalAccount.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Personal account not found."},
+            status=404,
+        )
+
+    if request.method == "GET":
+        languages = (
+            PersonalLanguage.objects
+            .filter(
+                personal_account=personal_account,
+                is_active=True,
+            )
+            .select_related("language")
+            .order_by("language__name")
+        )
+
+        data = [
+            {
+                "id": item.id,
+                "language_id": item.language.id,
+                "language_name": item.language.name,
+                "language_code": item.language.code,
+                "proficiency": item.proficiency,
+            }
+            for item in languages
+        ]
+
+        return JsonResponse(
+            {
+                "count": len(data),
+                "results": data,
+            },
+            status=200,
+        )
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"detail": "Invalid JSON."},
+            status=400,
+        )
+
+    language_id = payload.get("language_id")
+    proficiency = payload.get("proficiency")
+
+    if not language_id:
+        return JsonResponse(
+            {"detail": "language_id is required."},
+            status=400,
+        )
+
+    if proficiency not in dict(PersonalLanguage.Proficiency.choices):
+        return JsonResponse(
+            {"detail": "Invalid proficiency."},
+            status=400,
+        )
+
+    try:
+        language = Language.objects.get(
+            id=language_id,
+            is_active=True,
+        )
+    except Language.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Language not found."},
+            status=404,
+        )
+
+    if PersonalLanguage.objects.filter(
+        personal_account=personal_account,
+        language=language,
+        is_active=True,
+    ).exists():
+        return JsonResponse(
+            {"detail": "This language is already added."},
+            status=409,
+        )
+
+    personal_language = PersonalLanguage.objects.create(
+        personal_account=personal_account,
+        language=language,
+        proficiency=proficiency,
+    )
+
+    return JsonResponse(
+        {
+            "id": personal_language.id,
+            "language_id": language.id,
+            "language_name": language.name,
+            "language_code": language.code,
+            "proficiency": personal_language.proficiency,
+        },
+        status=201,
+    )
+
+
+@require_http_methods(["GET", "PATCH", "DELETE"])
+def personal_language_detail(request, language_id):
+    try:
+        personal_language = (
+            PersonalLanguage.objects
+            .select_related(
+                "personal_account",
+                "language",
+            )
+            .get(
+                id=language_id,
+                is_active=True,
+            )
+        )
+    except PersonalLanguage.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Personal language not found."},
+            status=404,
+        )
+
+    if request.method == "GET":
+        return JsonResponse(
+            {
+                "id": personal_language.id,
+                "personal_account_id": personal_language.personal_account.id,
+                "language_id": personal_language.language.id,
+                "language_name": personal_language.language.name,
+                "language_code": personal_language.language.code,
+                "proficiency": personal_language.proficiency,
+            },
+            status=200,
+        )
+
+    if request.method == "DELETE":
+        personal_language.is_active = False
+        personal_language.save(
+            update_fields=["is_active", "updated_at"],
+        )
+
+        return JsonResponse(
+            {"detail": "Personal language deleted."},
+            status=200,
+        )
+
+    try:
+        payload = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"detail": "Invalid JSON."},
+            status=400,
+        )
+
+    proficiency = payload.get("proficiency")
+
+    if proficiency is not None:
+        if proficiency not in dict(PersonalLanguage.Proficiency.choices):
+            return JsonResponse(
+                {"detail": "Invalid proficiency."},
+                status=400,
+            )
+
+        personal_language.proficiency = proficiency
+
+    if "language_id" in payload:
+        language_id = payload.get("language_id")
+
+        try:
+            language = Language.objects.get(
+                id=language_id,
+                is_active=True,
+            )
+        except Language.DoesNotExist:
+            return JsonResponse(
+                {"detail": "Language not found."},
+                status=404,
+            )
+
+        duplicate_exists = (
+            PersonalLanguage.objects
+            .filter(
+                personal_account=personal_language.personal_account,
+                language=language,
+                is_active=True,
+            )
+            .exclude(id=personal_language.id)
+            .exists()
+        )
+
+        if duplicate_exists:
+            return JsonResponse(
+                {"detail": "This language is already added."},
+                status=409,
+            )
+
+        personal_language.language = language
+
+    personal_language.save()
+
+    return JsonResponse(
+        {
+            "id": personal_language.id,
+            "personal_account_id": personal_language.personal_account.id,
+            "language_id": personal_language.language.id,
+            "language_name": personal_language.language.name,
+            "language_code": personal_language.language.code,
+            "proficiency": personal_language.proficiency,
+        },
+        status=200,
+    )
