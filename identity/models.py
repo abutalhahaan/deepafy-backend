@@ -108,6 +108,57 @@ class Language(models.Model):
     def __str__(self):
         return self.name
 
+class PersonalLanguage(models.Model):
+    class Proficiency(models.TextChoices):
+        BASIC = "basic", "Basic"
+        CONVERSATIONAL = "conversational", "Conversational"
+        FLUENT = "fluent", "Fluent"
+        NATIVE = "native", "Native"
+
+    personal_account = models.ForeignKey(
+        "PersonalAccount",
+        on_delete=models.CASCADE,
+        related_name="languages",
+    )
+
+    language = models.ForeignKey(
+        Language,
+        on_delete=models.PROTECT,
+        related_name="personal_languages",
+    )
+
+    proficiency = models.CharField(
+        max_length=30,
+        choices=Proficiency.choices,
+        default=Proficiency.CONVERSATIONAL,
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["personal_account", "language"],
+                name="unique_personal_language",
+            )
+        ]
+        ordering = ["language__name"]
+
+    def __str__(self):
+        return (
+            f"{self.personal_account.identity.user_id} - "
+            f"{self.language.name}"
+        )
 
 class PersonalAccount(models.Model):
     identity = models.OneToOneField(
@@ -195,7 +246,6 @@ class PersonalAccount(models.Model):
             or self.username
             or f"Personal Account - {self.identity.user_id}"
         )
-
 
 class PersonalInterestedCategory(models.Model):
     personal_account = models.ForeignKey(
@@ -309,7 +359,6 @@ class PersonalHobby(models.Model):
             f"{self.personal_account.identity.user_id} - "
             f"{self.hobby.name}"
         )
-
 
 class ProfessionalAccount(models.Model):
     identity = models.OneToOneField(
