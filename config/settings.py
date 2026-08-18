@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'identity',
     "organization",
     "category_engine",
+    'homepage',
 ]
 
 MIDDLEWARE = [

@@ -17,5 +17,10 @@ urlpatterns = [
         "api/identity/",
         include("identity.urls"),
     ),
+    path(
+        "api/homepage/",
+        include("homepage.urls"),
+    ),
+
 ]
 
