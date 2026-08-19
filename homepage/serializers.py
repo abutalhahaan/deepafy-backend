@@ -24,12 +24,15 @@ class HomepageSectionSerializer(serializers.ModelSerializer):
 
 
 class HomepageHeroSerializer(serializers.ModelSerializer):
+    media_file = serializers.SerializerMethodField()
+
     class Meta:
         model = HomepageHero
         fields = (
             "id",
             "media_type",
             "media_url",
+            "media_file",
             "title",
             "description",
             "cta_label",
@@ -40,6 +43,19 @@ class HomepageHeroSerializer(serializers.ModelSerializer):
             "alt_text",
             "display_order",
         )
+
+    def get_media_file(self, obj):
+        if obj.media_file:
+            request = self.context.get("request")
+
+            if request:
+                return request.build_absolute_uri(
+                    obj.media_file.url
+                )
+
+            return obj.media_file.url
+
+        return None
 
 
 class PlatformStatisticSerializer(serializers.ModelSerializer):
