@@ -47,17 +47,21 @@ class HomepageAPIView(APIView):
                 "sections": HomepageSectionSerializer(
                     sections,
                     many=True,
+                    context={"request": request},
                 ).data,
                 "heroes": HomepageHeroSerializer(
                     heroes,
                     many=True,
+                    context={"request": request},
                 ).data,
                 "statistics": PlatformStatisticSerializer(
                     statistics,
                     many=True,
+                    context={"request": request},
                 ).data,
                 "cta": HomepageCTASerializer(
                     cta,
+                    context={"request": request},
                 ).data
                 if cta
                 else None,
