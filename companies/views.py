@@ -5,66 +5,77 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from .models import Organization
+from .models import Company
 
 
-def _organization_data(organization):
+def _company_data(company):
     return {
-        "id": organization.id,
-        "organization_id": str(organization.organization_id),
-        "name": organization.name,
-        "organization_type": organization.organization_type,
-        "country": organization.country,
-        "business_email": organization.business_email,
-        "business_mobile_number": organization.business_mobile_number,
-        "registered_address": organization.registered_address,
-        "primary_contact_person": organization.primary_contact_person,
-        "created_at": organization.created_at.isoformat(),
-        "updated_at": organization.updated_at.isoformat(),
+        "id": company.id,
+        "company_id": str(company.company_id),
+        "name": company.name,
+        "company_type": company.company_type,
+        "country": company.country,
+        "business_email": company.business_email,
+        "business_mobile_number": (
+            company.business_mobile_number
+        ),
+        "registered_address": company.registered_address,
+        "primary_contact_person": (
+            company.primary_contact_person
+        ),
+        "created_at": company.created_at.isoformat(),
+        "updated_at": company.updated_at.isoformat(),
     }
 
 
 @require_http_methods(["GET"])
-def organization_list(request):
-    organizations = Organization.objects.all().order_by("name")
+def company_list(request):
+    companies = Company.objects.all().order_by("name")
 
     return JsonResponse(
         {
-            "count": organizations.count(),
+            "count": companies.count(),
             "results": [
-                _organization_data(organization)
-                for organization in organizations
+                _company_data(company)
+                for company in companies
             ],
         }
     )
 
 
 @require_http_methods(["GET"])
-def organization_detail(request, organization_id):
+def company_detail(request, company_id):
     try:
-        organization = Organization.objects.get(id=organization_id)
-    except Organization.DoesNotExist:
+        company = Company.objects.get(
+            id=company_id
+        )
+    except Company.DoesNotExist:
         return JsonResponse(
-            {"detail": "Organization not found."},
+            {"detail": "Company not found."},
             status=404,
         )
 
-    return JsonResponse(_organization_data(organization))
+    return JsonResponse(
+        _company_data(company)
+    )
 
 
 @csrf_exempt
 @require_http_methods(["POST"])
-def organization_create(request):
+def company_create(request):
     try:
         data = json.loads(request.body or "{}")
 
-        organization = Organization.objects.create(
+        company = Company.objects.create(
             name=data.get("name", ""),
-            organization_type=data.get(
-                "organization_type",
+            company_type=data.get(
+                "company_type",
                 "",
             ),
-            country=data.get("country", ""),
+            country=data.get(
+                "country",
+                "",
+            ),
             business_email=data.get(
                 "business_email",
                 "",
@@ -84,11 +95,15 @@ def organization_create(request):
         )
 
         return JsonResponse(
-            _organization_data(organization),
+            _company_data(company),
             status=201,
         )
 
-    except (ValidationError, ValueError, TypeError) as exc:
+    except (
+        ValidationError,
+        ValueError,
+        TypeError,
+    ) as exc:
         return JsonResponse(
             {"detail": str(exc)},
             status=400,
@@ -97,14 +112,14 @@ def organization_create(request):
 
 @csrf_exempt
 @require_http_methods(["PATCH"])
-def organization_update(request, organization_id):
+def company_update(request, company_id):
     try:
-        organization = Organization.objects.get(
-            id=organization_id
+        company = Company.objects.get(
+            id=company_id
         )
-    except Organization.DoesNotExist:
+    except Company.DoesNotExist:
         return JsonResponse(
-            {"detail": "Organization not found."},
+            {"detail": "Company not found."},
             status=404,
         )
 
@@ -113,7 +128,7 @@ def organization_update(request, organization_id):
 
         allowed_fields = {
             "name",
-            "organization_type",
+            "company_type",
             "country",
             "business_email",
             "business_mobile_number",
@@ -124,18 +139,22 @@ def organization_update(request, organization_id):
         for field in allowed_fields:
             if field in data:
                 setattr(
-                    organization,
+                    company,
                     field,
                     data[field],
                 )
 
-        organization.save()
+        company.save()
 
         return JsonResponse(
-            _organization_data(organization)
+            _company_data(company)
         )
 
-    except (ValidationError, ValueError, TypeError) as exc:
+    except (
+        ValidationError,
+        ValueError,
+        TypeError,
+    ) as exc:
         return JsonResponse(
             {"detail": str(exc)},
             status=400,
@@ -144,23 +163,23 @@ def organization_update(request, organization_id):
 
 @csrf_exempt
 @require_http_methods(["DELETE"])
-def organization_delete(request, organization_id):
+def company_delete(request, company_id):
     try:
-        organization = Organization.objects.get(
-            id=organization_id
+        company = Company.objects.get(
+            id=company_id
         )
-    except Organization.DoesNotExist:
+    except Company.DoesNotExist:
         return JsonResponse(
-            {"detail": "Organization not found."},
+            {"detail": "Company not found."},
             status=404,
         )
 
-    organization.delete()
+    company.delete()
 
     return JsonResponse(
         {
             "detail": (
-                "Organization deleted successfully."
+                "Company deleted successfully."
             )
         }
     )

@@ -12,7 +12,7 @@ urlpatterns = [
     ),
     path(
         "api/organizations/",
-        include("organization.urls"),
+        include("companies.urls")
     ),
     path(
         "api/identity/",

@@ -1,6 +1,8 @@
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from companies.models import Company
+
 from .models import (
     HomepageCTA,
     HomepageHero,
@@ -42,13 +44,35 @@ class HomepageAPIView(APIView):
             is_active=True,
         ).first()
 
+        serialized_sections = HomepageSectionSerializer(
+            sections,
+            many=True,
+            context={"request": request},
+        ).data
+
+        for section in serialized_sections:
+            if section["data_source"] == "companies":
+                companies = Company.objects.all().order_by(
+                    "-created_at"
+                )[:section["card_limit"]]
+
+                section["items"] = [
+                    {
+                        "id": company.id,
+                        "name": company.name,
+                        "organization_type": (
+                            company.organization_type
+                        ),
+                        "country": company.country,
+                    }
+                    for company in companies
+                ]
+            else:
+                section["items"] = []
+
         return Response(
             {
-                "sections": HomepageSectionSerializer(
-                    sections,
-                    many=True,
-                    context={"request": request},
-                ).data,
+                "sections": serialized_sections,
                 "heroes": HomepageHeroSerializer(
                     heroes,
                     many=True,

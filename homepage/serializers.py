@@ -14,12 +14,15 @@ class HomepageSectionSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "section_type",
+            "data_source",
             "title",
             "subtitle",
             "display_order",
+            "card_limit",
             "is_visible",
             "show_view_all",
             "view_all_label",
+            "view_all_url",
         )
 
 
