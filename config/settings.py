@@ -40,7 +40,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'core',
     'identity',
-    "organization",
+    "companies.apps.CompaniesConfig",
     "category_engine",
     'homepage',
     "corsheaders",
