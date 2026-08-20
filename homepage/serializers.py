@@ -42,8 +42,8 @@ class HomepageHeroSerializer(serializers.ModelSerializer):
             "object_fit",
             "alt_text",
             "display_order",
+            "is_active",
         )
-
     def get_media_file(self, obj):
         if obj.media_file:
             request = self.context.get("request")

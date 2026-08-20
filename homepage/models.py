@@ -6,31 +6,40 @@ from core.models import TimeStampedModel
 class HomepageSection(TimeStampedModel):
     class SectionType(models.TextChoices):
         HERO = "hero", "Hero"
-        RECENT_NEEDAFY = "recent_needafy", "Recent Needafy Posts"
-        RECENT_PRODUCT_LISTINGS = (
-            "recent_product_listings",
-            "Recent Product Listings",
+        MARKETPLACE = "marketplace", "Marketplace"
+        POSTED_REQUIREMENTS = (
+            "posted_requirements",
+            "Posted Requirements",
         )
-        TOP_MANUFACTURERS = "top_manufacturers", "Top Manufacturers"
-        RECENT_JOBS = "recent_jobs", "Recent Posted Jobs"
-        TRENDING_PRODUCTS = "trending_products", "Trending Products"
-        TOP_VERIFIED_SUPPLIERS = (
-            "top_verified_suppliers",
-            "Top Verified Suppliers",
+        MANUFACTURERS = "manufacturers", "Manufacturers"
+        SUPPLIERS = "suppliers", "Suppliers"
+        SERVICES = "services", "Services"
+        JOBS = "jobs", "Jobs"
+        IMPORTERS_EXPORTERS = (
+            "importers_exporters",
+            "Importers & Exporters",
         )
-        FEATURED_BRANDS = "featured_brands", "Featured Brands"
-        BUSINESS_UPDATES = "business_updates", "Business Updates"
-        FEATURED_SERVICES = "featured_services", "Featured Services"
-        PLATFORM_STATISTICS = (
-            "platform_statistics",
-            "Platform Statistics",
-        )
-        JOIN_DEEPAFY = "join_deepafy", "Join Deepafy"
+        OPPORTUNITIES = "opportunities", "Opportunities"
+
+    class DataSource(models.TextChoices):
+        PRODUCTS = "products", "Products"
+        NEEDAFY_POSTS = "needafy_posts", "Needafy Posts"
+        ORGANIZATIONS = "organizations", "Organizations"
+        SERVICES = "services", "Services"
+        JOBS = "jobs", "Jobs"
+        OPPORTUNITIES = "opportunities", "Opportunities"
+        CUSTOM = "custom", "Custom"
 
     section_type = models.CharField(
         max_length=100,
-        choices=SectionType.choices,
         unique=True,
+        help_text="Unique section identifier.",
+    )
+
+    data_source = models.CharField(
+        max_length=100,
+        choices=DataSource.choices,
+        default=DataSource.CUSTOM,
     )
 
     title = models.CharField(
@@ -46,6 +55,11 @@ class HomepageSection(TimeStampedModel):
         default=0,
     )
 
+    card_limit = models.PositiveIntegerField(
+        default=6,
+        help_text="Maximum number of items to display.",
+    )
+
     is_visible = models.BooleanField(
         default=True,
     )
@@ -59,11 +73,16 @@ class HomepageSection(TimeStampedModel):
         default="View All",
     )
 
+    view_all_url = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
     class Meta:
         ordering = ["display_order", "id"]
 
     def __str__(self):
-        return self.get_section_type_display()
+        return self.title or self.section_type
 
 
 class HomepageHero(TimeStampedModel):
