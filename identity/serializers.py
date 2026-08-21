@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.db import transaction
 
 from .models import (
     AcademicBackground,
@@ -13,23 +14,30 @@ from .models import (
 )
 
 class UserIdentitySerializer(serializers.ModelSerializer):
+
     class Meta:
         model = UserIdentity
+
         fields = [
             "user_id",
+            "username",
             "email",
             "mobile_number",
+            "is_email_verified",
+            "is_mobile_verified",
             "status",
             "is_active",
             "created_at",
             "updated_at",
         ]
+
         read_only_fields = [
             "user_id",
+            "is_email_verified",
+            "is_mobile_verified",
             "created_at",
             "updated_at",
         ]
-
 
 class AccountTypeSerializer(serializers.ModelSerializer):
     account_type_display = serializers.CharField(
@@ -225,6 +233,7 @@ class AcademicBackgroundSerializer(serializers.ModelSerializer):
 class JobExperienceSerializer(serializers.ModelSerializer):
     class Meta:
         model = JobExperience
+
         fields = [
             "id",
             "professional_account",
@@ -241,8 +250,81 @@ class JobExperienceSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
         read_only_fields = [
             "id",
             "created_at",
             "updated_at",
         ]
+
+
+class SignupSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(
+        write_only=True,
+        min_length=8,
+    )
+
+    class Meta:
+        model = UserIdentity
+
+        fields = [
+            "username",
+            "email",
+            "mobile_number",
+            "password",
+        ]
+
+    def create(self, validated_data):
+        password = validated_data.pop("password")
+
+        with transaction.atomic():
+            identity = UserIdentity.objects.create(
+                **validated_data
+            )
+
+            identity.set_password(password)
+            identity.save()
+
+            AccountType.objects.create(
+                identity=identity,
+                account_type=AccountType.Type.PERSONAL,
+                is_primary=True,
+                is_active=True,
+            )
+
+            PersonalAccount.objects.create(
+                identity=identity,
+                username=identity.username,
+            )
+
+        return identity
+
+class LoginSerializer(serializers.Serializer):
+    identifier = serializers.CharField(
+        max_length=255,
+    )
+
+    password = serializers.CharField(
+        write_only=True,
+    )      
+
+class ForgotPasswordSerializer(serializers.Serializer):
+    identifier = serializers.CharField(
+        max_length=255,
+    )      
+
+class VerifyOTPSerializer(serializers.Serializer):
+    user_id = serializers.UUIDField()
+
+    otp = serializers.CharField(
+        min_length=6,
+        max_length=6,
+    )    
+
+class ResetPasswordSerializer(serializers.Serializer):
+    user_id = serializers.UUIDField()
+
+    new_password = serializers.CharField(
+        write_only=True,
+        min_length=8,
+    )    

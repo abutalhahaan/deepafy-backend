@@ -1,8 +1,12 @@
 import json
+import secrets
+
+from datetime import timedelta
 
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
+from django.utils import timezone
 
 from .models import (
     AcademicBackground,
@@ -14,17 +18,28 @@ from .models import (
     PersonalAccount,
     PersonalHobby,
     PersonalInterestedCategory,
+    PasswordResetOTP,
     ProfessionalAccount,
     UserIdentity,
 )
 
+from .serializers import (
+    ForgotPasswordSerializer,
+    LoginSerializer,
+    ResetPasswordSerializer,
+    SignupSerializer,
+    VerifyOTPSerializer,
+)
 
 def serialize_identity(identity):
     return {
         "id": identity.id,
         "user_id": str(identity.user_id),
+        "username": identity.username,
         "email": identity.email,
         "mobile_number": identity.mobile_number,
+        "is_email_verified": identity.is_email_verified,
+        "is_mobile_verified": identity.is_mobile_verified,
         "status": identity.status,
         "is_active": identity.is_active,
         "created_at": identity.created_at.isoformat(),
@@ -1677,3 +1692,396 @@ def personal_language_detail(request, language_id):
         },
         status=200,
     )
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def signup(request):
+    try:
+        data = json.loads(request.body or "{}")
+
+        serializer = SignupSerializer(data=data)
+
+        if not serializer.is_valid():
+            return JsonResponse(
+                {
+                    "errors": serializer.errors,
+                },
+                status=400,
+            )
+
+        identity = serializer.save()
+
+        return JsonResponse(
+            {
+                "message": "Signup successful.",
+                "user": serialize_identity(identity),
+            },
+            status=201,
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {
+                "detail": "Invalid JSON.",
+            },
+            status=400,
+        )
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def login(request):
+    try:
+        data = json.loads(request.body or "{}")
+
+        serializer = LoginSerializer(data=data)
+
+        if not serializer.is_valid():
+            return JsonResponse(
+                {
+                    "errors": serializer.errors,
+                },
+                status=400,
+            )
+
+        identifier = serializer.validated_data[
+            "identifier"
+        ].strip()
+
+        password = serializer.validated_data[
+            "password"
+        ]
+
+        identity = (
+            UserIdentity.objects.filter(
+                username=identifier
+            ).first()
+        )
+
+        if identity is None:
+            identity = (
+                UserIdentity.objects.filter(
+                    email=identifier
+                ).first()
+            )
+
+        if identity is None:
+            identity = (
+                UserIdentity.objects.filter(
+                    mobile_number=identifier
+                ).first()
+            )
+
+        if identity is None:
+            return JsonResponse(
+                {
+                    "detail": "Invalid login credentials.",
+                },
+                status=401,
+            )
+
+        if not identity.check_password(password):
+            return JsonResponse(
+                {
+                    "detail": "Invalid login credentials.",
+                },
+                status=401,
+            )
+
+        if not identity.is_active:
+            return JsonResponse(
+                {
+                    "detail": "This account is inactive.",
+                },
+                status=403,
+            )
+
+        identity.last_login = timezone.now()
+        identity.save(
+            update_fields=["last_login"],
+        )
+
+        return JsonResponse(
+            {
+                "message": "Login successful.",
+                "user": serialize_identity(identity),
+            },
+            status=200,
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {
+                "detail": "Invalid JSON.",
+            },
+            status=400,
+        )       
+@csrf_exempt
+@require_http_methods(["POST"])
+def forgot_password(request):
+    try:
+        data = json.loads(request.body or "{}")
+
+        serializer = ForgotPasswordSerializer(
+            data=data
+        )
+
+        if not serializer.is_valid():
+            return JsonResponse(
+                {
+                    "errors": serializer.errors,
+                },
+                status=400,
+            )
+
+        identifier = serializer.validated_data[
+            "identifier"
+        ].strip()
+
+        identity = (
+            UserIdentity.objects.filter(
+                username=identifier
+            ).first()
+        )
+
+        if identity is None:
+            identity = (
+                UserIdentity.objects.filter(
+                    email=identifier
+                ).first()
+            )
+
+        if identity is None:
+            identity = (
+                UserIdentity.objects.filter(
+                    mobile_number=identifier
+                ).first()
+            )
+
+        if identity is None:
+            return JsonResponse(
+                {
+                    "detail": "Account not found.",
+                },
+                status=404,
+            )
+
+        PasswordResetOTP.objects.filter(
+            identity=identity,
+            is_used=False,
+        ).update(
+            is_used=True,
+        )
+
+        otp = str(
+            secrets.randbelow(900000) + 100000
+        )
+
+        expires_at = (
+            timezone.now()
+            + timedelta(minutes=10)
+        )
+
+        PasswordResetOTP.objects.create(
+            identity=identity,
+            otp=otp,
+            expires_at=expires_at,
+        )
+
+        return JsonResponse(
+            {
+                "message": "Password reset OTP generated.",
+                "user_id": str(identity.user_id),
+                "otp": otp,
+                "expires_at": expires_at.isoformat(),
+            },
+            status=200,
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {
+                "detail": "Invalid JSON.",
+            },
+            status=400,
+        )        
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def verify_otp(request):
+    try:
+        data = json.loads(request.body or "{}")
+
+        serializer = VerifyOTPSerializer(
+            data=data
+        )
+
+        if not serializer.is_valid():
+            return JsonResponse(
+                {
+                    "errors": serializer.errors,
+                },
+                status=400,
+            )
+
+        user_id = serializer.validated_data[
+            "user_id"
+        ]
+
+        otp = serializer.validated_data[
+            "otp"
+        ]
+
+        try:
+            identity = UserIdentity.objects.get(
+                user_id=user_id
+            )
+        except UserIdentity.DoesNotExist:
+            return JsonResponse(
+                {
+                    "detail": "User not found.",
+                },
+                status=404,
+            )
+
+        password_reset_otp = (
+            PasswordResetOTP.objects.filter(
+                identity=identity,
+                otp=otp,
+                is_used=False,
+            ).order_by(
+                "-created_at"
+            ).first()
+        )
+
+        if password_reset_otp is None:
+            return JsonResponse(
+                {
+                    "detail": "Invalid OTP.",
+                },
+                status=400,
+            )
+
+        if password_reset_otp.expires_at < timezone.now():
+            password_reset_otp.is_used = True
+            password_reset_otp.save(
+                update_fields=["is_used"],
+            )
+
+            return JsonResponse(
+                {
+                    "detail": "OTP has expired.",
+                },
+                status=400,
+            )
+
+        password_reset_otp.is_used = True
+        password_reset_otp.is_verified = True
+
+        password_reset_otp.save(
+            update_fields=[
+                "is_used",
+                "is_verified",
+            ],
+        )
+
+        return JsonResponse(
+            {
+                "message": "OTP verified successfully.",
+                "user_id": str(identity.user_id),
+            },
+            status=200,
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {
+                "detail": "Invalid JSON.",
+            },
+            status=400,
+        )   
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def reset_password(request):
+    try:
+        data = json.loads(request.body or "{}")
+
+        serializer = ResetPasswordSerializer(
+            data=data
+        )
+
+        if not serializer.is_valid():
+            return JsonResponse(
+                {
+                    "errors": serializer.errors,
+                },
+                status=400,
+            )
+
+        user_id = serializer.validated_data[
+            "user_id"
+        ]
+
+        new_password = serializer.validated_data[
+            "new_password"
+        ]
+
+        try:
+            identity = UserIdentity.objects.get(
+                user_id=user_id
+            )
+        except UserIdentity.DoesNotExist:
+            return JsonResponse(
+                {
+                    "detail": "User not found.",
+                },
+                status=404,
+            )
+
+        password_reset_otp = (
+            PasswordResetOTP.objects.filter(
+                identity=identity,
+                is_verified=True,
+                is_used=True,
+            ).order_by(
+                "-created_at"
+            ).first()
+        )
+
+        if password_reset_otp is None:
+            return JsonResponse(
+                {
+                    "detail": (
+                        "Password reset verification "
+                        "is required."
+                    ),
+                },
+                status=400,
+            )
+
+        identity.set_password(new_password)
+        identity.save(
+            update_fields=["password"],
+        )
+
+        password_reset_otp.is_verified = False
+        password_reset_otp.save(
+            update_fields=["is_verified"],
+        )
+
+        return JsonResponse(
+            {
+                "message": (
+                    "Password reset successfully."
+                ),
+            },
+            status=200,
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {
+                "detail": "Invalid JSON.",
+            },
+            status=400,
+        )             
