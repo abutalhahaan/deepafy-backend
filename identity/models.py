@@ -1,9 +1,10 @@
 import uuid
 
+from django.contrib.auth.models import AbstractBaseUser
 from django.db import models
 
 
-class UserIdentity(models.Model):
+class UserIdentity(AbstractBaseUser):
     class Status(models.TextChoices):
         DRAFT = "draft", "Draft"
         PENDING_VERIFICATION = "pending_verification", "Pending Verification"
@@ -20,26 +21,61 @@ class UserIdentity(models.Model):
         unique=True,
         editable=False,
     )
-    email = models.EmailField(unique=True)
-    mobile_number = models.CharField(
-        max_length=30,
+
+    password = models.CharField(
+        max_length=128,
+        default="!",
+    ) 
+
+    username = models.CharField(
+        max_length=50,
+        unique=True,
+        null=True,
         blank=True,
     )
+
+    email = models.EmailField(
+        unique=True,
+    )
+
+    mobile_number = models.CharField(
+        max_length=30,
+        unique=True,
+        null=True,
+        blank=True,
+    )
+
+    is_email_verified = models.BooleanField(
+        default=False,
+    )
+
+    is_mobile_verified = models.BooleanField(
+        default=False,
+    )
+
     status = models.CharField(
         max_length=30,
         choices=Status.choices,
         default=Status.DRAFT,
     )
-    is_active = models.BooleanField(default=True)
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
 
     class Meta:
         ordering = ["-created_at"]
 
     def __str__(self):
-        return str(self.user_id)
+        return self.username or self.email or str(self.user_id)
 
 
 class AccountType(models.Model):
@@ -646,3 +682,37 @@ class ProfessionalSkill(models.Model):
             f"{self.professional_account.id} - "
             f"{self.skill.name}"
         )
+
+class PasswordResetOTP(models.Model):
+    identity = models.ForeignKey(
+        UserIdentity,
+        on_delete=models.CASCADE,
+        related_name="password_reset_otps",
+    )
+
+    otp = models.CharField(
+        max_length=6,
+    )
+
+    expires_at = models.DateTimeField()
+
+    is_used = models.BooleanField(
+        default=False,
+    )
+
+    is_verified = models.BooleanField(
+        default=False,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return (
+            f"Password Reset OTP - "
+            f"{self.identity.user_id}"
+        )        
