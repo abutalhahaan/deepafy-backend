@@ -1,6 +1,7 @@
 from django.contrib import admin
 
 from .models import (
+    GetStartedPageSettings,
     HomepageCTA,
     HomepageHero,
     HomepageSection,
@@ -119,3 +120,92 @@ class HomepageCTAAdmin(admin.ModelAdmin):
     list_editable = (
         "is_active",
     )
+
+@admin.register(GetStartedPageSettings)
+class GetStartedPageSettingsAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "title",
+        "font_family",
+        "is_active",
+    )
+
+    list_editable = (
+        "is_active",
+    )
+
+    fieldsets = (
+        (
+            "Page Content",
+            {
+                "fields": (
+                    "title",
+                    "subtitle",
+                    "left_heading",
+                    "left_description",
+                )
+            },
+        ),
+        (
+            "Personal Account Card",
+            {
+                "fields": (
+                    "personal_title",
+                    "personal_description",
+                )
+            },
+        ),
+        (
+            "Company Account Card",
+            {
+                "fields": (
+                    "company_title",
+                    "company_description",
+                )
+            },
+        ),
+        (
+            "Login Settings",
+            {
+                "fields": (
+                    "login_text",
+                )
+            },
+        ),
+        (
+            "Color Settings",
+            {
+                "fields": (
+                    "page_background_color",
+                    "left_panel_color",
+                    "heading_color",
+                    "text_color",
+                    "personal_card_color",
+                    "company_card_color",
+                    "border_color",
+                )
+            },
+        ),
+        (
+            "Typography Settings",
+            {
+                "fields": (
+                    "font_family",
+                    "title_font_size",
+                    "subtitle_font_size",
+                    "heading_font_size",
+                    "body_font_size",
+                    "card_title_font_size",
+                    "card_text_font_size",
+                )
+            },
+        ),
+        (
+            "Status",
+            {
+                "fields": (
+                    "is_active",
+                )
+            },
+        ),
+    )    

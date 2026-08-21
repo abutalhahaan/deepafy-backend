@@ -4,12 +4,14 @@ from rest_framework.views import APIView
 from companies.models import Company
 
 from .models import (
+    GetStartedPageSettings,
     HomepageCTA,
     HomepageHero,
     HomepageSection,
     PlatformStatistic,
 )
 from .serializers import (
+    GetStartedPageSettingsSerializer,
     HomepageCTASerializer,
     HomepageHeroSerializer,
     HomepageSectionSerializer,
@@ -90,4 +92,34 @@ class HomepageAPIView(APIView):
                 if cta
                 else None,
             }
+        )
+
+class GetStartedPageSettingsAPIView(APIView):
+    def get(self, request):
+        settings = (
+            GetStartedPageSettings.objects.filter(
+                is_active=True,
+            )
+            .order_by("-id")
+            .first()
+        )
+
+        if settings is None:
+            return Response(
+                {
+                    "detail": (
+                        "Get Started page settings "
+                        "not found."
+                    ),
+                },
+                status=404,
+            )
+
+        serializer = GetStartedPageSettingsSerializer(
+            settings,
+        )
+
+        return Response(
+            serializer.data,
+            status=200,
         )

@@ -214,3 +214,119 @@ class HomepageCTA(TimeStampedModel):
 
     def __str__(self):
         return self.title
+
+class GetStartedPageSettings(TimeStampedModel):
+    title = models.CharField(
+        max_length=255,
+        default="Join Deepafy",
+    )
+
+    subtitle = models.TextField(
+        blank=True,
+        default="Create your account and get started.",
+    )
+
+    left_heading = models.CharField(
+        max_length=255,
+        default="Your journey starts here.",
+    )
+
+    left_description = models.TextField(
+        blank=True,
+    )
+
+    personal_title = models.CharField(
+        max_length=255,
+        default="Personal Account",
+    )
+
+    personal_description = models.TextField(
+        blank=True,
+    )
+
+    company_title = models.CharField(
+        max_length=255,
+        default="Company Account",
+    )
+
+    company_description = models.TextField(
+        blank=True,
+    )
+
+    login_text = models.CharField(
+        max_length=100,
+        default="Log in",
+    )
+
+    # Colors
+    page_background_color = models.CharField(
+        max_length=20,
+        default="#F8FAFC",
+    )
+
+    left_panel_color = models.CharField(
+        max_length=20,
+        default="#0A66C2",
+    )
+
+    heading_color = models.CharField(
+        max_length=20,
+        default="#111827",
+    )
+
+    text_color = models.CharField(
+        max_length=20,
+        default="#6B7280",
+    )
+
+    personal_card_color = models.CharField(
+        max_length=20,
+        default="#FFFFFF",
+    )
+
+    company_card_color = models.CharField(
+        max_length=20,
+        default="#FFFFFF",
+    )
+
+    border_color = models.CharField(
+        max_length=20,
+        default="#E5E7EB",
+    )
+
+    # Typography
+    font_family = models.CharField(
+        max_length=100,
+        default="Inter",
+    )
+
+    title_font_size = models.PositiveIntegerField(
+        default=36,
+    )
+
+    subtitle_font_size = models.PositiveIntegerField(
+        default=16,
+    )
+
+    heading_font_size = models.PositiveIntegerField(
+        default=40,
+    )
+
+    body_font_size = models.PositiveIntegerField(
+        default=16,
+    )
+
+    card_title_font_size = models.PositiveIntegerField(
+        default=20,
+    )
+
+    card_text_font_size = models.PositiveIntegerField(
+        default=14,
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    def __str__(self):
+        return "Get Started Page Settings"        
