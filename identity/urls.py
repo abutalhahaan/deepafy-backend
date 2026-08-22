@@ -182,4 +182,47 @@ urlpatterns = [
         views.personal_language_detail,
         name="personal-language-detail",
     ),
+
+    # Hobbies
+    path(
+        "hobbies/",
+        views.hobby_list,
+        name="hobby-list",
+    ),
+    path(
+        "hobbies/create/",
+        views.hobby_create,
+        name="hobby-create",
+    ),
+    path(
+        "hobbies/reorder/",
+        views.hobby_reorder,
+        name="hobby-reorder",
+    ),
+    path(
+        "hobbies/<int:hobby_id>/update/",
+        views.hobby_update,
+        name="hobby-update",
+    ), 
+    path(
+        "hobbies/<int:hobby_id>/delete/",
+        views.hobby_delete,
+        name="hobby-delete",
+    ),
+    # Personal Hobbies
+    path(
+        "<int:personal_account_id>/hobbies/",
+        views.personal_hobby_list,
+        name="personal-hobby-list",
+    ),
+    path(
+        "<int:personal_account_id>/hobbies/add/",
+        views.personal_hobby_add,
+        name="personal-hobby-add",
+    ),
+    path(
+        "<int:personal_account_id>/hobbies/<int:hobby_id>/remove/",
+        views.personal_hobby_remove,
+        name="personal-hobby-remove",
+    ),
 ]
