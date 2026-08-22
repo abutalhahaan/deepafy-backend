@@ -268,11 +268,24 @@ class SignupSerializer(serializers.ModelSerializer):
         model = UserIdentity
 
         fields = [
+            "first_name",
+            "last_name",
             "username",
             "email",
             "mobile_number",
             "password",
         ]
+
+        extra_kwargs = {
+            "username": {
+                "required": False,
+                "allow_null": True,
+                "allow_blank": True,
+            },
+            "mobile_number": {
+                "required": True,
+            },
+        }
 
     def create(self, validated_data):
         password = validated_data.pop("password")
@@ -294,6 +307,10 @@ class SignupSerializer(serializers.ModelSerializer):
 
             PersonalAccount.objects.create(
                 identity=identity,
+                display_name=(
+                    f"{identity.first_name} "
+                    f"{identity.last_name}"
+                ).strip(),
                 username=identity.username,
             )
 

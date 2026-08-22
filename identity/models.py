@@ -27,6 +27,18 @@ class UserIdentity(AbstractBaseUser):
         default="!",
     ) 
 
+    first_name = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+    )
+
+    last_name = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+    )
+
     username = models.CharField(
         max_length=50,
         unique=True,
@@ -271,10 +283,17 @@ class PersonalAccount(models.Model):
         blank=True,
     )
 
-    is_active = models.BooleanField(default=True)
+    is_active = models.BooleanField(
+        default=True,
+    )
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
 
     def __str__(self):
         return (
