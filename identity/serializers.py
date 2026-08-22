@@ -203,29 +203,45 @@ class ProfessionalAccountSerializer(
 
 
 
-class AcademicBackgroundSerializer(serializers.ModelSerializer):
+class AcademicBackgroundSerializer(
+    serializers.ModelSerializer
+):
+    country_name = serializers.CharField(
+        source="country.name",
+        read_only=True,
+    )
+
     class Meta:
         model = AcademicBackground
+
         fields = [
             "id",
-            "professional_account",
-            "qualification",
-            "institution",
-            "field_of_study",
+            "personal_account",
+            "institution_name",
+            "institution_type",
             "country",
-            "city",
-            "start_date",
-            "end_date",
-            "is_current",
+            "country_name",
+            "education_level",
+            "degree_certificate",
+            "field_of_study",
+            "specialization",
+            "start_year",
+            "end_year",
+            "is_currently_studying",
+            "result_type",
             "result",
             "description",
+            "certificate",
+            "visibility",
             "display_order",
             "is_active",
             "created_at",
             "updated_at",
         ]
+
         read_only_fields = [
             "id",
+            "country_name",
             "created_at",
             "updated_at",
         ]

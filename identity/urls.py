@@ -144,6 +144,33 @@ urlpatterns = [
         name="professional-skill-delete",
     ),
 
+    # Academic Background
+    path(
+        "academic-backgrounds/create/",
+        views.academic_background_create,
+        name="academic-background-create",
+    ),
+    path(
+        "<int:identity_id>/academic-backgrounds/",
+        views.academic_background_list,
+        name="academic-background-list",
+    ),
+    path(
+        "academic-backgrounds/<int:academic_id>/",
+        views.academic_background_detail,
+        name="academic-background-detail",
+    ),
+    path(
+        "academic-backgrounds/<int:academic_id>/update/",
+        views.academic_background_update,
+        name="academic-background-update",
+    ),
+    path(
+        "academic-backgrounds/<int:academic_id>/delete/",
+        views.academic_background_delete,
+        name="academic-background-delete",
+    ),
+
     # Personal Languages
     path(
         "<int:personal_account_id>/personal-languages/",
