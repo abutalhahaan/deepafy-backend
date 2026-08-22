@@ -35,6 +35,8 @@ def serialize_identity(identity):
     return {
         "id": identity.id,
         "user_id": str(identity.user_id),
+        "first_name": identity.first_name,
+        "last_name": identity.last_name,
         "username": identity.username,
         "email": identity.email,
         "mobile_number": identity.mobile_number,
