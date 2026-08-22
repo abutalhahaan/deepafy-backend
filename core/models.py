@@ -9,19 +9,6 @@ class TimeStampedModel(models.Model):
         abstract = True
 
 
-class Country(TimeStampedModel):
-    name = models.CharField(max_length=100)
-    code = models.CharField(max_length=10, unique=True)
-    is_active = models.BooleanField(default=True)
-
-    class Meta:
-        ordering = ["name"]
-        verbose_name_plural = "Countries"
-
-    def __str__(self):
-        return f"{self.name} ({self.code})"
-
-
 class Category(TimeStampedModel):
     name = models.CharField(max_length=255)
     internal_id = models.CharField(max_length=50, unique=True)
