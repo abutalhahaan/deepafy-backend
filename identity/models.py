@@ -476,17 +476,38 @@ class ProfessionalAccount(models.Model):
 
 
 class AcademicBackground(models.Model):
-    professional_account = models.ForeignKey(
-        ProfessionalAccount,
+    class Visibility(models.TextChoices):
+        PUBLIC = "public", "Public"
+        CONNECTIONS = "connections", "Connections"
+        PRIVATE = "private", "Private"
+
+    personal_account = models.ForeignKey(
+        PersonalAccount,
         on_delete=models.CASCADE,
         related_name="academic_backgrounds",
+        null=True,
+        blank=True,
     )
 
-    qualification = models.CharField(
+    institution_name = models.CharField(
         max_length=255,
     )
 
-    institution = models.CharField(
+    institution_type = models.CharField(
+        max_length=100,
+    )
+
+    country = models.ForeignKey(
+        "organization.Country",
+        on_delete=models.PROTECT,
+        related_name="personal_academic_backgrounds",
+    )
+
+    education_level = models.CharField(
+        max_length=100,
+    )
+
+    degree_certificate = models.CharField(
         max_length=255,
     )
 
@@ -495,31 +516,25 @@ class AcademicBackground(models.Model):
         blank=True,
     )
 
-    country = models.ForeignKey(
-        "organization.Country",
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="academic_backgrounds",
-    )
-
-    city = models.CharField(
+    specialization = models.CharField(
         max_length=255,
         blank=True,
     )
 
-    start_date = models.DateField(
+    start_year = models.PositiveIntegerField()
+
+    end_year = models.PositiveIntegerField(
         null=True,
         blank=True,
     )
 
-    end_date = models.DateField(
-        null=True,
-        blank=True,
-    )
-
-    is_current = models.BooleanField(
+    is_currently_studying = models.BooleanField(
         default=False,
+    )
+
+    result_type = models.CharField(
+        max_length=100,
+        blank=True,
     )
 
     result = models.CharField(
@@ -529,6 +544,18 @@ class AcademicBackground(models.Model):
 
     description = models.TextField(
         blank=True,
+    )
+
+    certificate = models.FileField(
+        upload_to="academic_certificates/",
+        null=True,
+        blank=True,
+    )
+
+    visibility = models.CharField(
+        max_length=20,
+        choices=Visibility.choices,
+        default=Visibility.PUBLIC,
     )
 
     display_order = models.PositiveIntegerField(
@@ -550,16 +577,15 @@ class AcademicBackground(models.Model):
     class Meta:
         ordering = [
             "display_order",
-            "-start_date",
-            "qualification",
+            "-start_year",
+            "institution_name",
         ]
 
     def __str__(self):
         return (
-            f"{self.qualification} - "
-            f"{self.institution}"
+            f"{self.degree_certificate} - "
+            f"{self.institution_name}"
         )
-
 
 class JobExperience(models.Model):
     professional_account = models.ForeignKey(
