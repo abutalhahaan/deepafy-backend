@@ -233,14 +233,30 @@ class Country(models.Model):
         related_name="countries",
     )
 
-    name = models.CharField(max_length=255)
+    name = models.CharField(
+        max_length=255,
+    )
 
-    code = models.CharField(max_length=10)
+    code = models.CharField(
+        max_length=10,
+    )
 
-    is_active = models.BooleanField(default=True)
+    phone_code = models.CharField(
+        max_length=10,
+        blank=True,
+    )
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
 
     class Meta:
         ordering = ["name"]
