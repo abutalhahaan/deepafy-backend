@@ -83,9 +83,92 @@ def serialize_personal_account(personal_account):
     return {
         "id": personal_account.id,
         "identity_id": personal_account.identity_id,
+
+        "display_name": personal_account.display_name,
+        "username": personal_account.username,
+        "bio": personal_account.bio,
+
+        "mother_tongue_id":
+        personal_account.mother_tongue_id,
+
+        "mother_tongue_name": (
+            personal_account.mother_tongue.name
+            if personal_account.mother_tongue
+            else None
+        ),
+
+        "permanent_country_id":
+        personal_account.permanent_country_id,
+
+        "permanent_country_name": (
+            personal_account.permanent_country.name
+            if personal_account.permanent_country
+            else None
+        ),
+
+        "permanent_city":
+        personal_account.permanent_city,
+
+        "permanent_area":
+        personal_account.permanent_area,
+
+        "permanent_full_address":
+        personal_account.permanent_full_address,
+
+        "present_country_id":
+        personal_account.present_country_id,
+
+        "present_country_name": (
+            personal_account.present_country.name
+            if personal_account.present_country
+            else None
+        ),
+
+        "present_city":
+        personal_account.present_city,
+
+        "present_area":
+        personal_account.present_area,
+
+        "present_full_address":
+        personal_account.present_full_address,
+
+        "profile_photo": (
+            personal_account.profile_photo.url
+            if personal_account.profile_photo
+            else None
+        ),
+
+        "cover_photo": (
+            personal_account.cover_photo.url
+            if personal_account.cover_photo
+            else None
+        ),
+
+        "date_of_birth": (
+            str(personal_account.date_of_birth)
+            if personal_account.date_of_birth
+            else None
+        ),
+
+        "gender": personal_account.gender,
+
+        "nationality_id":
+        personal_account.nationality_id,
+
+        "nationality_name": (
+            personal_account.nationality.name
+            if personal_account.nationality
+            else None
+        ),
+
         "is_active": personal_account.is_active,
-        "created_at": personal_account.created_at.isoformat(),
-        "updated_at": personal_account.updated_at.isoformat(),
+
+        "created_at":
+        personal_account.created_at.isoformat(),
+
+        "updated_at":
+        personal_account.updated_at.isoformat(),
     }
 
 
@@ -434,6 +517,9 @@ def personal_account_update(request, identity_id):
     fields = [
         "display_name",
         "username",
+        "bio",
+        "date_of_birth",
+        "gender",
         "permanent_city",
         "permanent_area",
         "permanent_full_address",
@@ -464,6 +550,22 @@ def personal_account_update(request, identity_id):
                     status=400,
                 )
 
+    if "mother_tongue_id" in data:
+        mother_tongue_id = data.get("mother_tongue_id")
+
+        if mother_tongue_id:
+            personal_account.mother_tongue_id = mother_tongue_id
+        else:
+            personal_account.mother_tongue = None
+
+    if "nationality_id" in data:
+        nationality_id = data.get("nationality_id")
+
+        if nationality_id:
+            personal_account.nationality_id = nationality_id
+        else:
+            personal_account.nationality = None
+
     if "permanent_country_id" in data:
         permanent_country_id = data.get("permanent_country_id")
 
@@ -487,33 +589,8 @@ def personal_account_update(request, identity_id):
     personal_account.save()
 
     return JsonResponse(
-        {
-            "id": personal_account.id,
-            "identity_id": personal_account.identity_id,
-            "display_name": personal_account.display_name,
-            "username": personal_account.username,
-            "permanent_country_id": (
-                personal_account.permanent_country_id
-            ),
-            "permanent_city": personal_account.permanent_city,
-            "permanent_area": personal_account.permanent_area,
-            "permanent_full_address": (
-                personal_account.permanent_full_address
-            ),
-            "present_country_id": (
-                personal_account.present_country_id
-            ),
-            "present_city": personal_account.present_city,
-            "present_area": personal_account.present_area,
-            "present_full_address": (
-                personal_account.present_full_address
-            ),
-            "is_active": personal_account.is_active,
-            "created_at": personal_account.created_at.isoformat(),
-            "updated_at": personal_account.updated_at.isoformat(),
-        }
+        serialize_personal_account(personal_account)
     )
-
 
 
 def serialize_professional_account(professional_account):

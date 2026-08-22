@@ -283,6 +283,46 @@ class PersonalAccount(models.Model):
         blank=True,
     )
 
+    profile_photo = models.ImageField(
+        upload_to="profile_photos/",
+        null=True,
+        blank=True,
+    )
+
+    cover_photo = models.ImageField(
+        upload_to="cover_photos/",
+        null=True,
+        blank=True,
+    )
+
+    date_of_birth = models.DateField(
+        null=True,
+        blank=True,
+    )
+
+    class Gender(models.TextChoices):
+        MALE = "male", "Male"
+        FEMALE = "female", "Female"
+        OTHER = "other", "Other"
+        PREFER_NOT_TO_SAY = (
+            "prefer_not_to_say",
+            "Prefer not to say",
+        )
+
+    gender = models.CharField(
+        max_length=30,
+        choices=Gender.choices,
+        blank=True,
+    )
+
+    nationality = models.ForeignKey(
+        "organization.Country",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="personal_nationalities",
+    )
+
     is_active = models.BooleanField(
         default=True,
     )
