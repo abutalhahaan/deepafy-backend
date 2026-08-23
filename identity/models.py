@@ -83,6 +83,10 @@ class UserIdentity(AbstractBaseUser):
         auto_now=True,
     )
 
+    USERNAME_FIELD = "email"
+
+    REQUIRED_FIELDS = []
+
     class Meta:
         ordering = ["-created_at"]
 
