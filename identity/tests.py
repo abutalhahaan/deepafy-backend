@@ -278,6 +278,18 @@ class PersonalAccountAPITests(TestCase):
             403,
         )   
 
+    def test_unauthenticated_user_cannot_update_personal_account_photos(
+        self,
+    ):
+        response = self.client.post(
+            f"/api/identity/{self.identity.id}/personal-account/photos/",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            401,
+        )        
+
     def test_other_user_cannot_update_personal_account_photos(self):
         other_identity = UserIdentity.objects.create(
             email="other-photo-user@example.com",
