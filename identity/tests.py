@@ -1177,6 +1177,59 @@ class JobExperienceAPITests(TestCase):
             professional_title="Software Engineer",
         )
 
+    def test_job_experience_create_requires_authentication(
+        self,
+    ):
+        response = self.client.post(
+            "/api/identity/job-experiences/create/",
+            data=json.dumps(
+                {
+                    "professional_account_id":
+                        self.professional_account.id,
+                    "company": "ABC Technologies",
+                    "job_title": "Software Engineer",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            401,
+        )
+
+    def test_other_user_cannot_create_job_experience(
+        self,
+    ):
+        other_identity = UserIdentity.objects.create(
+            email="other-job-create@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.post(
+            "/api/identity/job-experiences/create/",
+            data=json.dumps(
+                {
+                    "professional_account_id":
+                        self.professional_account.id,
+                    "company": "Unauthorized Company",
+                    "job_title": "Unauthorized Job",
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )        
+
     def test_job_experience_create_api(self):
         refresh = RefreshToken.for_user(
             self.identity
@@ -1249,6 +1302,42 @@ class JobExperienceAPITests(TestCase):
             "Software Engineer",
         )
 
+    def test_other_user_cannot_update_job_experience(
+        self,
+    ):
+        experience = JobExperience.objects.create(
+            professional_account=self.professional_account,
+            company="ABC Technologies",
+            job_title="Software Engineer",
+        )
+
+        other_identity = UserIdentity.objects.create(
+            email="other-job-update@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.patch(
+            f"/api/identity/job-experiences/{experience.id}/update/",
+            data=json.dumps(
+                {
+                    "job_title":
+                        "Unauthorized Update",
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )        
+
     def test_job_experience_update_api(self):
         experience = JobExperience.objects.create(
             professional_account=self.professional_account,
@@ -1292,6 +1381,35 @@ class JobExperienceAPITests(TestCase):
             experience.company,
             "XYZ Solutions",
         )    
+
+    def test_other_user_cannot_delete_job_experience(
+        self,
+    ):
+        experience = JobExperience.objects.create(
+            professional_account=self.professional_account,
+            company="ABC Technologies",
+            job_title="Software Engineer",
+        )
+
+        other_identity = UserIdentity.objects.create(
+            email="other-job-delete@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.delete(
+            f"/api/identity/job-experiences/{experience.id}/delete/",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )        
 
     def test_job_experience_delete_api(self):
         experience = JobExperience.objects.create(
@@ -1665,3 +1783,518 @@ class SkillAPITests(TestCase):
             ).exists()
         )
 
+
+class ProfessionalSkillAPITests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="api-professional-skill@example.com",
+        )
+
+        self.professional_account = (
+            ProfessionalAccount.objects.create(
+                identity=self.identity,
+                professional_title="Software Engineer",
+            )
+        )
+
+        self.skill = Skill.objects.create(
+            name="Python",
+            slug="python",
+        )
+
+    def test_professional_skill_create_requires_authentication(
+        self,
+    ):
+        response = self.client.post(
+            "/api/identity/professional-skills/create/",
+            data=json.dumps(
+                {
+                    "professional_account_id":
+                        self.professional_account.id,
+                    "skill_id":
+                        self.skill.id,
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            401,
+        )
+
+    def test_other_user_cannot_create_professional_skill(
+        self,
+    ):
+        other_identity = UserIdentity.objects.create(
+            email="other-professional-skill@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.post(
+            "/api/identity/professional-skills/create/",
+            data=json.dumps(
+                {
+                    "professional_account_id":
+                        self.professional_account.id,
+                    "skill_id":
+                        self.skill.id,
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )
+
+    def test_owner_can_create_professional_skill(
+        self,
+    ):
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        response = self.client.post(
+            "/api/identity/professional-skills/create/",
+            data=json.dumps(
+                {
+                    "professional_account_id":
+                        self.professional_account.id,
+                    "skill_id":
+                        self.skill.id,
+                    "skill_level":
+                        ProfessionalSkill.SkillLevel.EXPERT,
+                    "years_of_experience": 5,
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            201,
+        )
+
+    def test_other_user_cannot_update_professional_skill(
+        self,
+    ):
+        professional_skill = (
+            ProfessionalSkill.objects.create(
+                professional_account=
+                    self.professional_account,
+                skill=self.skill,
+            )
+        )
+
+        other_identity = UserIdentity.objects.create(
+            email="other-professional-skill-update@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.patch(
+            f"/api/identity/professional-skills/"
+            f"{professional_skill.id}/update/",
+            data=json.dumps(
+                {
+                    "years_of_experience": 10,
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )
+
+    def test_owner_can_update_professional_skill(
+        self,
+    ):
+        professional_skill = (
+            ProfessionalSkill.objects.create(
+                professional_account=
+                    self.professional_account,
+                skill=self.skill,
+                years_of_experience=2,
+            )
+        )
+
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        response = self.client.patch(
+            f"/api/identity/professional-skills/"
+            f"{professional_skill.id}/update/",
+            data=json.dumps(
+                {
+                    "years_of_experience": 6,
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+    def test_other_user_cannot_delete_professional_skill(
+        self,
+    ):
+        professional_skill = (
+            ProfessionalSkill.objects.create(
+                professional_account=
+                    self.professional_account,
+                skill=self.skill,
+            )
+        )
+
+        other_identity = UserIdentity.objects.create(
+            email="other-professional-skill-delete@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.delete(
+            f"/api/identity/professional-skills/"
+            f"{professional_skill.id}/delete/",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )
+
+    def test_owner_can_delete_professional_skill(
+        self,
+    ):
+        professional_skill = (
+            ProfessionalSkill.objects.create(
+                professional_account=
+                    self.professional_account,
+                skill=self.skill,
+            )
+        )
+
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        response = self.client.delete(
+            f"/api/identity/professional-skills/"
+            f"{professional_skill.id}/delete/",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+
+class AcademicBackgroundAPITests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="api-academic@example.com",
+        )
+
+        self.personal_account = (
+            PersonalAccount.objects.create(
+                identity=self.identity,
+            )
+        )
+
+        self.region = Region.objects.create(
+            name="Asia",
+        )
+
+        self.country = Country.objects.create(
+            region=self.region,
+            name="Bangladesh",
+            code="BD",
+        )
+
+    def test_academic_background_create_requires_authentication(
+        self,
+    ):
+        response = self.client.post(
+            "/api/identity/academic-backgrounds/create/",
+            data=json.dumps(
+                {
+                    "personal_account_id":
+                        self.personal_account.id,
+                    "institution_name":
+                        "Dhaka University",
+                    "institution_type":
+                        "University",
+                    "country_id":
+                        self.country.id,
+                    "education_level":
+                        "Bachelor",
+                    "degree_certificate":
+                        "BSc",
+                    "start_year":
+                        2020,
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            401,
+        )
+
+    def test_other_user_cannot_create_academic_background(
+        self,
+    ):
+        other_identity = UserIdentity.objects.create(
+            email="other-academic-create@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.post(
+            "/api/identity/academic-backgrounds/create/",
+            data=json.dumps(
+                {
+                    "personal_account_id":
+                        self.personal_account.id,
+                    "institution_name":
+                        "Dhaka University",
+                    "institution_type":
+                        "University",
+                    "country_id":
+                        self.country.id,
+                    "education_level":
+                        "Bachelor",
+                    "degree_certificate":
+                        "BSc",
+                    "start_year":
+                        2020,
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )
+
+    def test_owner_can_create_academic_background(
+        self,
+    ):
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        response = self.client.post(
+            "/api/identity/academic-backgrounds/create/",
+            data=json.dumps(
+                {
+                    "personal_account_id":
+                        self.personal_account.id,
+                    "institution_name":
+                        "Dhaka University",
+                    "institution_type":
+                        "University",
+                    "country_id":
+                        self.country.id,
+                    "education_level":
+                        "Bachelor",
+                    "degree_certificate":
+                        "BSc",
+                    "start_year":
+                        2020,
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            201,
+        )
+
+    def test_other_user_cannot_update_academic_background(
+        self,
+    ):
+        academic = AcademicBackground.objects.create(
+            personal_account=self.personal_account,
+            institution_name="Dhaka University",
+            institution_type="University",
+            country=self.country,
+            education_level="Bachelor",
+            degree_certificate="BSc",
+            start_year=2020,
+        )
+
+        other_identity = UserIdentity.objects.create(
+            email="other-academic-update@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.patch(
+            f"/api/identity/academic-backgrounds/"
+            f"{academic.id}/update/",
+            data=json.dumps(
+                {
+                    "result": "3.80",
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )
+
+    def test_owner_can_update_academic_background(
+        self,
+    ):
+        academic = AcademicBackground.objects.create(
+            personal_account=self.personal_account,
+            institution_name="Dhaka University",
+            institution_type="University",
+            country=self.country,
+            education_level="Bachelor",
+            degree_certificate="BSc",
+            start_year=2020,
+        )
+
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        response = self.client.patch(
+            f"/api/identity/academic-backgrounds/"
+            f"{academic.id}/update/",
+            data=json.dumps(
+                {
+                    "result": "3.80",
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+    def test_other_user_cannot_delete_academic_background(
+        self,
+    ):
+        academic = AcademicBackground.objects.create(
+            personal_account=self.personal_account,
+            institution_name="Dhaka University",
+            institution_type="University",
+            country=self.country,
+            education_level="Bachelor",
+            degree_certificate="BSc",
+            start_year=2020,
+        )
+
+        other_identity = UserIdentity.objects.create(
+            email="other-academic-delete@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.delete(
+            f"/api/identity/academic-backgrounds/"
+            f"{academic.id}/delete/",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )
+
+    def test_owner_can_delete_academic_background(
+        self,
+    ):
+        academic = AcademicBackground.objects.create(
+            personal_account=self.personal_account,
+            institution_name="Dhaka University",
+            institution_type="University",
+            country=self.country,
+            education_level="Bachelor",
+            degree_certificate="BSc",
+            start_year=2020,
+        )
+
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        response = self.client.delete(
+            f"/api/identity/academic-backgrounds/"
+            f"{academic.id}/delete/",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.assertFalse(
+            AcademicBackground.objects.filter(
+                id=academic.id
+            ).exists()
+        )        
