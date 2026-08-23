@@ -1,5 +1,7 @@
 import json
 
+from rest_framework_simplejwt.tokens import RefreshToken
+
 from django.test import TestCase
 
 from category_engine.models import Category
@@ -213,6 +215,99 @@ class PersonalLanguageTests(TestCase):
                 language=self.language,
                 proficiency="fluent",
             )
+
+    def test_language_detail_patch_requires_authentication(self):
+        personal_language = PersonalLanguage.objects.create(
+            personal_account=self.personal_account,
+            language=self.language,
+            proficiency="fluent",
+        )
+
+        response = self.client.patch(
+            f"/api/identity/languages/{personal_language.id}/",
+            data=json.dumps(
+                {
+                    "proficiency": "native",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            401,
+        )
+
+
+    def test_language_detail_patch_other_user_forbidden(self):
+        personal_language = PersonalLanguage.objects.create(
+            personal_account=self.personal_account,
+            language=self.language,
+            proficiency="fluent",
+        )
+
+        other_identity = UserIdentity.objects.create(
+            email="other@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.patch(
+            f"/api/identity/languages/{personal_language.id}/",
+            data=json.dumps(
+                {
+                    "proficiency": "native",
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )
+
+
+    def test_language_detail_patch_owner_allowed(self):
+        personal_language = PersonalLanguage.objects.create(
+            personal_account=self.personal_account,
+            language=self.language,
+            proficiency="fluent",
+        )
+
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        response = self.client.patch(
+            f"/api/identity/languages/{personal_language.id}/",
+            data=json.dumps(
+                {
+                    "proficiency": "native",
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        personal_language.refresh_from_db()
+
+        self.assertEqual(
+            personal_language.proficiency,
+            "native",
+        )        
 
 
 class PersonalInterestedCategoryTests(TestCase):
@@ -542,6 +637,102 @@ class AcademicBackgroundTests(TestCase):
         )
 
 
+class ProfessionalAccountAPITests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="professional@example.com",
+        )
+
+        self.professional_account = (
+            ProfessionalAccount.objects.create(
+                identity=self.identity,
+                professional_title="Software Engineer",
+            )
+        )
+
+    def test_professional_account_update_requires_authentication(
+        self,
+    ):
+        response = self.client.patch(
+            f"/api/identity/{self.identity.id}/professional-account/update/",
+            data=json.dumps(
+                {
+                    "professional_title":
+                        "Senior Software Engineer",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            401,
+        )
+
+    def test_professional_account_update_other_user_forbidden(
+        self,
+    ):
+        other_identity = UserIdentity.objects.create(
+            email="other-professional@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.patch(
+            f"/api/identity/{self.identity.id}/professional-account/update/",
+            data=json.dumps(
+                {
+                    "professional_title":
+                        "Senior Software Engineer",
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )
+
+    def test_professional_account_update_owner_allowed(
+        self,
+    ):
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        response = self.client.patch(
+            f"/api/identity/{self.identity.id}/professional-account/update/",
+            data=json.dumps(
+                {
+                    "professional_title":
+                        "Senior Software Engineer",
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.professional_account.refresh_from_db()
+
+        self.assertEqual(
+            self.professional_account.professional_title,
+            "Senior Software Engineer",
+        )
+
+
 class JobExperienceTests(TestCase):
     def setUp(self):
         self.identity = UserIdentity.objects.create(
@@ -661,20 +852,29 @@ class JobExperienceAPITests(TestCase):
         )
 
     def test_job_experience_create_api(self):
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
         response = self.client.post(
             "/api/identity/job-experiences/create/",
-            data={
-                "professional_account_id":
-                    self.professional_account.id,
-                "company": "ABC Technologies",
-                "job_title": "Software Engineer",
-                "employment_type": "Full-time",
-                "location": "Dhaka",
-                "start_date": "2022-01-01",
-                "is_current": True,
-                "description": "Backend development.",
-            },
+            data=json.dumps(
+                {
+                    "professional_account_id":
+                        self.professional_account.id,
+                    "company": "ABC Technologies",
+                    "job_title": "Software Engineer",
+                    "employment_type": "Full-time",
+                    "location": "Dhaka",
+                    "start_date": "2022-01-01",
+                    "is_current": True,
+                    "description": "Backend development.",
+                }
+            ),
             content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
         )
 
         self.assertEqual(response.status_code, 201)
@@ -730,16 +930,30 @@ class JobExperienceAPITests(TestCase):
             job_title="Software Engineer",
         )
 
-        response = self.client.patch(
-            f"/api/identity/job-experiences/{experience.id}/update/",
-            data={
-                "job_title": "Senior Software Engineer",
-                "company": "XYZ Solutions",
-            },
-            content_type="application/json",
+        refresh = RefreshToken.for_user(
+            self.identity
         )
 
-        self.assertEqual(response.status_code, 200)
+        response = self.client.patch(
+            f"/api/identity/job-experiences/{experience.id}/update/",
+            data=json.dumps(
+                {
+                    "job_title":
+                        "Senior Software Engineer",
+                    "company":
+                        "XYZ Solutions",
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
 
         experience.refresh_from_db()
 
@@ -751,7 +965,7 @@ class JobExperienceAPITests(TestCase):
         self.assertEqual(
             experience.company,
             "XYZ Solutions",
-        )
+        )    
 
     def test_job_experience_delete_api(self):
         experience = JobExperience.objects.create(
@@ -760,11 +974,21 @@ class JobExperienceAPITests(TestCase):
             job_title="Software Engineer",
         )
 
-        response = self.client.delete(
-            f"/api/identity/job-experiences/{experience.id}/delete/"
+        refresh = RefreshToken.for_user(
+            self.identity
         )
 
-        self.assertEqual(response.status_code, 200)
+        response = self.client.delete(
+            f"/api/identity/job-experiences/{experience.id}/delete/",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
 
         self.assertFalse(
             JobExperience.objects.filter(
@@ -980,6 +1204,10 @@ class SkillAPITests(TestCase):
         )
 
     def test_professional_skill_create_api(self):
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
         response = self.client.post(
             "/api/identity/professional-skills/create/",
             data={
@@ -987,10 +1215,13 @@ class SkillAPITests(TestCase):
                     self.professional_account.id,
                 "skill_id": self.skill.id,
                 "skill_level":
-                    ProfessionalSkill.SkillLevel.EXPERT,
+                ProfessionalSkill.SkillLevel.EXPERT,
                 "years_of_experience": 5,
             },
             content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
         )
 
         self.assertEqual(
@@ -1050,6 +1281,10 @@ class SkillAPITests(TestCase):
             years_of_experience=2,
         )
 
+        refresh = RefreshToken.for_user(
+            self.identity
+        )        
+
         response = self.client.patch(
             f"/api/identity/professional-skills/{professional_skill.id}/update/",
             data={
@@ -1058,6 +1293,9 @@ class SkillAPITests(TestCase):
                 "years_of_experience": 6,
             },
             content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
         )
 
         self.assertEqual(response.status_code, 200)
@@ -1073,18 +1311,27 @@ class SkillAPITests(TestCase):
             professional_skill.years_of_experience,
             6,
         )
-
     def test_professional_skill_delete_api(self):
         professional_skill = ProfessionalSkill.objects.create(
             professional_account=self.professional_account,
             skill=self.skill,
         )
 
-        response = self.client.delete(
-            f"/api/identity/professional-skills/{professional_skill.id}/delete/"
+        refresh = RefreshToken.for_user(
+            self.identity
         )
 
-        self.assertEqual(response.status_code, 200)
+        response = self.client.delete(
+            f"/api/identity/professional-skills/{professional_skill.id}/delete/",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
 
         self.assertFalse(
             ProfessionalSkill.objects.filter(

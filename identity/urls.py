@@ -80,10 +80,27 @@ urlpatterns = [
         name="personal-account-update",
     ),
     path(
-    "<int:identity_id>/personal-account/photos/",
-    views.personal_account_photos_update,
-    name="personal-account-photos-update",
-),
+        "<int:identity_id>/personal-account/photos/",
+        views.personal_account_photos_update,
+        name="personal-account-photos-update",
+    ),
+
+    # Professional Account
+    path(
+        "professional-accounts/create/",
+        views.professional_account_create,
+        name="professional-account-create",
+    ),
+    path(
+        "<int:identity_id>/professional-account/",
+        views.professional_account_detail,
+        name="professional-account-detail",
+    ),
+    path(
+        "<int:identity_id>/professional-account/update/",
+        views.professional_account_update,
+        name="professional-account-update",
+    ),
 
     # Job Experience
     path(

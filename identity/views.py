@@ -13,7 +13,15 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.utils import timezone
+from rest_framework_simplejwt.tokens import RefreshToken
 from category_engine.models import Category
+
+from .permissions import (
+    get_authenticated_identity,
+    is_owner,
+    permission_denied,
+    require_authentication,
+)
 
 from .models import (
     AcademicBackground,
@@ -39,6 +47,50 @@ from .serializers import (
     SignupSerializer,
     VerifyOTPSerializer,
 )
+
+def get_authenticated_personal_account(
+    request,
+    personal_account_id,
+):
+    authenticated_identity = (
+        get_authenticated_identity(request)
+    )
+
+    if authenticated_identity is None:
+        return None, JsonResponse(
+            {
+                "detail":
+                "Authentication credentials were not provided."
+            },
+            status=401,
+        )
+
+    try:
+        personal_account = PersonalAccount.objects.get(
+            id=personal_account_id
+        )
+    except PersonalAccount.DoesNotExist:
+        return None, JsonResponse(
+            {
+                "detail":
+                "Personal account not found."
+            },
+            status=404,
+        )
+
+    if (
+        personal_account.identity_id
+        != authenticated_identity.id
+    ):
+        return None, JsonResponse(
+            {
+                "detail":
+                "You do not have permission to modify this personal account."
+            },
+            status=403,
+        )
+
+    return personal_account, None
 
 def serialize_identity(identity):
     return {
@@ -496,19 +548,15 @@ def personal_account_detail(request, identity_id):
 @csrf_exempt
 @require_http_methods(["PATCH"])
 def personal_account_update(request, identity_id):
-    try:
-        identity = UserIdentity.objects.get(id=identity_id)
-        personal_account = identity.personal_account
-    except UserIdentity.DoesNotExist:
-        return JsonResponse(
-            {"detail": "Identity not found."},
-            status=404,
+    personal_account, error_response = (
+        get_authenticated_personal_account(
+            request,
+            identity_id,
         )
-    except PersonalAccount.DoesNotExist:
-        return JsonResponse(
-            {"detail": "Personal account not found."},
-            status=404,
-        )
+    )
+
+    if error_response is not None:
+        return error_response
 
     try:
         data = json.loads(request.body or "{}")
@@ -599,19 +647,15 @@ def personal_account_update(request, identity_id):
 @csrf_exempt
 @require_http_methods(["POST"])
 def personal_account_photos_update(request, identity_id):
-    try:
-        identity = UserIdentity.objects.get(id=identity_id)
-        personal_account = identity.personal_account
-    except UserIdentity.DoesNotExist:
-        return JsonResponse(
-            {"detail": "Identity not found."},
-            status=404,
+    personal_account, error_response = (
+        get_authenticated_personal_account(
+            request,
+            identity_id,
         )
-    except PersonalAccount.DoesNotExist:
-        return JsonResponse(
-            {"detail": "Personal account not found."},
-            status=404,
-        )
+    )
+
+    if error_response is not None:
+        return error_response
 
     old_profile_photo = None
     old_cover_photo = None
@@ -714,6 +758,28 @@ def professional_account_create(request):
                 status=400,
             )
 
+        authenticated_identity = (
+            get_authenticated_identity(request)
+        )
+
+        if authenticated_identity is None:
+            return JsonResponse(
+                {
+                    "detail":
+                    "Authentication credentials were not provided."
+                },
+                status=401,
+            )
+
+        if authenticated_identity.id != identity_id:
+            return JsonResponse(
+                {
+                    "detail":
+                    "You do not have permission to create this professional account."
+                },
+                status=403,
+            )
+
         try:
             identity = UserIdentity.objects.get(
                 id=identity_id
@@ -807,30 +873,53 @@ def professional_account_detail(request, identity_id):
 
 @csrf_exempt
 @require_http_methods(["PATCH"])
+@require_authentication
 def professional_account_update(request, identity_id):
+    if not is_owner(
+        request.authenticated_identity,
+        identity_id,
+    ):
+        return permission_denied(
+            "You do not have permission to update this professional account."
+        )
+
     try:
         identity = UserIdentity.objects.get(
             id=identity_id
         )
-        professional_account = identity.professional_account
+
+        professional_account = (
+            identity.professional_account
+        )
 
     except UserIdentity.DoesNotExist:
         return JsonResponse(
-            {"detail": "Identity not found."},
+            {
+                "detail":
+                "Identity not found."
+            },
             status=404,
         )
 
     except ProfessionalAccount.DoesNotExist:
         return JsonResponse(
-            {"detail": "Professional account not found."},
+            {
+                "detail":
+                "Professional account not found."
+            },
             status=404,
         )
 
     try:
-        data = json.loads(request.body or "{}")
+        data = json.loads(
+            request.body or "{}"
+        )
     except json.JSONDecodeError:
         return JsonResponse(
-            {"detail": "Invalid JSON."},
+            {
+                "detail":
+                "Invalid JSON."
+            },
             status=400,
         )
 
@@ -1278,6 +1367,7 @@ def serialize_job_experience(experience):
 
 @csrf_exempt
 @require_http_methods(["POST"])
+@require_authentication
 def job_experience_create(request):
     try:
         data = json.loads(request.body or "{}")
@@ -1308,6 +1398,14 @@ def job_experience_create(request):
                 status=404,
             )
 
+        if not is_owner(
+            request.authenticated_identity,
+            professional_account.identity_id,
+        ):
+            return permission_denied(
+                "You do not have permission to create job experience for this professional account."
+            ) 
+        
         experience = JobExperience.objects.create(
             professional_account=professional_account,
             company=data.get("company", ""),
@@ -1405,14 +1503,15 @@ def job_experience_detail(request, experience_id):
         serialize_job_experience(experience)
     )
 
-
 @csrf_exempt
 @require_http_methods(["PATCH"])
+@require_authentication
 def job_experience_update(request, experience_id):
+
     try:
         experience = JobExperience.objects.get(
             id=experience_id
-        )
+        ) 
     except JobExperience.DoesNotExist:
         return JsonResponse(
             {
@@ -1421,6 +1520,14 @@ def job_experience_update(request, experience_id):
             },
             status=404,
         )
+
+    if not is_owner(
+        request.authenticated_identity,
+        experience.professional_account.identity_id,
+    ):
+        return permission_denied(
+            "You do not have permission to update this job experience."
+        )       
 
     try:
         data = json.loads(request.body or "{}")
@@ -1460,6 +1567,7 @@ def job_experience_update(request, experience_id):
 
 @csrf_exempt
 @require_http_methods(["DELETE"])
+@require_authentication
 def job_experience_delete(request, experience_id):
     try:
         experience = JobExperience.objects.get(
@@ -1473,6 +1581,14 @@ def job_experience_delete(request, experience_id):
             },
             status=404,
         )
+
+    if not is_owner(
+        request.authenticated_identity,
+        experience.professional_account.identity_id,
+    ):
+        return permission_denied(
+            "You do not have permission to delete this job experience."
+        )    
 
     experience.delete()
 
@@ -1586,6 +1702,7 @@ def skill_list(request):
 
 @csrf_exempt
 @require_http_methods(["POST"])
+@require_authentication
 def professional_skill_create(request):
     try:
         data = json.loads(request.body or "{}")
@@ -1627,6 +1744,14 @@ def professional_skill_create(request):
                 },
                 status=404,
             )
+
+        if not is_owner(
+            request.authenticated_identity,
+            professional_account.identity_id,
+        ):
+            return permission_denied(
+                "You do not have permission to add a skill to this professional account."
+            )        
 
         try:
             skill = Skill.objects.get(
@@ -1752,6 +1877,7 @@ def professional_skill_detail(
 
 @csrf_exempt
 @require_http_methods(["PATCH"])
+@require_authentication
 def professional_skill_update(
     request,
     professional_skill_id,
@@ -1769,6 +1895,14 @@ def professional_skill_update(
                 "Professional skill not found."
             },
             status=404,
+        )
+
+    if not is_owner(
+        request.authenticated_identity,
+        professional_skill.professional_account.identity_id,
+    ):
+        return permission_denied(
+            "You do not have permission to update this professional skill."
         )
 
     try:
@@ -1804,6 +1938,7 @@ def professional_skill_update(
 
 @csrf_exempt
 @require_http_methods(["DELETE"])
+@require_authentication
 def professional_skill_delete(
     request,
     professional_skill_id,
@@ -1823,6 +1958,14 @@ def professional_skill_delete(
             status=404,
         )
 
+    if not is_owner(
+        request.authenticated_identity,
+        professional_skill.professional_account.identity_id,
+    ):
+        return permission_denied(
+            "You do not have permission to delete this professional skill."
+        )
+
     professional_skill.delete()
 
     return JsonResponse(
@@ -1832,23 +1975,25 @@ def professional_skill_delete(
         }
     )
 
+
 # Languages
 
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
 def languages(request, personal_account_id):
-    try:
-        personal_account = PersonalAccount.objects.get(
-            id=personal_account_id,
-            is_active=True,
-        )
-    except PersonalAccount.DoesNotExist:
-        return JsonResponse(
-            {"detail": "Personal account not found."},
-            status=404,
-        )
 
     if request.method == "GET":
+        try:
+            personal_account = PersonalAccount.objects.get(
+                id=personal_account_id,
+                is_active=True,
+            )
+        except PersonalAccount.DoesNotExist:
+            return JsonResponse(
+                {"detail": "Personal account not found."},
+                status=404,
+            )
+
         languages = (
             PersonalLanguage.objects
             .filter(
@@ -1878,6 +2023,16 @@ def languages(request, personal_account_id):
             status=200,
         )
 
+    personal_account, error_response = (
+        get_authenticated_personal_account(
+            request,
+            personal_account_id,
+        )
+    )
+
+    if error_response is not None:
+        return error_response
+
     try:
         payload = json.loads(request.body or "{}")
     except json.JSONDecodeError:
@@ -1895,7 +2050,9 @@ def languages(request, personal_account_id):
             status=400,
         )
 
-    if proficiency not in dict(PersonalLanguage.Proficiency.choices):
+    if proficiency not in dict(
+        PersonalLanguage.Proficiency.choices
+    ):
         return JsonResponse(
             {"detail": "Invalid proficiency."},
             status=400,
@@ -1972,6 +2129,31 @@ def language_detail(request, language_id):
                 "proficiency": personal_language.proficiency,
             },
             status=200,
+        )
+
+    authenticated_identity = get_authenticated_identity(
+        request
+    )
+
+    if authenticated_identity is None:
+        return JsonResponse(
+            {
+                "detail":
+                "Authentication credentials were not provided."
+            },
+            status=401,
+        )
+
+    if (
+        personal_language.personal_account.identity_id
+        != authenticated_identity.id
+    ):
+        return JsonResponse(
+            {
+                "detail":
+                "You do not have permission to modify this language."
+            },
+            status=403,
         )
 
     if request.method == "DELETE":
@@ -2069,12 +2251,19 @@ def signup(request):
 
         identity = serializer.save()
 
+        refresh = RefreshToken.for_user(identity)
+
         return JsonResponse(
             {
-                "message": "Signup successful.",
+                "message": "Login successful.",
+
+                "access": str(refresh.access_token),
+
+                "refresh": str(refresh),
+
                 "user": serialize_identity(identity),
             },
-            status=201,
+            status=200,
         )
 
     except json.JSONDecodeError:
@@ -2158,9 +2347,13 @@ def login(request):
             update_fields=["last_login"],
         )
 
+        refresh = RefreshToken.for_user(identity)
+
         return JsonResponse(
             {
                 "message": "Login successful.",
+                "access": str(refresh.access_token),
+                "refresh": str(refresh),
                 "user": serialize_identity(identity),
             },
             status=200,
