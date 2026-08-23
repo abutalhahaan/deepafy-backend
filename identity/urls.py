@@ -176,16 +176,16 @@ urlpatterns = [
         name="academic-background-delete",
     ),
 
-    # Personal Languages
+    # Languages
     path(
-        "<int:personal_account_id>/personal-languages/",
-        views.personal_languages,
-        name="personal-languages",
+        "<int:personal_account_id>/languages/",
+        views.languages,
+        name="languages",
     ),
     path(
-        "personal-languages/<int:language_id>/",
-        views.personal_language_detail,
-        name="personal-language-detail",
+        "languages/<int:language_id>/",
+        views.language_detail,
+        name="language-detail",
     ),
 
     # Hobbies

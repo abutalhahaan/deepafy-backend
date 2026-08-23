@@ -19,9 +19,11 @@ from .models import (
     AccountType,
     Hobby,
     JobExperience,
+    Language,
     ProfessionalSkill,
     Skill,
     PersonalAccount,
+    PersonalLanguage,
     PersonalHobby,
     PersonalInterestedCategory,
     PasswordResetOTP,
@@ -1829,10 +1831,11 @@ def professional_skill_delete(
         }
     )
 
-# Personal Languages
+# Languages
 
+@csrf_exempt
 @require_http_methods(["GET", "POST"])
-def personal_languages(request, personal_account_id):
+def languages(request, personal_account_id):
     try:
         personal_account = PersonalAccount.objects.get(
             id=personal_account_id,
@@ -1936,8 +1939,9 @@ def personal_languages(request, personal_account_id):
     )
 
 
+@csrf_exempt
 @require_http_methods(["GET", "PATCH", "DELETE"])
-def personal_language_detail(request, language_id):
+def language_detail(request, language_id):
     try:
         personal_language = (
             PersonalLanguage.objects
