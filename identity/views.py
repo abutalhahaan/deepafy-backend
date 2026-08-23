@@ -304,6 +304,7 @@ def identity_detail(request, identity_id):
 
 @csrf_exempt
 @require_http_methods(["PATCH"])
+@require_authentication
 def identity_update(request, identity_id):
     try:
         identity = UserIdentity.objects.get(id=identity_id)
@@ -311,6 +312,14 @@ def identity_update(request, identity_id):
         return JsonResponse(
             {"detail": "Identity not found."},
             status=404,
+        )
+
+    if not is_owner(
+        request.authenticated_identity,
+        identity.id,
+    ):
+        return permission_denied(
+            "You do not have permission to update this identity."
         )
 
     try:
@@ -364,26 +373,39 @@ def identity_update(request, identity_id):
 
 @csrf_exempt
 @require_http_methods(["DELETE"])
+@require_authentication
 def identity_delete(request, identity_id):
     try:
-        identity = UserIdentity.objects.get(id=identity_id)
+        identity = UserIdentity.objects.get(
+            id=identity_id
+        )
     except UserIdentity.DoesNotExist:
         return JsonResponse(
             {"detail": "Identity not found."},
             status=404,
         )
 
+    if not is_owner(
+        request.authenticated_identity,
+        identity.id,
+    ):
+        return permission_denied(
+            "You do not have permission to delete this identity."
+        )
+
     identity.delete()
 
     return JsonResponse(
         {
-            "detail": "Identity deleted successfully."
+            "detail":
+            "Identity deleted successfully."
         }
     )
 
 
 @csrf_exempt
 @require_http_methods(["POST"])
+@require_authentication
 def account_type_create(request):
     try:
         data = json.loads(request.body or "{}")
@@ -412,6 +434,14 @@ def account_type_create(request):
                 {"detail": "Identity not found."},
                 status=404,
             )
+
+        if not is_owner(
+            request.authenticated_identity,
+            identity.id,
+        ):
+            return permission_denied(
+                "You do not have permission to create an account type for this identity."
+            )        
 
         if not any(
             value == account_type
