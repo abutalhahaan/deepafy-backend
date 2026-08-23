@@ -48,6 +48,65 @@ class UserIdentityTests(TestCase):
         )
 
 
+class UserIdentityAPITests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="api@example.com",
+            mobile_number="01700000000",
+            status=UserIdentity.Status.ACTIVE,
+        )  
+
+    def test_identity_update_api(self):
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        response = self.client.patch(
+            f"/api/identity/{self.identity.id}/update/",
+            data={
+                "mobile_number":
+                    "01800000000",
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.assertEqual(
+            response.json()["mobile_number"],
+            "01800000000",
+        )              
+
+    def test_identity_delete_api(self):
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        response = self.client.delete(
+            f"/api/identity/{self.identity.id}/delete/",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.assertFalse(
+            UserIdentity.objects.filter(
+                id=self.identity.id
+            ).exists()
+        )
+
+
 class AccountTypeTests(TestCase):
     def setUp(self):
         self.identity = UserIdentity.objects.create(
@@ -73,6 +132,41 @@ class AccountTypeTests(TestCase):
         )
 
         self.assertIn("Personal Account", str(account_type))
+
+class AccountTypeAPITests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="account-api@example.com",
+        )      
+
+    def test_account_type_create_api(self):
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        response = self.client.post(
+            "/api/identity/account-types/create/",
+            data={
+                "identity_id": self.identity.id,
+                "account_type":
+                    AccountType.Type.PERSONAL,
+                "is_primary": True,
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            201,
+        )
+
+        self.assertEqual(
+            response.json()["account_type"],
+            AccountType.Type.PERSONAL,
+        )          
 
 
 class PersonalAccountTests(TestCase):
