@@ -2,6 +2,8 @@ from django.test import TestCase
 
 from category_engine.models import Category
 
+from companies.models import Country, Region
+
 from .models import (
     AcademicBackground,
     AccountType,
@@ -38,7 +40,7 @@ class UserIdentityTests(TestCase):
     def test_identity_string(self):
         self.assertEqual(
             str(self.identity),
-            str(self.identity.user_id),
+            self.identity.email,
         )
 
 
@@ -338,29 +340,47 @@ class AcademicBackgroundTests(TestCase):
             email="academic@example.com",
         )
 
-        self.professional_account = ProfessionalAccount.objects.create(
+        self.personal_account = PersonalAccount.objects.create(
             identity=self.identity,
-            professional_title="Software Engineer",
+        )
+
+        self.region = Region.objects.create(
+            name="Asia",
+        )
+
+        self.country = Country.objects.create(
+            region=self.region,
+            name="Bangladesh",
+            code="BD",
+            phone_code="+880",
         )
 
     def test_academic_background_creation(self):
         academic = AcademicBackground.objects.create(
-            professional_account=self.professional_account,
-            qualification="Bachelor of Science",
-            institution="University of Dhaka",
+            personal_account=self.personal_account,
+            institution_name="University of Dhaka",
+            institution_type="University",
+            country=self.country,
+            education_level="Undergraduate",
+            degree_certificate="Bachelor of Science",
             field_of_study="Computer Science",
-            city="Dhaka",
-            result="CGPA 3.75",
+            specialization="Software Engineering",
+            start_year=2018,
+            end_year=2022,
+            is_currently_studying=False,
+            result_type="CGPA",
+            result="3.75",
+            description="Computer Science program.",
         )
 
         self.assertEqual(
-            academic.qualification,
-            "Bachelor of Science",
-        )
-
-        self.assertEqual(
-            academic.institution,
+            academic.institution_name,
             "University of Dhaka",
+        )
+
+        self.assertEqual(
+            academic.degree_certificate,
+            "Bachelor of Science",
         )
 
         self.assertEqual(
@@ -368,31 +388,50 @@ class AcademicBackgroundTests(TestCase):
             "Computer Science",
         )
 
+        self.assertEqual(
+            academic.country,
+            self.country,
+        )
+
     def test_multiple_academic_backgrounds_allowed(self):
         AcademicBackground.objects.create(
-            professional_account=self.professional_account,
-            qualification="Bachelor of Science",
-            institution="University of Dhaka",
+            personal_account=self.personal_account,
+            institution_name="University of Dhaka",
+            institution_type="University",
+            country=self.country,
+            education_level="Undergraduate",
+            degree_certificate="Bachelor of Science",
+            start_year=2018,
+            end_year=2022,
         )
 
         AcademicBackground.objects.create(
-            professional_account=self.professional_account,
-            qualification="Master of Science",
-            institution="BUET",
+            personal_account=self.personal_account,
+            institution_name="BUET",
+            institution_type="University",
+            country=self.country,
+            education_level="Postgraduate",
+            degree_certificate="Master of Science",
+            start_year=2023,
+            end_year=2025,
         )
 
         self.assertEqual(
             AcademicBackground.objects.filter(
-                professional_account=self.professional_account
+                personal_account=self.personal_account,
             ).count(),
             2,
         )
 
     def test_academic_background_string(self):
         academic = AcademicBackground.objects.create(
-            professional_account=self.professional_account,
-            qualification="Bachelor of Science",
-            institution="University of Dhaka",
+            personal_account=self.personal_account,
+            institution_name="University of Dhaka",
+            institution_type="University",
+            country=self.country,
+            education_level="Undergraduate",
+            degree_certificate="Bachelor of Science",
+            start_year=2018,
         )
 
         self.assertEqual(
@@ -400,14 +439,18 @@ class AcademicBackgroundTests(TestCase):
             "Bachelor of Science - University of Dhaka",
         )
 
-    def test_academic_background_deleted_with_professional_account(self):
+    def test_academic_background_deleted_with_personal_account(self):
         AcademicBackground.objects.create(
-            professional_account=self.professional_account,
-            qualification="Bachelor of Science",
-            institution="University of Dhaka",
+            personal_account=self.personal_account,
+            institution_name="University of Dhaka",
+            institution_type="University",
+            country=self.country,
+            education_level="Undergraduate",
+            degree_certificate="Bachelor of Science",
+            start_year=2018,
         )
 
-        self.professional_account.delete()
+        self.personal_account.delete()
 
         self.assertEqual(
             AcademicBackground.objects.count(),
