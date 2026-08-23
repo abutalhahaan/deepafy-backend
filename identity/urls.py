@@ -79,6 +79,11 @@ urlpatterns = [
         views.personal_account_update,
         name="personal-account-update",
     ),
+    path(
+    "<int:identity_id>/personal-account/photos/",
+    views.personal_account_photos_update,
+    name="personal-account-photos-update",
+),
 
     # Job Experience
     path(

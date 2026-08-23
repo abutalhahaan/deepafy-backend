@@ -2,6 +2,7 @@ import json
 import secrets
 
 from datetime import timedelta
+from core.services.image_processor import process_image
 
 from django.http.multipartparser import (
     MultiPartParser,
@@ -592,6 +593,91 @@ def personal_account_update(request, identity_id):
         serialize_personal_account(personal_account)
     )
 
+@csrf_exempt
+@require_http_methods(["POST"])
+def personal_account_photos_update(request, identity_id):
+    try:
+        identity = UserIdentity.objects.get(id=identity_id)
+        personal_account = identity.personal_account
+    except UserIdentity.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Identity not found."},
+            status=404,
+        )
+    except PersonalAccount.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Personal account not found."},
+            status=404,
+        )
+
+    old_profile_photo = None
+    old_cover_photo = None
+
+    try:
+        if "profile_photo" in request.FILES:
+            processed_profile_photo = process_image(
+                request.FILES["profile_photo"],
+                preset="profile",
+            )
+
+            if personal_account.profile_photo:
+                old_profile_photo = (
+                    personal_account.profile_photo.name
+                )
+
+            personal_account.profile_photo = (
+                processed_profile_photo
+            )
+
+        if "cover_photo" in request.FILES:
+            processed_cover_photo = process_image(
+                request.FILES["cover_photo"],
+                preset="cover",
+            )
+
+            if personal_account.cover_photo:
+                old_cover_photo = (
+                    personal_account.cover_photo.name
+                )
+
+            personal_account.cover_photo = (
+                processed_cover_photo
+            )
+
+    except ValueError as error:
+        return JsonResponse(
+            {"detail": str(error)},
+            status=400,
+        )
+
+    if (
+        "profile_photo" not in request.FILES
+        and "cover_photo" not in request.FILES
+    ):
+        return JsonResponse(
+            {
+                "detail": (
+                    "Provide profile_photo or cover_photo."
+                )
+            },
+            status=400,
+        )
+
+    personal_account.save()
+
+    if old_profile_photo:
+        personal_account.profile_photo.storage.delete(
+            old_profile_photo
+        )
+
+    if old_cover_photo:
+        personal_account.cover_photo.storage.delete(
+            old_cover_photo
+        )
+
+    return JsonResponse(
+        serialize_personal_account(personal_account)
+    )
 
 def serialize_professional_account(professional_account):
     return {
