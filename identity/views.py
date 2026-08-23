@@ -13,6 +13,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.utils import timezone
+from category_engine.models import Category
 
 from .models import (
     AcademicBackground,
@@ -2773,6 +2774,36 @@ def serialize_personal_hobby(personal_hobby):
         ),
     }
 
+def serialize_personal_interested_category(
+    personal_interested_category
+):
+    category = personal_interested_category.category
+
+    return {
+        "id": personal_interested_category.id,
+        "personal_account_id": (
+            personal_interested_category.personal_account_id
+        ),
+        "category": {
+            "id": category.id,
+            "category_id": str(category.category_id),
+            "name": category.name,
+            "slug": category.slug,
+            "description": category.description,
+            "is_featured": category.is_featured,
+            "display_order": category.display_order,
+            "visibility": category.visibility,
+        },
+        "is_active": (
+            personal_interested_category.is_active
+        ),
+        "created_at": (
+            personal_interested_category.created_at.isoformat()
+        ),
+        "updated_at": (
+            personal_interested_category.updated_at.isoformat()
+        ),
+    }
 
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -2928,5 +2959,167 @@ def personal_hobby_remove(
         {
             "detail":
             "Hobby removed from personal account."
+        }
+    )
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def personal_interested_category_add(
+    request,
+    personal_account_id,
+):
+    try:
+        personal_account = PersonalAccount.objects.get(
+            id=personal_account_id
+        )
+    except PersonalAccount.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Personal account not found."
+            },
+            status=404,
+        )
+
+    try:
+        data = json.loads(
+            request.body or "{}"
+        )
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"detail": "Invalid JSON."},
+            status=400,
+        )
+
+    category_id = data.get("category_id")
+
+    if not category_id:
+        return JsonResponse(
+            {
+                "detail":
+                "category_id is required."
+            },
+            status=400,
+        )
+
+    try:
+        category = Category.objects.get(
+            id=category_id,
+            visibility=Category.VISIBILITY_PUBLIC,
+        )
+    except Category.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Public category not found."
+            },
+            status=404,
+        )
+
+    personal_interested_category, created = (
+        PersonalInterestedCategory.objects.get_or_create(
+            personal_account=personal_account,
+            category=category,
+            defaults={
+                "is_active": True,
+            },
+        )
+    )
+
+    if not created:
+        return JsonResponse(
+            {
+                "detail":
+                "This category is already added "
+                "to the personal account."
+            },
+            status=400,
+        )
+
+    return JsonResponse(
+        serialize_personal_interested_category(
+            personal_interested_category
+        ),
+        status=201,
+    )
+
+@require_http_methods(["GET"])
+def personal_interested_category_list(
+    request,
+    personal_account_id,
+):
+    try:
+        personal_account = PersonalAccount.objects.get(
+            id=personal_account_id
+        )
+    except PersonalAccount.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Personal account not found."
+            },
+            status=404,
+        )
+
+    personal_interested_categories = (
+        PersonalInterestedCategory.objects
+        .filter(
+            personal_account=personal_account,
+            is_active=True,
+            category__visibility=Category.VISIBILITY_PUBLIC,
+        )
+        .select_related("category")
+        .order_by(
+            "category__display_order",
+            "category__name",
+        )
+    )
+
+    results = [
+        serialize_personal_interested_category(
+            personal_interested_category
+        )
+        for personal_interested_category
+        in personal_interested_categories
+    ]
+
+    return JsonResponse(
+        {
+            "personal_account_id":
+            personal_account.id,
+            "count": len(results),
+            "results": results,
+        }
+    )
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+def personal_interested_category_remove(
+    request,
+    personal_account_id,
+    category_id,
+):
+    try:
+        personal_interested_category = (
+            PersonalInterestedCategory.objects.get(
+                personal_account_id=personal_account_id,
+                category_id=category_id,
+            )
+        )
+    except PersonalInterestedCategory.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Personal interested category not found."
+            },
+            status=404,
+        )
+
+    personal_interested_category.delete()
+
+    return JsonResponse(
+        {
+            "detail":
+            "Category removed from personal account."
         }
     )

@@ -1,3 +1,5 @@
+import json
+
 from django.test import TestCase
 
 from category_engine.models import Category
@@ -275,6 +277,88 @@ class PersonalInterestedCategoryTests(TestCase):
                 personal_account=self.personal_account,
                 category=self.category,
             )
+
+    def test_interested_category_list_api(self):
+        PersonalInterestedCategory.objects.create(
+            personal_account=self.personal_account,
+            category=self.category,
+        )
+
+        response = self.client.get(
+            f"/api/identity/{self.personal_account.id}/"
+            "interested-categories/"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        data = response.json()
+
+        self.assertEqual(
+            data["personal_account_id"],
+            self.personal_account.id,
+        )
+
+        self.assertEqual(
+            data["count"],
+            1,
+        )
+
+        self.assertEqual(
+            data["results"][0]["category"]["id"],
+            self.category.id,
+        )
+
+
+    def test_interested_category_add_api(self):
+        response = self.client.post(
+            f"/api/identity/{self.personal_account.id}/"
+            "interested-categories/add/",
+            data=json.dumps(
+                {
+                    "category_id": self.category.id,
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            201,
+        )
+
+        self.assertTrue(
+            PersonalInterestedCategory.objects.filter(
+                personal_account=self.personal_account,
+                category=self.category,
+            ).exists()
+        )
+
+
+    def test_interested_category_remove_api(self):
+        PersonalInterestedCategory.objects.create(
+            personal_account=self.personal_account,
+            category=self.category,
+        )
+
+        response = self.client.delete(
+            f"/api/identity/{self.personal_account.id}/"
+            f"interested-categories/{self.category.id}/remove/"
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.assertFalse(
+            PersonalInterestedCategory.objects.filter(
+                personal_account=self.personal_account,
+                category=self.category,
+            ).exists()
+        )            
 
 
 class PersonalHobbyTests(TestCase):

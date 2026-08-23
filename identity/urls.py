@@ -230,4 +230,21 @@ urlpatterns = [
         views.personal_hobby_remove,
         name="personal-hobby-remove",
     ),
+      # Personal Interested Categories
+    path(
+        "<int:personal_account_id>/interested-categories/",
+        views.personal_interested_category_list,
+        name="personal-interested-category-list",
+    ),
+    path(
+        "<int:personal_account_id>/interested-categories/add/",
+        views.personal_interested_category_add,
+        name="personal-interested-category-add",
+    ),
+    path(
+        "<int:personal_account_id>/interested-categories/<int:category_id>/remove/",
+        views.personal_interested_category_remove,
+        name="personal-interested-category-remove",
+    ),
 ]
+
