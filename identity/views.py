@@ -586,6 +586,7 @@ def personal_account_detail(request, identity_id):
 
 @csrf_exempt
 @require_http_methods(["PATCH"])
+@require_authentication
 def personal_account_update(request, identity_id):
     personal_account, error_response = (
         get_authenticated_personal_account(
@@ -685,6 +686,7 @@ def personal_account_update(request, identity_id):
 
 @csrf_exempt
 @require_http_methods(["POST"])
+@require_authentication
 def personal_account_photos_update(request, identity_id):
     personal_account, error_response = (
         get_authenticated_personal_account(
