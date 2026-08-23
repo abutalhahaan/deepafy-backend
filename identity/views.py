@@ -1016,6 +1016,7 @@ def serialize_academic_background(academic):
 
 @csrf_exempt
 @require_http_methods(["POST"])
+@require_authentication
 def academic_background_create(request):
     if request.content_type.startswith(
         "multipart/form-data"
@@ -1062,6 +1063,14 @@ def academic_background_create(request):
             },
             status=404,
         )
+
+    if not is_owner(
+        request.authenticated_identity,
+        personal_account.identity_id,
+    ):
+        return permission_denied(
+            "You do not have permission to add an academic background to this personal account."
+        )    
 
     required_fields = [
         "institution_name",
@@ -1222,6 +1231,7 @@ def academic_background_detail(request, academic_id):
 
 @csrf_exempt
 @require_http_methods(["PATCH"])
+@require_authentication
 def academic_background_update(request, academic_id):
     try:
         academic = AcademicBackground.objects.get(
@@ -1235,6 +1245,14 @@ def academic_background_update(request, academic_id):
             },
             status=404,
         )
+
+    if not is_owner(
+        request.authenticated_identity,
+        academic.personal_account.identity_id,
+    ):
+        return permission_denied(
+            "You do not have permission to update this academic background."
+        )    
 
     if (
         request.content_type
@@ -1336,6 +1354,7 @@ def academic_background_update(request, academic_id):
 
 @csrf_exempt
 @require_http_methods(["DELETE"])
+@require_authentication
 def academic_background_delete(request, academic_id):
     try:
         academic = AcademicBackground.objects.get(
@@ -1349,6 +1368,14 @@ def academic_background_delete(request, academic_id):
             },
             status=404,
         )
+
+    if not is_owner(
+        request.authenticated_identity,
+        academic.personal_account.identity_id,
+    ):
+        return permission_denied(
+            "You do not have permission to delete this academic background."
+        )    
 
     academic.delete()
 
