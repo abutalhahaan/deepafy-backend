@@ -1,6 +1,11 @@
+import io
 import json
 
+from PIL import Image
+
 from rest_framework_simplejwt.tokens import RefreshToken
+
+from django.core.files.uploadedfile import SimpleUploadedFile
 
 from django.test import TestCase
 
@@ -205,6 +210,165 @@ class PersonalAccountTests(TestCase):
             f"Personal Account - {self.identity.user_id}",
         )
 
+
+class PersonalAccountAPITests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="personal-api@example.com",
+        )
+
+        self.personal_account = PersonalAccount.objects.create(
+            identity=self.identity,
+        )
+
+    def test_personal_account_update_api(self):
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        response = self.client.patch(
+            f"/api/identity/{self.identity.id}/personal-account/update/",
+            data={
+                "display_name": "Abu Talha",
+                "bio": "Deepafy developer",
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.assertEqual(
+            response.json()["display_name"],
+            "Abu Talha",
+        )
+
+        self.assertEqual(
+            response.json()["bio"],
+            "Deepafy developer",
+        )
+
+    def test_other_user_cannot_update_personal_account(self):
+        other_identity = UserIdentity.objects.create(
+            email="other-user@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.patch(
+            f"/api/identity/{self.identity.id}/personal-account/update/",
+            data={
+                "display_name": "Unauthorized User",
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )   
+
+    def test_other_user_cannot_update_personal_account_photos(self):
+        other_identity = UserIdentity.objects.create(
+            email="other-photo-user@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.post(
+            f"/api/identity/{self.identity.id}/personal-account/photos/",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )    
+
+    def test_owner_can_update_personal_account_photos(self):
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        image_file = io.BytesIO()
+
+        image = Image.new(
+            "RGB",
+            (100, 100),
+            "white",
+        )
+
+        image.save(
+            image_file,
+            format="JPEG",
+        )
+
+        image_file.seek(0)
+
+        uploaded_image = SimpleUploadedFile(
+            "profile.jpg",
+            image_file.getvalue(),
+            content_type="image/jpeg",
+        )   
+
+        response = self.client.post(
+            f"/api/identity/{self.identity.id}/personal-account/photos/",
+            data={
+                "profile_photo": uploaded_image,
+            },
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )            
+
+    def test_personal_account_create_api(self):
+        new_identity = UserIdentity.objects.create(
+            email="personal-create-api@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            new_identity
+        )
+
+        response = self.client.post(
+            "/api/identity/personal-accounts/create/",
+            data={
+                "identity_id": new_identity.id,
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            201,
+        )
+
+        self.assertEqual(
+            response.json()["identity_id"],
+            new_identity.id,
+        )
 
 class PersonalLanguageTests(TestCase):
     def setUp(self):
@@ -825,6 +989,74 @@ class ProfessionalAccountAPITests(TestCase):
             self.professional_account.professional_title,
             "Senior Software Engineer",
         )
+
+    def test_professional_account_create_owner_allowed(
+        self,
+    ):
+        new_identity = UserIdentity.objects.create(
+            email="professional-create@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            new_identity
+        )
+
+        response = self.client.post(
+            "/api/identity/professional-accounts/create/",
+            data={
+                "identity_id": new_identity.id,
+                "professional_title":
+                    "Software Engineer",
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            201,
+        )
+
+        self.assertEqual(
+            response.json()["identity_id"],
+            new_identity.id,
+        )
+
+
+    def test_other_user_cannot_create_professional_account(
+        self,
+    ):
+        target_identity = UserIdentity.objects.create(
+            email="target-professional@example.com",
+        )
+
+        other_identity = UserIdentity.objects.create(
+            email="other-professional-create@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.post(
+            "/api/identity/professional-accounts/create/",
+            data={
+                "identity_id": target_identity.id,
+                "professional_title":
+                    "Unauthorized Professional",
+            },
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )        
 
 
 class JobExperienceTests(TestCase):

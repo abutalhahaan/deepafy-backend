@@ -50,7 +50,7 @@ from .serializers import (
 
 def get_authenticated_personal_account(
     request,
-    personal_account_id,
+    identity_id,
 ):
     authenticated_identity = (
         get_authenticated_identity(request)
@@ -67,7 +67,7 @@ def get_authenticated_personal_account(
 
     try:
         personal_account = PersonalAccount.objects.get(
-            id=personal_account_id
+            identity_id=identity_id
         )
     except PersonalAccount.DoesNotExist:
         return None, JsonResponse(
@@ -508,6 +508,7 @@ def account_type_list(request, identity_id):
 
 @csrf_exempt
 @require_http_methods(["POST"])
+@require_authentication
 def personal_account_create(request):
     try:
         data = json.loads(request.body or "{}")
@@ -529,6 +530,14 @@ def personal_account_create(request):
                 {"detail": "Identity not found."},
                 status=404,
             )
+
+        if not is_owner(
+            request.authenticated_identity,
+            identity.id,
+        ):
+            return permission_denied(
+                "You do not have permission to create a personal account for this identity."
+            )        
 
         if PersonalAccount.objects.filter(
             identity=identity
@@ -776,6 +785,7 @@ def serialize_professional_account(professional_account):
 
 @csrf_exempt
 @require_http_methods(["POST"])
+@require_authentication
 def professional_account_create(request):
     try:
         data = json.loads(request.body or "{}")
@@ -788,26 +798,12 @@ def professional_account_create(request):
                 status=400,
             )
 
-        authenticated_identity = (
-            get_authenticated_identity(request)
-        )
-
-        if authenticated_identity is None:
-            return JsonResponse(
-                {
-                    "detail":
-                    "Authentication credentials were not provided."
-                },
-                status=401,
-            )
-
-        if authenticated_identity.id != identity_id:
-            return JsonResponse(
-                {
-                    "detail":
-                    "You do not have permission to create this professional account."
-                },
-                status=403,
+        if not is_owner(
+            request.authenticated_identity,
+            identity_id,
+        ):
+            return permission_denied(
+                "You do not have permission to create this professional account."
             )
 
         try:
