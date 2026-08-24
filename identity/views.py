@@ -3225,18 +3225,15 @@ def personal_interested_category_add(
     request,
     personal_account_id,
 ):
-    try:
-        personal_account = PersonalAccount.objects.get(
-            id=personal_account_id
+    personal_account, error_response = (
+        get_authenticated_personal_account(
+            request,
+            personal_account_id,
         )
-    except PersonalAccount.DoesNotExist:
-        return JsonResponse(
-            {
-                "detail":
-                "Personal account not found."
-            },
-            status=404,
-        )
+    )
+
+    if error_response is not None:
+        return error_response
 
     try:
         data = json.loads(
@@ -3356,10 +3353,20 @@ def personal_interested_category_remove(
     personal_account_id,
     category_id,
 ):
+    personal_account, error_response = (
+        get_authenticated_personal_account(
+            request,
+            personal_account_id,
+        )
+    )
+
+    if error_response is not None:
+        return error_response
+
     try:
         personal_interested_category = (
             PersonalInterestedCategory.objects.get(
-                personal_account_id=personal_account_id,
+                personal_account=personal_account,
                 category_id=category_id,
             )
         )
@@ -3378,5 +3385,6 @@ def personal_interested_category_remove(
         {
             "detail":
             "Category removed from personal account."
-        }
+        },
+        status=200,
     )
