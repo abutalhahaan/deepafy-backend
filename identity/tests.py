@@ -577,7 +577,148 @@ class PersonalLanguageTests(TestCase):
         self.assertEqual(
             personal_language.proficiency,
             "native",
-        )        
+        )    
+
+    def test_language_add_requires_authentication(self):
+        response = self.client.post(
+            f"/api/identity/{self.personal_account.id}/languages/",
+            data=json.dumps(
+                {
+                    "language_id": self.language.id,
+                    "proficiency": "fluent",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            401,
+        )
+
+    def test_other_user_cannot_add_language(self):
+        other_identity = UserIdentity.objects.create(
+            email="other-language-add@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.post(
+            f"/api/identity/{self.personal_account.id}/languages/",
+            data=json.dumps(
+                {
+                    "language_id": self.language.id,
+                    "proficiency": "fluent",
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )
+
+    def test_owner_can_add_language(self):
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        response = self.client.post(
+            f"/api/identity/{self.personal_account.id}/languages/",
+            data=json.dumps(
+                {
+                    "language_id": self.language.id,
+                    "proficiency": "fluent",
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            201,
+        )
+
+    def test_language_delete_requires_authentication(self):
+        personal_language = PersonalLanguage.objects.create(
+            personal_account=self.personal_account,
+            language=self.language,
+            proficiency="fluent",
+        )
+
+        response = self.client.delete(
+            f"/api/identity/languages/{personal_language.id}/",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            401,
+        )
+
+    def test_other_user_cannot_delete_language(self):
+        personal_language = PersonalLanguage.objects.create(
+            personal_account=self.personal_account,
+            language=self.language,
+            proficiency="fluent",
+        )
+
+        other_identity = UserIdentity.objects.create(
+            email="other-language-delete@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.delete(
+            f"/api/identity/languages/{personal_language.id}/",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )
+
+    def test_owner_can_delete_language(self):
+        personal_language = PersonalLanguage.objects.create(
+            personal_account=self.personal_account,
+            language=self.language,
+            proficiency="fluent",
+        )
+
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        response = self.client.delete(
+            f"/api/identity/languages/{personal_language.id}/",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        personal_language.refresh_from_db()
+
+        self.assertFalse(
+            personal_language.is_active
+        )            
 
 
 class PersonalInterestedCategoryTests(TestCase):
