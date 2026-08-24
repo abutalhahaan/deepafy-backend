@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     "companies.apps.CompaniesConfig",
     "category_engine",
     'homepage',
+    "jobs",
     "corsheaders",
 ]
 

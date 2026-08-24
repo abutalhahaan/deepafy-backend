@@ -80,6 +80,21 @@ urlpatterns = [
         name="personal-account-update",
     ),
     path(
+        "<int:identity_id>/personal-account/background-color/",
+        views.personal_background_color_update,
+        name="personal-background-color-update",
+    ),
+    path(
+        "<int:identity_id>/personal-account/background-image/",
+        views.personal_background_image_update,
+        name="personal-background-image-update",    
+    ),
+    path(
+        "<int:identity_id>/personal-account/tab-colors/",
+        views.personal_tab_colors_update,
+        name="personal-tab-colors-update",
+    ),
+    path(
         "<int:identity_id>/personal-account/photos/",
         views.personal_account_photos_update,
         name="personal-account-photos-update",
@@ -100,6 +115,16 @@ urlpatterns = [
         "<int:identity_id>/professional-account/update/",
         views.professional_account_update,
         name="professional-account-update",
+    ),
+    path(
+        "<int:identity_id>/professional-account/background-image/",
+        views.professional_background_image_update,
+        name="professional-background-image-update",
+    ),
+    path(
+        "<int:identity_id>/professional-account/tab-colors/",
+        views.professional_tab_colors_update,
+        name="professional-tab-colors-update",
     ),
 
     # Job Experience

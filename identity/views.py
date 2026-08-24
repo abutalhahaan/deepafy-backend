@@ -218,6 +218,18 @@ def serialize_personal_account(personal_account):
             else None
         ),
 
+        "background_color":
+        personal_account.background_color,
+
+        "background_image": (
+            personal_account.background_image.url
+            if personal_account.background_image
+            else None
+        ),
+
+        "tab_colors":
+        personal_account.tab_colors,
+
         "is_active": personal_account.is_active,
 
         "created_at":
@@ -684,6 +696,191 @@ def personal_account_update(request, identity_id):
         serialize_personal_account(personal_account)
     )
 
+
+@csrf_exempt
+@require_http_methods(["PATCH"])
+@require_authentication
+def personal_background_color_update(
+    request,
+    identity_id,
+):
+    personal_account, error_response = (
+        get_authenticated_personal_account(
+            request,
+            identity_id,
+        )
+    )
+
+    if error_response is not None:
+        return error_response
+
+    try:
+        data = json.loads(
+            request.body or "{}"
+        )
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {
+                "detail": "Invalid JSON."
+            },
+            status=400,
+        )
+
+    background_color = data.get(
+        "background_color"
+    )
+
+    if not background_color:
+        return JsonResponse(
+            {
+                "detail":
+                "background_color is required."
+            },
+            status=400,
+        )
+
+    if not isinstance(
+        background_color,
+        str,
+    ):
+        return JsonResponse(
+            {
+                "detail":
+                "background_color must be a string."
+            },
+            status=400,
+        )
+
+    if not background_color.startswith("#"):
+        return JsonResponse(
+            {
+                "detail":
+                "background_color must be a valid hex color."
+            },
+            status=400,
+        )
+
+    if len(background_color) not in (
+        4,
+        7,
+    ):
+        return JsonResponse(
+            {
+                "detail":
+                "background_color must be a valid hex color."
+            },
+            status=400,
+        )
+
+    hex_value = background_color[1:]
+
+    if not all(
+        character in "0123456789abcdefABCDEF"
+        for character in hex_value
+    ):
+        return JsonResponse(
+            {
+                "detail":
+                "background_color must be a valid hex color."
+            },
+            status=400,
+        )
+
+    personal_account.background_color = (
+        background_color.upper()
+    )
+
+    personal_account.save(
+        update_fields=[
+            "background_color",
+            "updated_at",
+        ]
+    )
+
+    return JsonResponse(
+        {
+            "id": personal_account.id,
+            "identity_id":
+            personal_account.identity_id,
+            "background_color":
+            personal_account.background_color,
+        }
+    )
+
+@csrf_exempt
+@require_http_methods(["PATCH"])
+@require_authentication
+def personal_tab_colors_update(
+    request,
+    identity_id,
+):
+    personal_account, error_response = (
+        get_authenticated_personal_account(
+            request,
+            identity_id,
+        )
+    )
+
+    if error_response is not None:
+        return error_response
+
+    try:
+        data = json.loads(
+            request.body or "{}"
+        )
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {
+                "detail": "Invalid JSON."
+            },
+            status=400,
+        )
+
+    tab_colors = data.get(
+        "tab_colors"
+    )
+
+    if tab_colors is None:
+        return JsonResponse(
+            {
+                "detail":
+                "tab_colors is required."
+            },
+            status=400,
+        )
+
+    if not isinstance(
+        tab_colors,
+        dict,
+    ):
+        return JsonResponse(
+            {
+                "detail":
+                "tab_colors must be an object."
+            },
+            status=400,
+        )
+
+    personal_account.tab_colors = tab_colors
+
+    personal_account.save(
+        update_fields=[
+            "tab_colors",
+            "updated_at",
+        ]
+    )
+
+    return JsonResponse(
+        {
+            "id": personal_account.id,
+            "identity_id":
+            personal_account.identity_id,
+            "tab_colors":
+            personal_account.tab_colors,
+        }
+    )
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 @require_authentication
@@ -767,6 +964,158 @@ def personal_account_photos_update(request, identity_id):
         serialize_personal_account(personal_account)
     )
 
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@require_authentication
+def personal_background_image_update(
+    request,
+    identity_id,
+):
+    personal_account, error_response = (
+        get_authenticated_personal_account(
+            request,
+            identity_id,
+        )
+    )
+
+    if error_response is not None:
+        return error_response
+
+    if "background_image" not in request.FILES:
+        return JsonResponse(
+            {
+                "detail":
+                "background_image is required."
+            },
+            status=400,
+        )
+
+    old_background_image = None
+
+    try:
+        processed_background_image = process_image(
+            request.FILES["background_image"],
+            preset="cover",
+        )
+    except ValueError as error:
+        return JsonResponse(
+            {
+                "detail": str(error)
+            },
+            status=400,
+        )
+
+    if personal_account.background_image:
+        old_background_image = (
+            personal_account.background_image.name
+        )
+
+    personal_account.background_image = (
+        processed_background_image
+    )
+
+    personal_account.save()
+
+    if old_background_image:
+        personal_account.background_image.storage.delete(
+            old_background_image
+        )
+
+    return JsonResponse(
+        serialize_personal_account(
+            personal_account
+        )
+    )
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@require_authentication
+def professional_background_image_update(
+    request,
+    identity_id,
+):
+    if not is_owner(
+        request.authenticated_identity,
+        identity_id,
+    ):
+        return permission_denied(
+            "You do not have permission to update "
+            "this professional account background image."
+        )
+
+    try:
+        identity = UserIdentity.objects.get(
+            id=identity_id
+        )
+
+        professional_account = (
+            identity.professional_account
+        )
+
+    except UserIdentity.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail": "Identity not found."
+            },
+            status=404,
+        )
+
+    except ProfessionalAccount.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Professional account not found."
+            },
+            status=404,
+        )
+
+    if "background_image" not in request.FILES:
+        return JsonResponse(
+            {
+                "detail":
+                "background_image is required."
+            },
+            status=400,
+        )
+
+    old_background_image = None
+
+    try:
+        processed_background_image = process_image(
+            request.FILES["background_image"],
+            preset="cover",
+        )
+    except ValueError as error:
+        return JsonResponse(
+            {
+                "detail": str(error)
+            },
+            status=400,
+        )
+
+    if professional_account.background_image:
+        old_background_image = (
+            professional_account.background_image.name
+        )
+
+    professional_account.background_image = (
+        processed_background_image
+    )
+
+    professional_account.save()
+
+    if old_background_image:
+        professional_account.background_image.storage.delete(
+            old_background_image
+        )
+
+    return JsonResponse(
+        serialize_professional_account(
+            professional_account
+        )
+    )
+
 def serialize_professional_account(professional_account):
     return {
         "id": professional_account.id,
@@ -778,6 +1127,11 @@ def serialize_professional_account(professional_account):
         "focus_job_area": professional_account.focus_job_area,
         "future_goal": professional_account.future_goal,
         "background_color": professional_account.background_color,
+        "background_image": (
+            professional_account.background_image.url
+            if professional_account.background_image
+            else None
+        ),
         "tab_colors": professional_account.tab_colors,
         "is_active": professional_account.is_active,
         "created_at": professional_account.created_at.isoformat(),
@@ -896,6 +1250,243 @@ def professional_account_detail(request, identity_id):
         serialize_professional_account(
             professional_account
         )
+    )
+
+
+@csrf_exempt
+@require_http_methods(["PATCH"])
+@require_authentication
+def professional_background_color_update(
+    request,
+    identity_id,
+):
+    if not is_owner(
+        request.authenticated_identity,
+        identity_id,
+    ):
+        return permission_denied(
+            "You do not have permission to update "
+            "this professional account background color."
+        )
+
+    try:
+        identity = UserIdentity.objects.get(
+            id=identity_id
+        )
+
+        professional_account = (
+            identity.professional_account
+        )
+
+    except UserIdentity.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail": "Identity not found."
+            },
+            status=404,
+        )
+
+    except ProfessionalAccount.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Professional account not found."
+            },
+            status=404,
+        )
+
+    try:
+        data = json.loads(
+            request.body or "{}"
+        )
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {
+                "detail": "Invalid JSON."
+            },
+            status=400,
+        )
+
+    background_color = data.get(
+        "background_color"
+    )
+
+    if not background_color:
+        return JsonResponse(
+            {
+                "detail":
+                "background_color is required."
+            },
+            status=400,
+        )
+
+    if not isinstance(
+        background_color,
+        str,
+    ):
+        return JsonResponse(
+            {
+                "detail":
+                "background_color must be a string."
+            },
+            status=400,
+        )
+
+    if not background_color.startswith("#"):
+        return JsonResponse(
+            {
+                "detail":
+                "background_color must be a valid hex color."
+            },
+            status=400,
+        )
+
+    if len(background_color) not in (
+        4,
+        7,
+    ):
+        return JsonResponse(
+            {
+                "detail":
+                "background_color must be a valid hex color."
+            },
+            status=400,
+        )
+
+    hex_value = background_color[1:]
+
+    if not all(
+        character in "0123456789abcdefABCDEF"
+        for character in hex_value
+    ):
+        return JsonResponse(
+            {
+                "detail":
+                "background_color must be a valid hex color."
+            },
+            status=400,
+        )
+
+    professional_account.background_color = (
+        background_color.upper()
+    )
+
+    professional_account.save(
+        update_fields=[
+            "background_color",
+            "updated_at",
+        ]
+    )
+
+    return JsonResponse(
+        {
+            "id": professional_account.id,
+            "identity_id":
+            professional_account.identity_id,
+            "background_color":
+            professional_account.background_color,
+        }
+    )
+
+
+@csrf_exempt
+@require_http_methods(["PATCH"])
+@require_authentication
+def professional_tab_colors_update(
+    request,
+    identity_id,
+):
+    if not is_owner(
+        request.authenticated_identity,
+        identity_id,
+    ):
+        return permission_denied(
+            "You do not have permission to update "
+            "this professional account tab colors."
+        )
+
+    try:
+        identity = UserIdentity.objects.get(
+            id=identity_id
+        )
+
+        professional_account = (
+            identity.professional_account
+        )
+
+    except UserIdentity.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail": "Identity not found."
+            },
+            status=404,
+        )
+
+    except ProfessionalAccount.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Professional account not found."
+            },
+            status=404,
+        )
+
+    try:
+        data = json.loads(
+            request.body or "{}"
+        )
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {
+                "detail": "Invalid JSON."
+            },
+            status=400,
+        )
+
+    tab_colors = data.get(
+        "tab_colors"
+    )
+
+    if tab_colors is None:
+        return JsonResponse(
+            {
+                "detail":
+                "tab_colors is required."
+            },
+            status=400,
+        )
+
+    if not isinstance(
+        tab_colors,
+        dict,
+    ):
+        return JsonResponse(
+            {
+                "detail":
+                "tab_colors must be an object."
+            },
+            status=400,
+        )
+
+    professional_account.tab_colors = (
+        tab_colors
+    )
+
+    professional_account.save(
+        update_fields=[
+            "tab_colors",
+            "updated_at",
+        ]
+    )
+
+    return JsonResponse(
+        {
+            "id": professional_account.id,
+            "identity_id":
+            professional_account.identity_id,
+            "tab_colors":
+            professional_account.tab_colors,
+        }
     )
 
 

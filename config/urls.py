@@ -6,21 +6,30 @@ from django.conf.urls.static import static
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+
     path(
         "api/categories/",
         include("category_engine.urls"),
     ),
+
     path(
         "api/organizations/",
-        include("companies.urls")
+        include("companies.urls"),
     ),
+
     path(
         "api/identity/",
         include("identity.urls"),
     ),
+
     path(
         "api/homepage/",
         include("homepage.urls"),
+    ),
+
+    path(
+        "api/jobs/",
+        include("jobs.urls"),
     ),
 ]
 
