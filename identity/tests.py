@@ -923,6 +923,146 @@ class PersonalHobbyTests(TestCase):
                 hobby=self.hobby,
             )
 
+    def test_hobby_add_requires_authentication(self):
+        response = self.client.post(
+            f"/api/identity/{self.personal_account.id}/"
+            f"hobbies/add/",
+            data=json.dumps(
+                {
+                    "hobby_id": self.hobby.id,
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            401,
+        )
+
+    def test_other_user_cannot_add_hobby(self):
+        other_identity = UserIdentity.objects.create(
+            email="other-hobby-add@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.post(
+            f"/api/identity/{self.personal_account.id}/hobbies/add/",
+            data=json.dumps(
+                {
+                    "hobby_id": self.hobby.id,
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )
+
+    def test_owner_can_add_hobby(self):
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        response = self.client.post(
+            f"/api/identity/{self.personal_account.id}/hobbies/add/",
+            data=json.dumps(
+                {
+                    "hobby_id": self.hobby.id,
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            201,
+        )
+
+    def test_hobby_remove_requires_authentication(self):
+        PersonalHobby.objects.create(
+            personal_account=self.personal_account,
+            hobby=self.hobby,
+        )
+
+        response = self.client.delete(
+            f"/api/identity/{self.personal_account.id}/"
+            f"hobbies/{self.hobby.id}/remove/",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            401,
+        )
+
+    def test_other_user_cannot_remove_hobby(self):
+        PersonalHobby.objects.create(
+            personal_account=self.personal_account,
+            hobby=self.hobby,
+        )
+
+        other_identity = UserIdentity.objects.create(
+            email="other-hobby-remove@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.delete(
+            f"/api/identity/{self.personal_account.id}/"
+            f"hobbies/{self.hobby.id}/remove/",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )
+
+    def test_owner_can_remove_hobby(self):
+        PersonalHobby.objects.create(
+            personal_account=self.personal_account,
+            hobby=self.hobby,
+        )
+
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        response = self.client.delete(
+            f"/api/identity/{self.personal_account.id}/"
+            f"hobbies/{self.hobby.id}/remove/",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.assertFalse(
+            PersonalHobby.objects.filter(
+                personal_account=self.personal_account,
+                hobby=self.hobby,
+            ).exists()
+        )            
+
 
 class AcademicBackgroundTests(TestCase):
     def setUp(self):
