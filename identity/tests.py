@@ -1314,6 +1314,31 @@ class JobExperienceAPITests(TestCase):
             "Software Engineer",
         )
 
+    def test_job_experience_update_requires_authentication(
+        self,
+    ):
+        experience = JobExperience.objects.create(
+            professional_account=self.professional_account,
+            company="ABC Technologies",
+            job_title="Software Engineer",
+        )
+
+        response = self.client.patch(
+            f"/api/identity/job-experiences/"
+            f"{experience.id}/update/",
+            data=json.dumps(
+                {
+                    "job_title": "Unauthorized Update",
+                }
+            ),
+            content_type="application/json",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            401,
+        )        
+
     def test_other_user_cannot_update_job_experience(
         self,
     ):
@@ -1393,6 +1418,25 @@ class JobExperienceAPITests(TestCase):
             experience.company,
             "XYZ Solutions",
         )    
+
+    def test_job_experience_delete_requires_authentication(
+        self,
+    ):
+        experience = JobExperience.objects.create(
+            professional_account=self.professional_account,
+            company="ABC Technologies",
+            job_title="Software Engineer",
+        )
+
+        response = self.client.delete(
+            f"/api/identity/job-experiences/"
+            f"{experience.id}/delete/",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            401,
+        )        
 
     def test_other_user_cannot_delete_job_experience(
         self,
