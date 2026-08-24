@@ -818,7 +818,9 @@ class PersonalInterestedCategoryTests(TestCase):
         )
 
 
-    def test_interested_category_add_api(self):
+    def test_interested_category_add_requires_authentication(
+        self,
+    ):
         response = self.client.post(
             f"/api/identity/{self.personal_account.id}/"
             "interested-categories/add/",
@@ -832,15 +834,85 @@ class PersonalInterestedCategoryTests(TestCase):
 
         self.assertEqual(
             response.status_code,
-            201,
+            401,
         )
 
-        self.assertTrue(
-            PersonalInterestedCategory.objects.filter(
-                personal_account=self.personal_account,
-                category=self.category,
-            ).exists()
+    def test_other_user_cannot_add_interested_category(
+        self,
+    ):
+        other_identity = UserIdentity.objects.create(
+            email="other-interested-add@example.com",
         )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.post(
+            f"/api/identity/{self.personal_account.id}/"
+            "interested-categories/add/",
+            data=json.dumps(
+                {
+                    "category_id": self.category.id,
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )
+
+    def test_interested_category_remove_requires_authentication(
+        self,
+    ):
+        PersonalInterestedCategory.objects.create(
+            personal_account=self.personal_account,
+            category=self.category,
+        )
+
+        response = self.client.delete(
+            f"/api/identity/{self.personal_account.id}/"
+            f"interested-categories/{self.category.id}/remove/",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            401,
+        )  
+
+    def test_other_user_cannot_remove_interested_category(
+        self,
+    ):
+        PersonalInterestedCategory.objects.create(
+            personal_account=self.personal_account,
+            category=self.category,
+        )
+
+        other_identity = UserIdentity.objects.create(
+            email="other-interested-remove@example.com",
+        )
+
+        refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.delete(
+            f"/api/identity/{self.personal_account.id}/"
+            f"interested-categories/{self.category.id}/remove/",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            403,
+        )              
 
 
     def test_interested_category_remove_api(self):
@@ -849,9 +921,16 @@ class PersonalInterestedCategoryTests(TestCase):
             category=self.category,
         )
 
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
         response = self.client.delete(
             f"/api/identity/{self.personal_account.id}/"
-            f"interested-categories/{self.category.id}/remove/"
+            f"interested-categories/{self.category.id}/remove/",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
         )
 
         self.assertEqual(
@@ -864,8 +943,7 @@ class PersonalInterestedCategoryTests(TestCase):
                 personal_account=self.personal_account,
                 category=self.category,
             ).exists()
-        )            
-
+        )
 
 class PersonalHobbyTests(TestCase):
     def setUp(self):
