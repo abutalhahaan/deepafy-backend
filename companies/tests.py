@@ -7,17 +7,17 @@ from .models import (
     AdministrativeRole,
     Country,
     CountryDepartment,
-    Organization,
-    OrganizationRelationship,
+    Company,
+    CompanyRelationship,
     Region,
 )
 
 
-class OrganizationModelTests(TestCase):
+class CompanyModelTests(TestCase):
     def setUp(self):
-        self.organization = Organization.objects.create(
-            name="Test Organization",
-            organization_type="manufacturer",
+        self.organization = Company.objects.create(
+            name="Test Company",
+            company_type="manufacturer",
             country="Bangladesh",
             business_email="test@example.com",
             business_mobile_number="01700000000",
@@ -28,10 +28,10 @@ class OrganizationModelTests(TestCase):
     def test_organization_creation(self):
         self.assertEqual(
             self.organization.name,
-            "Test Organization",
+            "Test Company",
         )
         self.assertEqual(
-            self.organization.organization_type,
+            self.organization.company_type,
             "manufacturer",
         )
         self.assertEqual(
@@ -41,21 +41,21 @@ class OrganizationModelTests(TestCase):
 
     def test_organization_uuid_created(self):
         self.assertIsNotNone(
-            self.organization.organization_id,
+            self.organization.company_id,
         )
 
     def test_organization_string(self):
         self.assertEqual(
             str(self.organization),
-            "Test Organization",
+            "Test Company",
         )
 
 
-class OrganizationRelationshipTests(TestCase):
+class CompanyRelationshipTests(TestCase):
     def setUp(self):
-        self.organization = Organization.objects.create(
-            name="Test Organization",
-            organization_type="manufacturer",
+        self.organization = Company.objects.create(
+            name="Test Company",
+            company_type="manufacturer",
             country="Bangladesh",
             business_email="test@example.com",
             business_mobile_number="01700000000",
@@ -69,19 +69,19 @@ class OrganizationRelationshipTests(TestCase):
         )
 
     def test_relationship_creation(self):
-        relationship = OrganizationRelationship.objects.create(
-            organization=self.organization,
+        relationship = CompanyRelationship.objects.create(
+            company=self.organization,
             identity=self.identity,
             relationship_type=(
-                OrganizationRelationship.RelationshipType.EMPLOYEE
+                CompanyRelationship.RelationshipType.EMPLOYEE
             ),
             membership_status=(
-                OrganizationRelationship.MembershipStatus.ACTIVE
+                CompanyRelationship.MembershipStatus.ACTIVE
             ),
         )
 
         self.assertEqual(
-            relationship.organization,
+            relationship.company,
             self.organization,
         )
         self.assertEqual(

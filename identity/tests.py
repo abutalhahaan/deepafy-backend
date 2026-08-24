@@ -382,6 +382,87 @@ class PersonalAccountAPITests(TestCase):
             new_identity.id,
         )
 
+    def test_owner_can_update_personal_background_color(
+        self,
+    ):
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        response = self.client.patch(
+            f"/api/identity/"
+            f"{self.identity.id}/"
+            "personal-account/background-color/",
+            data=json.dumps(
+                {
+                    "background_color": "#0A66C2",
+                }
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.assertEqual(
+            response.json()["background_color"],
+            "#0A66C2",
+        )    
+
+    def test_owner_can_update_personal_background_image(
+        self,
+    ):
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        image_file = io.BytesIO()
+
+        image = Image.new(
+            "RGB",
+            (1200, 400),
+            "white",
+        )
+
+        image.save(
+            image_file,
+            format="JPEG",
+        )
+
+        image_file.seek(0)
+
+        uploaded_image = SimpleUploadedFile(
+            "background.jpg",
+            image_file.getvalue(),
+            content_type="image/jpeg",
+        )
+
+        response = self.client.post(
+            f"/api/identity/"
+            f"{self.identity.id}/"
+            "personal-account/background-image/",
+            data={
+                "background_image": uploaded_image,
+            },
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.assertIsNotNone(
+            response.json()["background_image"]
+        )            
+
 class PersonalLanguageTests(TestCase):
     def setUp(self):
         self.identity = UserIdentity.objects.create(

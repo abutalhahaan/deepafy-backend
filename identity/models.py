@@ -327,6 +327,22 @@ class PersonalAccount(models.Model):
         related_name="personal_nationalities",
     )
 
+    background_color = models.CharField(
+        max_length=20,
+        default="#FFFFFF",
+    )
+
+    background_image = models.ImageField(
+        upload_to="personal_backgrounds/",
+        null=True,
+        blank=True,
+    )
+
+    tab_colors = models.JSONField(
+        default=dict,
+        blank=True,
+    )
+
     is_active = models.BooleanField(
         default=True,
     )
@@ -496,6 +512,12 @@ class ProfessionalAccount(models.Model):
     background_color = models.CharField(
         max_length=20,
         default="#FFFFFF",
+    )
+
+    background_image = models.ImageField(
+        upload_to="professional_backgrounds/",
+        null=True,
+        blank=True,
     )
 
     tab_colors = models.JSONField(

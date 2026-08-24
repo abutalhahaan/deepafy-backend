@@ -19,7 +19,7 @@ class HomepageAPITests(APITestCase):
         )
 
         HomepageSection.objects.create(
-            section_type=HomepageSection.SectionType.RECENT_NEEDAFY,
+            section_type=HomepageSection.SectionType.POSTED_REQUIREMENTS,
             title="Hidden Section",
             display_order=2,
             is_visible=False,
