@@ -268,7 +268,7 @@ urlpatterns = [
         name="personal-hobby-add",
     ),
     path(
-        "<int:personal_account_id>/hobbies/<int:hobby_id>/remove/",
+        "<int:personal_account_id>/hobbies/<int:personal_hobby_id>/remove/",
         views.personal_hobby_remove,
         name="personal-hobby-remove",
     ),

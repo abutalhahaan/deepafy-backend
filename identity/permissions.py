@@ -6,16 +6,35 @@ from rest_framework_simplejwt.authentication import (
     JWTAuthentication,
 )
 
+from .models import PersonalAccount
+
 
 def get_authenticated_identity(request):
     jwt_authentication = JWTAuthentication()
+
+    print(
+        "AUTHORIZATION HEADER:",
+        request.headers.get("Authorization")
+    )
 
     try:
         authenticated_user = (
             jwt_authentication.authenticate(request)
         )
-    except Exception:
+
+    except Exception as error:
+
+        print(
+            "JWT AUTHENTICATION ERROR:",
+            repr(error)
+        )
+
         return None
+
+    print(
+        "AUTHENTICATED USER:",
+        authenticated_user
+    )
 
     if authenticated_user is None:
         return None
@@ -23,6 +42,120 @@ def get_authenticated_identity(request):
     user, _token = authenticated_user
 
     return user
+
+
+def get_authenticated_personal_account(
+    request,
+    identity_id,
+):
+    authenticated_identity = (
+        get_authenticated_identity(
+            request
+        )
+    )
+
+    if authenticated_identity is None:
+        return (
+            None,
+            JsonResponse(
+                {
+                    "detail":
+                        "Authentication credentials were not provided."
+                },
+                status=401,
+            ),
+        )
+
+    if authenticated_identity.id != identity_id:
+        return (
+            None,
+            JsonResponse(
+                {
+                    "detail":
+                        "You do not have permission to modify this account."
+                },
+                status=403,
+            ),
+        )
+
+    try:
+        personal_account = (
+            authenticated_identity.personal_account
+        )
+
+    except Exception:
+        return (
+            None,
+            JsonResponse(
+                {
+                    "detail":
+                        "Personal account not found."
+                },
+                status=404,
+            ),
+        )
+
+    return (
+        personal_account,
+        None,
+    )
+
+def get_authenticated_personal_account_by_id(
+    request,
+    personal_account_id,
+):
+    authenticated_identity = (
+        get_authenticated_identity(
+            request
+        )
+    )
+
+    if authenticated_identity is None:
+        return (
+            None,
+            JsonResponse(
+                {
+                    "detail":
+                        "Authentication credentials were not provided."
+                },
+                status=401,
+            ),
+        )
+
+    try:
+        personal_account = (
+            PersonalAccount.objects.get(
+                id=personal_account_id
+            )
+        )
+    except PersonalAccount.DoesNotExist:
+        return (
+            None,
+            JsonResponse(
+                {
+                    "detail":
+                        "Personal account not found."
+                },
+                status=404,
+            ),
+        )
+
+    if personal_account.identity_id != authenticated_identity.id:
+        return (
+            None,
+            JsonResponse(
+                {
+                    "detail":
+                        "You do not have permission to modify this account."
+                },
+                status=403,
+            ),
+        )
+
+    return (
+        personal_account,
+        None,
+    )
 
 
 def require_authentication(view_func):
