@@ -17,10 +17,17 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from category_engine.models import Category
 
 from .permissions import (
+
     get_authenticated_identity,
+
+    get_authenticated_personal_account,
+
     is_owner,
+
     permission_denied,
+
     require_authentication,
+
 )
 
 from .models import (
@@ -91,6 +98,67 @@ def get_authenticated_personal_account(
         )
 
     return personal_account, None
+
+def get_authenticated_personal_account_by_id(
+    request,
+    personal_account_id,
+):
+    authenticated_identity = (
+        get_authenticated_identity(
+            request
+        )
+    )
+
+    if authenticated_identity is None:
+        return (
+            None,
+            JsonResponse(
+                {
+                    "detail":
+                        "Authentication credentials were not provided."
+                },
+                status=401,
+            ),
+        )
+
+    try:
+        personal_account = (
+            PersonalAccount.objects.get(
+                id=personal_account_id
+            )
+        )
+
+    except PersonalAccount.DoesNotExist:
+        return (
+            None,
+            JsonResponse(
+                {
+                    "detail":
+                        "Personal account not found."
+                },
+                status=404,
+            ),
+        )
+
+    if (
+        personal_account.identity_id
+        != authenticated_identity.id
+    ):
+        return (
+            None,
+            JsonResponse(
+                {
+                    "detail":
+                        "You do not have permission to modify this account."
+                },
+                status=403,
+            ),
+        )
+
+    return (
+        personal_account,
+        None,
+    )
 
 def serialize_identity(identity):
     return {
@@ -579,14 +647,38 @@ def personal_account_create(request):
 
 
 @require_http_methods(["GET"])
+@require_authentication
 def personal_account_detail(request, identity_id):
-    try:
-        personal_account = PersonalAccount.objects.get(
-            identity_id=identity_id
-        )
-    except PersonalAccount.DoesNotExist:
+
+    authenticated_identity = (
+        request.authenticated_identity
+    )
+
+    if authenticated_identity.id != identity_id:
+
         return JsonResponse(
-            {"detail": "Personal account not found."},
+            {
+                "detail":
+                    "You do not have permission to view this account."
+            },
+            status=403,
+        )
+
+    try:
+
+        personal_account = (
+            PersonalAccount.objects.get(
+                identity_id=authenticated_identity.id
+            )
+        )
+
+    except PersonalAccount.DoesNotExist:
+
+        return JsonResponse(
+            {
+                "detail":
+                    "Personal account not found."
+            },
             status=404,
         )
 
@@ -3595,19 +3687,27 @@ def hobby_reorder(request):
         }
     )
 
-def serialize_personal_hobby(personal_hobby):
+def serialize_personal_hobby(
+    personal_hobby
+):
+
     return {
         "id": personal_hobby.id,
+
         "personal_account_id": (
             personal_hobby.personal_account_id
         ),
-        "hobby": serialize_hobby(
-            personal_hobby.hobby
+
+        "name": personal_hobby.name,
+
+        "is_active": (
+            personal_hobby.is_active
         ),
-        "is_active": personal_hobby.is_active,
+
         "created_at": (
             personal_hobby.created_at.isoformat()
         ),
+
         "updated_at": (
             personal_hobby.updated_at.isoformat()
         ),
@@ -3647,9 +3747,13 @@ def serialize_personal_interested_category(
 
 @csrf_exempt
 @require_http_methods(["POST"])
-def personal_hobby_add(request, personal_account_id):
+def personal_hobby_add(
+    request,
+    personal_account_id,
+):
+
     personal_account, error_response = (
-        get_authenticated_personal_account(
+        get_authenticated_personal_account_by_id(
             request,
             personal_account_id,
         )
@@ -3658,52 +3762,54 @@ def personal_hobby_add(request, personal_account_id):
     if error_response is not None:
         return error_response
 
+
     try:
+
         data = json.loads(
             request.body or "{}"
         )
+
     except json.JSONDecodeError:
-        return JsonResponse(
-            {"detail": "Invalid JSON."},
-            status=400,
-        )
 
-    hobby_id = data.get("hobby_id")
-
-    if not hobby_id:
         return JsonResponse(
             {
                 "detail":
-                "hobby_id is required."
+                "Invalid JSON."
             },
             status=400,
         )
 
-    try:
-        hobby = Hobby.objects.get(
-            id=hobby_id,
-            is_active=True,
-        )
-    except Hobby.DoesNotExist:
+
+    name = data.get(
+        "name",
+        "",
+    ).strip()
+
+
+    if not name:
+
         return JsonResponse(
             {
                 "detail":
-                "Active hobby not found."
+                "Hobby name is required."
             },
-            status=404,
+            status=400,
         )
+
 
     personal_hobby, created = (
         PersonalHobby.objects.get_or_create(
             personal_account=personal_account,
-            hobby=hobby,
+            name=name,
             defaults={
                 "is_active": True,
             },
         )
     )
 
+
     if not created:
+
         return JsonResponse(
             {
                 "detail":
@@ -3712,6 +3818,7 @@ def personal_hobby_add(request, personal_account_id):
             },
             status=400,
         )
+
 
     return JsonResponse(
         serialize_personal_hobby(
@@ -3722,12 +3829,21 @@ def personal_hobby_add(request, personal_account_id):
 
 
 @require_http_methods(["GET"])
-def personal_hobby_list(request, personal_account_id):
+def personal_hobby_list(
+    request,
+    personal_account_id,
+):
+
     try:
-        personal_account = PersonalAccount.objects.get(
-            id=personal_account_id
+
+        personal_account = (
+            PersonalAccount.objects.get(
+                id=personal_account_id
+            )
         )
+
     except PersonalAccount.DoesNotExist:
+
         return JsonResponse(
             {
                 "detail":
@@ -3736,62 +3852,141 @@ def personal_hobby_list(request, personal_account_id):
             status=404,
         )
 
+
     personal_hobbies = (
         PersonalHobby.objects
         .filter(
             personal_account=personal_account,
             is_active=True,
-            hobby__is_active=True,
         )
-        .select_related("hobby")
         .order_by(
-            "hobby__display_order",
-            "hobby__name",
+            "created_at"
         )
     )
 
+
     results = [
+
         serialize_personal_hobby(
             personal_hobby
         )
-        for personal_hobby in personal_hobbies
+
+        for personal_hobby
+        in personal_hobbies
+
     ]
+
 
     return JsonResponse(
         {
             "personal_account_id":
             personal_account.id,
-            "count": len(results),
-            "results": results,
+
+            "count":
+            len(results),
+
+            "results":
+            results,
+        }
+    )
+
+
+@require_http_methods(["GET"])
+def personal_hobby_list(
+    request,
+    personal_account_id,
+):
+
+    try:
+
+        personal_account = (
+            PersonalAccount.objects.get(
+                id=personal_account_id
+            )
+        )
+
+    except PersonalAccount.DoesNotExist:
+
+        return JsonResponse(
+            {
+                "detail":
+                "Personal account not found."
+            },
+            status=404,
+        )
+
+
+    personal_hobbies = (
+        PersonalHobby.objects
+        .filter(
+            personal_account=personal_account,
+            is_active=True,
+        )
+        .order_by(
+            "created_at"
+        )
+    )
+
+
+    results = [
+
+        serialize_personal_hobby(
+            personal_hobby
+        )
+
+        for personal_hobby
+        in personal_hobbies
+
+    ]
+
+
+    return JsonResponse(
+        {
+            "personal_account_id":
+            personal_account.id,
+
+            "count":
+            len(results),
+
+            "results":
+            results,
         }
     )
 
 
 @csrf_exempt
-@require_http_methods(["DELETE"])
+@require_http_methods(
+    ["DELETE"]
+)
 def personal_hobby_remove(
     request,
     personal_account_id,
-    hobby_id,
+    personal_hobby_id,
 ):
+
     personal_account, error_response = (
-        get_authenticated_personal_account(
+        get_authenticated_personal_account_by_id(
             request,
             personal_account_id,
         )
     )
 
     if error_response is not None:
+
         return error_response
 
+
     try:
+
         personal_hobby = (
             PersonalHobby.objects.get(
+                id=personal_hobby_id,
                 personal_account=personal_account,
-                hobby_id=hobby_id,
             )
         )
+
     except PersonalHobby.DoesNotExist:
+
         return JsonResponse(
             {
                 "detail":
@@ -3800,7 +3995,9 @@ def personal_hobby_remove(
             status=404,
         )
 
+
     personal_hobby.delete()
+
 
     return JsonResponse(
         {
@@ -3810,83 +4007,6 @@ def personal_hobby_remove(
         status=200,
     )
 
-@csrf_exempt
-@require_http_methods(["POST"])
-def personal_interested_category_add(
-    request,
-    personal_account_id,
-):
-    personal_account, error_response = (
-        get_authenticated_personal_account(
-            request,
-            personal_account_id,
-        )
-    )
-
-    if error_response is not None:
-        return error_response
-
-    try:
-        data = json.loads(
-            request.body or "{}"
-        )
-    except json.JSONDecodeError:
-        return JsonResponse(
-            {"detail": "Invalid JSON."},
-            status=400,
-        )
-
-    category_id = data.get("category_id")
-
-    if not category_id:
-        return JsonResponse(
-            {
-                "detail":
-                "category_id is required."
-            },
-            status=400,
-        )
-
-    try:
-        category = Category.objects.get(
-            id=category_id,
-            visibility=Category.VISIBILITY_PUBLIC,
-        )
-    except Category.DoesNotExist:
-        return JsonResponse(
-            {
-                "detail":
-                "Public category not found."
-            },
-            status=404,
-        )
-
-    personal_interested_category, created = (
-        PersonalInterestedCategory.objects.get_or_create(
-            personal_account=personal_account,
-            category=category,
-            defaults={
-                "is_active": True,
-            },
-        )
-    )
-
-    if not created:
-        return JsonResponse(
-            {
-                "detail":
-                "This category is already added "
-                "to the personal account."
-            },
-            status=400,
-        )
-
-    return JsonResponse(
-        serialize_personal_interested_category(
-            personal_interested_category
-        ),
-        status=201,
-    )
 
 @require_http_methods(["GET"])
 def personal_interested_category_list(
@@ -3935,6 +4055,108 @@ def personal_interested_category_list(
             "count": len(results),
             "results": results,
         }
+    )
+
+@csrf_exempt
+@require_http_methods(
+    ["POST"]
+)
+def personal_interested_category_add(
+    request,
+    personal_account_id,
+):
+
+    personal_account, error_response = (
+        get_authenticated_personal_account(
+            request,
+            personal_account_id,
+        )
+    )
+
+    if error_response is not None:
+
+        return error_response
+
+
+    try:
+
+        data = json.loads(
+            request.body or "{}"
+        )
+
+    except json.JSONDecodeError:
+
+        return JsonResponse(
+            {
+                "detail":
+                "Invalid JSON."
+            },
+            status=400,
+        )
+
+
+    category_id = data.get(
+        "category_id"
+    )
+
+
+    if not category_id:
+
+        return JsonResponse(
+            {
+                "detail":
+                "Category ID is required."
+            },
+            status=400,
+        )
+
+
+    try:
+
+        category = Category.objects.get(
+            id=category_id,
+            visibility=Category.VISIBILITY_PUBLIC,
+        )
+
+    except Category.DoesNotExist:
+
+        return JsonResponse(
+            {
+                "detail":
+                "Category not found."
+            },
+            status=404,
+        )
+
+
+    personal_interested_category, created = (
+        PersonalInterestedCategory.objects.get_or_create(
+            personal_account=personal_account,
+            category=category,
+            defaults={
+                "is_active": True,
+            },
+        )
+    )
+
+
+    if not created:
+
+        return JsonResponse(
+            {
+                "detail":
+                "This category is already added "
+                "to the personal account."
+            },
+            status=400,
+        )
+
+
+    return JsonResponse(
+        serialize_personal_interested_category(
+            personal_interested_category
+        ),
+        status=201,
     )
 
 @csrf_exempt

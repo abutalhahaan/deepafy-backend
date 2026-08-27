@@ -434,18 +434,17 @@ class Hobby(models.Model):
 
 
 class PersonalHobby(models.Model):
+
     personal_account = models.ForeignKey(
         PersonalAccount,
         on_delete=models.CASCADE,
         related_name="hobbies",
     )
 
-    hobby = models.ForeignKey(
-        Hobby,
-        on_delete=models.PROTECT,
+    name = models.CharField(
+        max_length=100,
         null=True,
         blank=True,
-        related_name="personal_selections",
     )
 
     is_active = models.BooleanField(
@@ -460,19 +459,29 @@ class PersonalHobby(models.Model):
         auto_now=True,
     )
 
+
     class Meta:
+
         constraints = [
             models.UniqueConstraint(
-                fields=["personal_account", "hobby"],
-                name="unique_personal_hobby",
+                fields=[
+                    "personal_account",
+                    "name",
+                ],
+                name="unique_personal_hobby_name",
             )
         ]
-        ordering = ["hobby__display_order", "hobby__name"]
+
+        ordering = [
+            "created_at",
+        ]
+
 
     def __str__(self):
+
         return (
             f"{self.personal_account.identity.user_id} - "
-            f"{self.hobby.name}"
+            f"{self.name}"
         )
 
 class ProfessionalAccount(models.Model):

@@ -1,15 +1,23 @@
 from rest_framework import serializers
 from django.db import transaction
-
 from .models import (
+
     AcademicBackground,
+
     AccountType,
+
     Hobby,
+
     JobExperience,
+
     PersonalAccount,
+
     PersonalHobby,
+
     PersonalInterestedCategory,
+
     ProfessionalAccount,
+
     UserIdentity,
 )
 
@@ -108,26 +116,24 @@ class HobbySerializer(serializers.ModelSerializer):
             "updated_at",
         ]
 
-
-class PersonalHobbySerializer(serializers.ModelSerializer):
-    hobby_name = serializers.CharField(
-        source="hobby.name",
-        read_only=True,
-    )
+class PersonalHobbySerializer(
+    serializers.ModelSerializer
+):
 
     class Meta:
+
         model = PersonalHobby
+
         fields = [
             "id",
-            "hobby",
-            "hobby_name",
+            "name",
             "is_active",
             "created_at",
             "updated_at",
         ]
+
         read_only_fields = [
             "id",
-            "hobby_name",
             "created_at",
             "updated_at",
         ]
