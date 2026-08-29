@@ -4067,7 +4067,7 @@ def personal_interested_category_add(
 ):
 
     personal_account, error_response = (
-        get_authenticated_personal_account(
+        get_authenticated_personal_account_by_id(
             request,
             personal_account_id,
         )
@@ -4167,7 +4167,7 @@ def personal_interested_category_remove(
     category_id,
 ):
     personal_account, error_response = (
-        get_authenticated_personal_account(
+        get_authenticated_personal_account_by_id(
             request,
             personal_account_id,
         )
