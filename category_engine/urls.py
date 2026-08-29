@@ -5,6 +5,11 @@ from . import views
 
 urlpatterns = [
     path(
+        "tree/",
+        views.category_tree,
+        name="category-tree",
+    ),
+    path(
         "",
         views.category_list,
         name="category-list",

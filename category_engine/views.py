@@ -29,6 +29,54 @@ def _category_data(category):
         "updated_at": category.updated_at.isoformat(),
     }
 
+def _category_tree(category):
+    children = CategoryRelationship.objects.filter(
+        parent=category,
+        is_active=True,
+        child__is_deleted=False,
+    ).select_related("child").order_by(
+        "display_order",
+        "child__name",
+    )
+
+    return {
+        "id": category.id,
+        "category_id": str(category.category_id),
+        "name": category.name,
+        "slug": category.slug,
+        "description": category.description,
+        "is_featured": category.is_featured,
+        "display_order": category.display_order,
+        "visibility": category.visibility,
+        "children": [
+            _category_tree(
+                relationship.child
+            )
+            for relationship in children
+        ],
+    }
+
+@require_http_methods(["GET"])
+def category_tree(request):
+    categories = Category.objects.filter(
+        is_deleted=False,
+    ).filter(
+        parent_relationships__isnull=True,
+    ).distinct().order_by(
+        "display_order",
+        "name",
+    )
+
+    return JsonResponse(
+        {
+            "count": categories.count(),
+            "results": [
+                _category_tree(category)
+                for category in categories
+            ],
+        }
+    )
+
 
 @require_http_methods(["GET"])
 def category_list(request):

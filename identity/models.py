@@ -4,8 +4,27 @@ from django.contrib.auth.models import AbstractBaseUser
 from django.db import models
 
 
+class UserIdentityManager(
+    models.Manager
+):
+
+    def get_by_natural_key(
+        self,
+        username,
+    ):
+
+        return self.get(
+            email=username
+        )
+
+
 class UserIdentity(AbstractBaseUser):
+
+    objects = UserIdentityManager()
+
+
     class Status(models.TextChoices):
+
         DRAFT = "draft", "Draft"
         PENDING_VERIFICATION = "pending_verification", "Pending Verification"
         ACTIVE = "active", "Active"
@@ -75,6 +94,14 @@ class UserIdentity(AbstractBaseUser):
         default=True,
     )
 
+    is_staff = models.BooleanField(
+        default=False,
+    )
+
+    is_superuser = models.BooleanField(
+        default=False,
+    )
+
     created_at = models.DateTimeField(
         auto_now_add=True,
     )
@@ -86,6 +113,22 @@ class UserIdentity(AbstractBaseUser):
     USERNAME_FIELD = "email"
 
     REQUIRED_FIELDS = []
+
+    def has_perm(
+        self,
+        perm,
+        obj=None,
+    ):
+
+        return self.is_superuser
+
+
+    def has_module_perms(
+        self,
+        app_label,
+    ):
+
+        return self.is_superuser
 
     class Meta:
         ordering = ["-created_at"]
