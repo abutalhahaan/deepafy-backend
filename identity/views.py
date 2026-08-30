@@ -43,6 +43,7 @@ from .models import (
     PersonalHobby,
     PersonalInterestedCategory,
     PasswordResetOTP,
+    ProfessionalResponsibility,
     ProfessionalAccount,
     UserIdentity,
 )
@@ -2103,6 +2104,40 @@ def serialize_job_experience(experience):
     }
 
 
+def serialize_professional_responsibility(
+    responsibility,
+):
+    return {
+        "id": responsibility.id,
+
+        "professional_account_id": (
+            responsibility.professional_account_id
+        ),
+
+        "title": responsibility.title,
+
+        "description": (
+            responsibility.description
+        ),
+
+        "display_order": (
+            responsibility.display_order
+        ),
+
+        "is_active": (
+            responsibility.is_active
+        ),
+
+        "created_at": (
+            responsibility.created_at.isoformat()
+        ),
+
+        "updated_at": (
+            responsibility.updated_at.isoformat()
+        ),
+    }
+
+
 def serialize_personal_job_experience(experience):
     return {
         "id": experience.id,
@@ -2134,6 +2169,207 @@ def serialize_personal_job_experience(experience):
             experience.updated_at.isoformat()
         ),
     }
+
+@require_http_methods(["GET"])
+@require_authentication
+def professional_responsibility_list(
+    request,
+    professional_account_id,
+):
+    try:
+        professional_account = (
+            ProfessionalAccount.objects.get(
+                id=professional_account_id,
+                is_active=True,
+            )
+        )
+
+    except ProfessionalAccount.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Professional account not found."
+            },
+            status=404,
+        )
+
+    if not is_owner(
+        request.authenticated_identity,
+        professional_account.identity_id,
+    ):
+        return permission_denied(
+            "You do not have permission to view these responsibilities."
+        )
+
+    responsibilities = (
+        ProfessionalResponsibility.objects.filter(
+            professional_account=professional_account,
+            is_active=True,
+        ).order_by(
+            "display_order",
+            "id",
+        )
+    )
+
+    results = [
+        serialize_professional_responsibility(
+            responsibility
+        )
+        for responsibility in responsibilities
+    ]
+
+    return JsonResponse(
+        {
+            "professional_account_id":
+            professional_account.id,
+
+            "count":
+            len(results),
+
+            "results":
+            results,
+        }
+    )
+
+
+@csrf_exempt
+@require_http_methods(["PATCH"])
+@require_authentication
+def professional_responsibility_update(
+    request,
+    professional_account_id,
+    responsibility_id,
+):
+    try:
+        responsibility = (
+            ProfessionalResponsibility.objects.get(
+                id=responsibility_id,
+                professional_account_id=professional_account_id,
+            )
+        )
+
+    except ProfessionalResponsibility.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Professional responsibility not found."
+            },
+            status=404,
+        )
+
+    if not is_owner(
+        request.authenticated_identity,
+        responsibility.professional_account.identity_id,
+    ):
+        return permission_denied(
+            "You do not have permission to update this professional responsibility."
+        )
+
+    try:
+        data = json.loads(
+            request.body or "{}"
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {
+                "detail":
+                "Invalid JSON."
+            },
+            status=400,
+        )
+
+    if "title" in data:
+        title = data.get(
+            "title",
+            "",
+        ).strip()
+
+        if not title:
+            return JsonResponse(
+                {
+                    "detail":
+                    "title cannot be empty."
+                },
+                status=400,
+            )
+
+        responsibility.title = title
+
+    if "description" in data:
+        responsibility.description = (
+            data.get(
+                "description",
+                "",
+            ).strip()
+        )
+
+    if "display_order" in data:
+        responsibility.display_order = (
+            data.get(
+                "display_order",
+                0,
+            )
+        )
+
+    if "is_active" in data:
+        responsibility.is_active = (
+            data.get(
+                "is_active",
+                True,
+            )
+        )
+
+    responsibility.save()
+
+    return JsonResponse(
+        serialize_professional_responsibility(
+            responsibility
+        )
+    )
+
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+@require_authentication
+def professional_responsibility_delete(
+    request,
+    professional_account_id,
+    responsibility_id,
+):
+    try:
+        responsibility = (
+            ProfessionalResponsibility.objects.get(
+                id=responsibility_id,
+                professional_account_id=professional_account_id,
+            )
+        )
+
+    except ProfessionalResponsibility.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Professional responsibility not found."
+            },
+            status=404,
+        )
+
+    if not is_owner(
+        request.authenticated_identity,
+        responsibility.professional_account.identity_id,
+    ):
+        return permission_denied(
+            "You do not have permission to delete this professional responsibility."
+        )
+
+    responsibility.delete()
+
+    return JsonResponse(
+        {
+            "detail":
+            "Professional responsibility deleted successfully."
+        }
+    )
 
 
 @csrf_exempt
@@ -2219,6 +2455,95 @@ def job_experience_create(request):
             {"detail": "Invalid JSON."},
             status=400,
         )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@require_authentication
+def professional_responsibility_create(
+    request,
+    professional_account_id,
+):
+    try:
+        data = json.loads(
+            request.body or "{}"
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {
+                "detail":
+                "Invalid JSON."
+            },
+            status=400,
+        )
+
+    try:
+        professional_account = (
+            ProfessionalAccount.objects.get(
+                id=professional_account_id,
+                is_active=True,
+            )
+        )
+
+    except ProfessionalAccount.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Professional account not found."
+            },
+            status=404,
+        )
+
+    if not is_owner(
+        request.authenticated_identity,
+        professional_account.identity_id,
+    ):
+        return permission_denied(
+            "You do not have permission to create a professional responsibility for this account."
+        )
+
+    title = data.get(
+        "title",
+        "",
+    ).strip()
+
+    description = data.get(
+        "description",
+        "",
+    ).strip()
+
+    if not title:
+        return JsonResponse(
+            {
+                "detail":
+                "title is required."
+            },
+            status=400,
+        )
+
+    responsibility = (
+        ProfessionalResponsibility.objects.create(
+            professional_account=professional_account,
+            title=title,
+            description=description,
+            display_order=data.get(
+                "display_order",
+                0,
+            ),
+            is_active=data.get(
+                "is_active",
+                True,
+            ),
+        )
+    )
+
+    return JsonResponse(
+        serialize_professional_responsibility(
+            responsibility
+        ),
+        status=201,
+    )    
 
 
 @csrf_exempt
