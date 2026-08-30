@@ -593,6 +593,50 @@ class ProfessionalAccount(models.Model):
         return f"Professional Account - {self.identity.user_id}"
 
 
+class ProfessionalResponsibility(models.Model):
+
+    professional_account = models.ForeignKey(
+        ProfessionalAccount,
+        on_delete=models.CASCADE,
+        related_name="professional_responsibilities",
+    )
+
+    title = models.CharField(
+        max_length=255,
+    )
+
+    description = models.TextField(
+        blank=True,
+        default="",
+    )
+
+    display_order = models.PositiveIntegerField(
+        default=0,
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        ordering = [
+            "display_order",
+            "id",
+        ]
+
+    def __str__(self):
+        return self.title
+
+
+
 class AcademicBackground(models.Model):
     class Visibility(models.TextChoices):
         PUBLIC = "public", "Public"
