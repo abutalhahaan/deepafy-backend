@@ -705,10 +705,22 @@ class AcademicBackground(models.Model):
             f"{self.institution_name}"
         )
 
+
 class JobExperience(models.Model):
+
     professional_account = models.ForeignKey(
         ProfessionalAccount,
         on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="job_experiences",
+    )
+
+    personal_account = models.ForeignKey(
+        PersonalAccount,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
         related_name="job_experiences",
     )
 
