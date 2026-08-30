@@ -1,7 +1,7 @@
 import json
 import secrets
 
-from datetime import timedelta
+from datetime import date, timedelta
 from core.services.image_processor import process_image
 
 from django.http.multipartparser import (
@@ -2103,6 +2103,39 @@ def serialize_job_experience(experience):
     }
 
 
+def serialize_personal_job_experience(experience):
+    return {
+        "id": experience.id,
+        "personal_account_id": (
+            experience.personal_account_id
+        ),
+        "company": experience.company,
+        "job_title": experience.job_title,
+        "employment_type": experience.employment_type,
+        "location": experience.location,
+        "start_date": (
+            experience.start_date.isoformat()
+            if experience.start_date
+            else None
+        ),
+        "end_date": (
+            experience.end_date.isoformat()
+            if experience.end_date
+            else None
+        ),
+        "is_current": experience.is_current,
+        "description": experience.description,
+        "display_order": experience.display_order,
+        "is_active": experience.is_active,
+        "created_at": (
+            experience.created_at.isoformat()
+        ),
+        "updated_at": (
+            experience.updated_at.isoformat()
+        ),
+    }
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 @require_authentication
@@ -2188,6 +2221,168 @@ def job_experience_create(request):
         )
 
 
+@csrf_exempt
+@require_http_methods(["POST"])
+@require_authentication
+def personal_job_experience_create(
+    request,
+    personal_account_id,
+):
+    personal_account, error_response = (
+        get_authenticated_personal_account_by_id(
+            request,
+            personal_account_id,
+        )
+    )
+
+    if error_response is not None:
+        return error_response
+
+    try:
+        data = json.loads(
+            request.body or "{}"
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {
+                "detail":
+                "Invalid JSON."
+            },
+            status=400,
+        )
+
+    try:
+        start_date = data.get(
+            "start_date"
+        )
+
+        end_date = data.get(
+            "end_date"
+        )
+
+        if start_date:
+            start_date = date.fromisoformat(
+                start_date
+            )
+
+        else:
+            start_date = None
+
+        if end_date:
+            end_date = date.fromisoformat(
+                end_date
+            )
+
+        else:
+            end_date = None
+
+    except (TypeError, ValueError):
+        return JsonResponse(
+            {
+                "detail":
+                "Invalid date format. Use YYYY-MM-DD."
+            },
+            status=400,
+        )
+
+    experience = JobExperience.objects.create(
+        personal_account=personal_account,
+
+        company=data.get(
+            "company",
+            "",
+        ),
+
+        job_title=data.get(
+            "job_title",
+            "",
+        ),
+
+        employment_type=data.get(
+            "employment_type",
+            "",
+        ),
+
+        location=data.get(
+            "location",
+            "",
+        ),
+
+        start_date=start_date,
+
+        end_date=end_date,
+
+        is_current=data.get(
+            "is_current",
+            False,
+        ),
+
+        description=data.get(
+            "description",
+            "",
+        ),
+
+        display_order=data.get(
+            "display_order",
+            0,
+        ),
+
+        is_active=data.get(
+            "is_active",
+            True,
+        ),
+    )
+
+    return JsonResponse(
+        serialize_personal_job_experience(
+            experience
+        ),
+        status=201,
+    )
+
+
+@require_http_methods(["GET"])
+@require_authentication
+def personal_job_experience_list(
+    request,
+    personal_account_id,
+):
+    personal_account, error_response = (
+        get_authenticated_personal_account_by_id(
+            request,
+            personal_account_id,
+        )
+    )
+
+    if error_response is not None:
+        return error_response
+
+    experiences = JobExperience.objects.filter(
+        personal_account=personal_account,
+        is_active=True,
+    ).order_by(
+        "display_order",
+        "-start_date",
+    )
+
+    results = [
+        serialize_personal_job_experience(
+            experience
+        )
+        for experience in experiences
+    ]
+
+    return JsonResponse(
+        {
+            "personal_account_id":
+            personal_account.id,
+            "count": len(results),
+            "results": results,
+        }
+    )
+
+
 @require_http_methods(["GET"])
 def job_experience_list(request, identity_id):
     try:
@@ -2219,6 +2414,132 @@ def job_experience_list(request, identity_id):
             "count": len(results),
             "results": results,
         }
+    )
+
+@csrf_exempt
+@require_http_methods(["PATCH"])
+@require_authentication
+def personal_job_experience_update(
+    request,
+    personal_account_id,
+    experience_id,
+):
+    try:
+        experience = JobExperience.objects.get(
+            id=experience_id
+        )
+    except JobExperience.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Job experience not found."
+            },
+            status=404,
+        )
+
+    if not experience.personal_account:
+        return JsonResponse(
+            {
+                "detail":
+                "This job experience is not linked to a personal account."
+            },
+            status=400,
+        )
+
+    if not is_owner(
+        request.authenticated_identity,
+        experience.personal_account.identity_id,
+    ):
+        return permission_denied(
+            "You do not have permission to update this job experience."
+        )
+
+    try:
+        data = json.loads(
+            request.body or "{}"
+        )
+
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {
+                "detail":
+                "Invalid JSON."
+            },
+            status=400,
+        )
+
+    try:
+        if "start_date" in data:
+
+            start_date = data.get(
+                "start_date"
+            )
+
+            experience.start_date = (
+                date.fromisoformat(start_date)
+                if start_date
+                else None
+            )
+
+
+        if "end_date" in data:
+
+            end_date = data.get(
+                "end_date"
+            )
+
+            experience.end_date = (
+                date.fromisoformat(end_date)
+                if end_date
+                else None
+            )
+
+    except (TypeError, ValueError):
+
+        return JsonResponse(
+            {
+                "detail":
+                "Invalid date format. Use YYYY-MM-DD."
+            },
+            status=400,
+        )
+
+
+    fields = [
+        "company",
+        "job_title",
+        "employment_type",
+        "location",
+        "is_current",
+        "description",
+        "display_order",
+        "is_active",
+    ]
+
+
+    for field in fields:
+
+        if field in data:
+
+            setattr(
+                experience,
+                field,
+                data.get(field),
+            )
+
+
+    if experience.is_current:
+
+        experience.end_date = None
+
+
+    experience.save()
+
+
+    return JsonResponse(
+        serialize_personal_job_experience(
+            experience
+        )
     )
 
 
@@ -2301,6 +2622,57 @@ def job_experience_update(request, experience_id):
     return JsonResponse(
         serialize_job_experience(experience)
     )
+
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+@require_authentication
+def personal_job_experience_delete(
+    request,
+    personal_account_id,
+    experience_id,
+):
+    try:
+        experience = JobExperience.objects.get(
+            id=experience_id,
+            personal_account_id=personal_account_id,
+        )
+
+    except JobExperience.DoesNotExist:
+
+        return JsonResponse(
+            {
+                "detail":
+                "Job experience not found."
+            },
+            status=404,
+        )
+
+    if not experience.personal_account:
+        return JsonResponse(
+            {
+                "detail":
+                "This job experience is not linked to a personal account."
+            },
+            status=400,
+        )
+
+    if not is_owner(
+        request.authenticated_identity,
+        experience.personal_account.identity_id,
+    ):
+        return permission_denied(
+            "You do not have permission to delete this job experience."
+        )
+
+    experience.delete()
+
+    return JsonResponse(
+        {
+            "detail":
+            "Job experience deleted successfully."
+        }
+    )    
 
 
 @csrf_exempt

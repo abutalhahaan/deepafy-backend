@@ -153,6 +153,27 @@ urlpatterns = [
         views.job_experience_delete,
         name="job-experience-delete",
     ),
+    path(
+        "personal-accounts/<int:personal_account_id>/job-experiences/create/",
+        views.personal_job_experience_create,
+        name="personal-job-experience-create",
+    ),
+    path(
+        "personal-accounts/<int:personal_account_id>/job-experiences/",
+        views.personal_job_experience_list,
+        name="personal-job-experience-list",
+    ),
+    path(
+        "personal-accounts/<int:personal_account_id>/job-experiences/<int:experience_id>/update/",
+        views.personal_job_experience_update,
+        name="personal-job-experience-update",
+    ),
+
+    path(
+        "personal-accounts/<int:personal_account_id>/job-experiences/<int:experience_id>/delete/",
+        views.personal_job_experience_delete,
+        name="personal-job-experience-delete",
+    ),
 
     # Skills
     path(
