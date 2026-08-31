@@ -175,29 +175,6 @@ urlpatterns = [
         name="personal-job-experience-delete",
     ),
 
-        # Professional Responsibilities
-    path(
-        "professional-accounts/<int:professional_account_id>/responsibilities/",
-        views.professional_responsibility_list,
-        name="professional-responsibility-list",
-    ),
-    path(
-        "professional-accounts/<int:professional_account_id>/responsibilities/create/",
-        views.professional_responsibility_create,
-        name="professional-responsibility-create",
-    ),
-    path(
-        "professional-accounts/<int:professional_account_id>/responsibilities/<int:responsibility_id>/update/",
-        views.professional_responsibility_update,
-        name="professional-responsibility-update",
-    ),
-    path(
-        "professional-accounts/<int:professional_account_id>/responsibilities/<int:responsibility_id>/delete/",
-        views.professional_responsibility_delete,
-        name="professional-responsibility-delete",
-    ),
-
-
     # Skills
     path(
         "skills/create/",
@@ -208,31 +185,6 @@ urlpatterns = [
         "skills/",
         views.skill_list,
         name="skill-list",
-    ),
-    path(
-        "professional-skills/create/",
-        views.professional_skill_create,
-        name="professional-skill-create",
-    ),
-    path(
-        "<int:identity_id>/professional-skills/",
-        views.professional_skill_list,
-        name="professional-skill-list",
-    ),
-    path(
-        "professional-skills/<int:professional_skill_id>/",
-        views.professional_skill_detail,
-        name="professional-skill-detail",
-    ),
-    path(
-        "professional-skills/<int:professional_skill_id>/update/",
-        views.professional_skill_update,
-        name="professional-skill-update",
-    ),
-    path(
-        "professional-skills/<int:professional_skill_id>/delete/",
-        views.professional_skill_delete,
-        name="professional-skill-delete",
     ),
 
     # Academic Background

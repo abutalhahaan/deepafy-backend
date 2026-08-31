@@ -593,50 +593,6 @@ class ProfessionalAccount(models.Model):
         return f"Professional Account - {self.identity.user_id}"
 
 
-class ProfessionalResponsibility(models.Model):
-
-    professional_account = models.ForeignKey(
-        ProfessionalAccount,
-        on_delete=models.CASCADE,
-        related_name="professional_responsibilities",
-    )
-
-    title = models.CharField(
-        max_length=255,
-    )
-
-    description = models.TextField(
-        blank=True,
-        default="",
-    )
-
-    display_order = models.PositiveIntegerField(
-        default=0,
-    )
-
-    is_active = models.BooleanField(
-        default=True,
-    )
-
-    created_at = models.DateTimeField(
-        auto_now_add=True,
-    )
-
-    updated_at = models.DateTimeField(
-        auto_now=True,
-    )
-
-    class Meta:
-        ordering = [
-            "display_order",
-            "id",
-        ]
-
-    def __str__(self):
-        return self.title
-
-
-
 class AcademicBackground(models.Model):
     class Visibility(models.TextChoices):
         PUBLIC = "public", "Public"
@@ -849,58 +805,6 @@ class Skill(models.Model):
     def __str__(self):
         return self.name
 
-
-class ProfessionalSkill(models.Model):
-
-    class SkillLevel(models.TextChoices):
-        BEGINNER = "beginner", "Beginner"
-        INTERMEDIATE = "intermediate", "Intermediate"
-        EXPERT = "expert", "Expert"
-
-    professional_account = models.ForeignKey(
-        ProfessionalAccount,
-        on_delete=models.CASCADE,
-        related_name="skills",
-    )
-
-    skill = models.ForeignKey(
-        Skill,
-        on_delete=models.CASCADE,
-    )
-
-    skill_level = models.CharField(
-        max_length=20,
-        choices=SkillLevel.choices,
-        default=SkillLevel.INTERMEDIATE,
-    )
-
-    years_of_experience = models.PositiveIntegerField(
-        default=0,
-    )
-
-    is_active = models.BooleanField(
-        default=True,
-    )
-
-    created_at = models.DateTimeField(
-        auto_now_add=True,
-    )
-
-    updated_at = models.DateTimeField(
-        auto_now=True,
-    )
-
-    class Meta:
-        unique_together = (
-            "professional_account",
-            "skill",
-        )
-
-    def __str__(self):
-        return (
-            f"{self.professional_account.id} - "
-            f"{self.skill.name}"
-        )
 
 class PasswordResetOTP(models.Model):
     identity = models.ForeignKey(

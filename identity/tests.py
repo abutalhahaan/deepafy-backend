@@ -24,7 +24,6 @@ from .models import (
     PersonalInterestedCategory,
     PersonalLanguage,
     ProfessionalAccount,
-    ProfessionalSkill,
     Skill,
     UserIdentity,
 )
@@ -1044,7 +1043,7 @@ class PersonalHobbyTests(TestCase):
     def test_hobby_creation(self):
         personal_hobby = PersonalHobby.objects.create(
             personal_account=self.personal_account,
-            hobby=self.hobby,
+            name=self.hobby.name
         )
 
         self.assertEqual(
@@ -1053,8 +1052,8 @@ class PersonalHobbyTests(TestCase):
         )
 
         self.assertEqual(
-            personal_hobby.hobby,
-            self.hobby,
+            personal_hobby.name,
+            self.hobby.name,
         )
 
         self.assertTrue(personal_hobby.is_active)
@@ -1062,7 +1061,7 @@ class PersonalHobbyTests(TestCase):
     def test_hobby_string(self):
         personal_hobby = PersonalHobby.objects.create(
             personal_account=self.personal_account,
-            hobby=self.hobby,
+            name=self.hobby.name
         )
 
         self.assertEqual(
@@ -1073,13 +1072,13 @@ class PersonalHobbyTests(TestCase):
     def test_duplicate_hobby_not_allowed(self):
         PersonalHobby.objects.create(
             personal_account=self.personal_account,
-            hobby=self.hobby,
+            name=self.hobby.name,
         )
 
         with self.assertRaises(Exception):
             PersonalHobby.objects.create(
                 personal_account=self.personal_account,
-                hobby=self.hobby,
+                name=self.hobby.name,
             )
 
     def test_hobby_add_requires_authentication(self):
@@ -1112,7 +1111,7 @@ class PersonalHobbyTests(TestCase):
             f"/api/identity/{self.personal_account.id}/hobbies/add/",
             data=json.dumps(
                 {
-                    "hobby_id": self.hobby.id,
+                    "name": self.hobby.name,
                 }
             ),
             content_type="application/json",
@@ -1135,7 +1134,7 @@ class PersonalHobbyTests(TestCase):
             f"/api/identity/{self.personal_account.id}/hobbies/add/",
             data=json.dumps(
                 {
-                    "hobby_id": self.hobby.id,
+                    "name": self.hobby.name,
                 }
             ),
             content_type="application/json",
@@ -1152,7 +1151,7 @@ class PersonalHobbyTests(TestCase):
     def test_hobby_remove_requires_authentication(self):
         PersonalHobby.objects.create(
             personal_account=self.personal_account,
-            hobby=self.hobby,
+            name=self.hobby.name,
         )
 
         response = self.client.delete(
@@ -1168,7 +1167,7 @@ class PersonalHobbyTests(TestCase):
     def test_other_user_cannot_remove_hobby(self):
         PersonalHobby.objects.create(
             personal_account=self.personal_account,
-            hobby=self.hobby,
+            name=self.hobby.name,
         )
 
         other_identity = UserIdentity.objects.create(
@@ -1195,7 +1194,7 @@ class PersonalHobbyTests(TestCase):
     def test_owner_can_remove_hobby(self):
         PersonalHobby.objects.create(
             personal_account=self.personal_account,
-            hobby=self.hobby,
+            name=self.hobby.name,
         )
 
         refresh = RefreshToken.for_user(
@@ -1218,7 +1217,7 @@ class PersonalHobbyTests(TestCase):
         self.assertFalse(
             PersonalHobby.objects.filter(
                 personal_account=self.personal_account,
-                hobby=self.hobby,
+                name=self.hobby.name,
             ).exists()
         )            
 
@@ -1978,114 +1977,6 @@ class SkillTests(TestCase):
         )
 
 
-class ProfessionalSkillTests(TestCase):
-    def setUp(self):
-        self.identity = UserIdentity.objects.create(
-            email="skill@example.com",
-        )
-
-        self.professional_account = ProfessionalAccount.objects.create(
-            identity=self.identity,
-            professional_title="Software Engineer",
-        )
-
-        self.skill = Skill.objects.create(
-            name="Python",
-            slug="python",
-        )
-
-    def test_professional_skill_creation(self):
-        professional_skill = ProfessionalSkill.objects.create(
-            professional_account=self.professional_account,
-            skill=self.skill,
-            skill_level=ProfessionalSkill.SkillLevel.INTERMEDIATE,
-            years_of_experience=3,
-        )
-
-        self.assertEqual(
-            professional_skill.professional_account,
-            self.professional_account,
-        )
-
-        self.assertEqual(
-            professional_skill.skill,
-            self.skill,
-        )
-
-        self.assertEqual(
-            professional_skill.skill_level,
-            ProfessionalSkill.SkillLevel.INTERMEDIATE,
-        )
-
-        self.assertEqual(
-            professional_skill.years_of_experience,
-            3,
-        )
-
-        self.assertTrue(
-            professional_skill.is_active,
-        )
-
-    def test_professional_skill_string(self):
-        professional_skill = ProfessionalSkill.objects.create(
-            professional_account=self.professional_account,
-            skill=self.skill,
-        )
-
-        self.assertIn(
-            "Python",
-            str(professional_skill),
-        )
-
-    def test_multiple_professional_skills_allowed(self):
-        django_skill = Skill.objects.create(
-            name="Django",
-            slug="django",
-        )
-
-        ProfessionalSkill.objects.create(
-            professional_account=self.professional_account,
-            skill=self.skill,
-        )
-
-        ProfessionalSkill.objects.create(
-            professional_account=self.professional_account,
-            skill=django_skill,
-        )
-
-        self.assertEqual(
-            ProfessionalSkill.objects.filter(
-                professional_account=self.professional_account
-            ).count(),
-            2,
-        )
-
-    def test_duplicate_professional_skill_not_allowed(self):
-        ProfessionalSkill.objects.create(
-            professional_account=self.professional_account,
-            skill=self.skill,
-        )
-
-        with self.assertRaises(Exception):
-            ProfessionalSkill.objects.create(
-                professional_account=self.professional_account,
-                skill=self.skill,
-            )
-
-    def test_professional_skill_deleted_with_professional_account(self):
-        ProfessionalSkill.objects.create(
-            professional_account=self.professional_account,
-            skill=self.skill,
-        )
-
-        self.professional_account.delete()
-
-        self.assertEqual(
-            ProfessionalSkill.objects.count(),
-            0,
-        )
-
-
 class SkillAPITests(TestCase):
     def setUp(self):
         self.identity = UserIdentity.objects.create(
@@ -2141,378 +2032,6 @@ class SkillAPITests(TestCase):
         self.assertEqual(
             response.json()["count"],
             1,
-        )
-
-    def test_professional_skill_create_api(self):
-        refresh = RefreshToken.for_user(
-            self.identity
-        )
-
-        response = self.client.post(
-            "/api/identity/professional-skills/create/",
-            data={
-                "professional_account_id":
-                    self.professional_account.id,
-                "skill_id": self.skill.id,
-                "skill_level":
-                ProfessionalSkill.SkillLevel.EXPERT,
-                "years_of_experience": 5,
-            },
-            content_type="application/json",
-            HTTP_AUTHORIZATION=(
-                f"Bearer {refresh.access_token}"
-            ),
-        )
-
-        self.assertEqual(
-            response.status_code,
-            201,
-        )
-
-        self.assertEqual(
-            response.json()["skill_name"],
-            "Python",
-        )
-
-        self.assertEqual(
-            response.json()["years_of_experience"],
-            5,
-        )
-
-    def test_professional_skill_list_api(self):
-        ProfessionalSkill.objects.create(
-            professional_account=self.professional_account,
-            skill=self.skill,
-        )
-
-        response = self.client.get(
-            f"/api/identity/{self.identity.id}/professional-skills/"
-        )
-
-        self.assertEqual(response.status_code, 200)
-
-        self.assertEqual(
-            response.json()["count"],
-            1,
-        )
-
-    def test_professional_skill_detail_api(self):
-        professional_skill = ProfessionalSkill.objects.create(
-            professional_account=self.professional_account,
-            skill=self.skill,
-        )
-
-        response = self.client.get(
-            f"/api/identity/professional-skills/{professional_skill.id}/"
-        )
-
-        self.assertEqual(response.status_code, 200)
-
-        self.assertEqual(
-            response.json()["skill_name"],
-            "Python",
-        )
-
-    def test_professional_skill_update_api(self):
-        professional_skill = ProfessionalSkill.objects.create(
-            professional_account=self.professional_account,
-            skill=self.skill,
-            skill_level=ProfessionalSkill.SkillLevel.INTERMEDIATE,
-            years_of_experience=2,
-        )
-
-        refresh = RefreshToken.for_user(
-            self.identity
-        )        
-
-        response = self.client.patch(
-            f"/api/identity/professional-skills/{professional_skill.id}/update/",
-            data={
-                "skill_level":
-                    ProfessionalSkill.SkillLevel.EXPERT,
-                "years_of_experience": 6,
-            },
-            content_type="application/json",
-            HTTP_AUTHORIZATION=(
-                f"Bearer {refresh.access_token}"
-            ),
-        )
-
-        self.assertEqual(response.status_code, 200)
-
-        professional_skill.refresh_from_db()
-
-        self.assertEqual(
-            professional_skill.skill_level,
-            ProfessionalSkill.SkillLevel.EXPERT,
-        )
-
-        self.assertEqual(
-            professional_skill.years_of_experience,
-            6,
-        )
-    def test_professional_skill_delete_api(self):
-        professional_skill = ProfessionalSkill.objects.create(
-            professional_account=self.professional_account,
-            skill=self.skill,
-        )
-
-        refresh = RefreshToken.for_user(
-            self.identity
-        )
-
-        response = self.client.delete(
-            f"/api/identity/professional-skills/{professional_skill.id}/delete/",
-            HTTP_AUTHORIZATION=(
-                f"Bearer {refresh.access_token}"
-            ),
-        )
-
-        self.assertEqual(
-            response.status_code,
-            200,
-        )
-
-        self.assertFalse(
-            ProfessionalSkill.objects.filter(
-                id=professional_skill.id
-            ).exists()
-        )
-
-
-class ProfessionalSkillAPITests(TestCase):
-    def setUp(self):
-        self.identity = UserIdentity.objects.create(
-            email="api-professional-skill@example.com",
-        )
-
-        self.professional_account = (
-            ProfessionalAccount.objects.create(
-                identity=self.identity,
-                professional_title="Software Engineer",
-            )
-        )
-
-        self.skill = Skill.objects.create(
-            name="Python",
-            slug="python",
-        )
-
-    def test_professional_skill_create_requires_authentication(
-        self,
-    ):
-        response = self.client.post(
-            "/api/identity/professional-skills/create/",
-            data=json.dumps(
-                {
-                    "professional_account_id":
-                        self.professional_account.id,
-                    "skill_id":
-                        self.skill.id,
-                }
-            ),
-            content_type="application/json",
-        )
-
-        self.assertEqual(
-            response.status_code,
-            401,
-        )
-
-    def test_other_user_cannot_create_professional_skill(
-        self,
-    ):
-        other_identity = UserIdentity.objects.create(
-            email="other-professional-skill@example.com",
-        )
-
-        refresh = RefreshToken.for_user(
-            other_identity
-        )
-
-        response = self.client.post(
-            "/api/identity/professional-skills/create/",
-            data=json.dumps(
-                {
-                    "professional_account_id":
-                        self.professional_account.id,
-                    "skill_id":
-                        self.skill.id,
-                }
-            ),
-            content_type="application/json",
-            HTTP_AUTHORIZATION=(
-                f"Bearer {refresh.access_token}"
-            ),
-        )
-
-        self.assertEqual(
-            response.status_code,
-            403,
-        )
-
-    def test_owner_can_create_professional_skill(
-        self,
-    ):
-        refresh = RefreshToken.for_user(
-            self.identity
-        )
-
-        response = self.client.post(
-            "/api/identity/professional-skills/create/",
-            data=json.dumps(
-                {
-                    "professional_account_id":
-                        self.professional_account.id,
-                    "skill_id":
-                        self.skill.id,
-                    "skill_level":
-                        ProfessionalSkill.SkillLevel.EXPERT,
-                    "years_of_experience": 5,
-                }
-            ),
-            content_type="application/json",
-            HTTP_AUTHORIZATION=(
-                f"Bearer {refresh.access_token}"
-            ),
-        )
-
-        self.assertEqual(
-            response.status_code,
-            201,
-        )
-
-    def test_other_user_cannot_update_professional_skill(
-        self,
-    ):
-        professional_skill = (
-            ProfessionalSkill.objects.create(
-                professional_account=
-                    self.professional_account,
-                skill=self.skill,
-            )
-        )
-
-        other_identity = UserIdentity.objects.create(
-            email="other-professional-skill-update@example.com",
-        )
-
-        refresh = RefreshToken.for_user(
-            other_identity
-        )
-
-        response = self.client.patch(
-            f"/api/identity/professional-skills/"
-            f"{professional_skill.id}/update/",
-            data=json.dumps(
-                {
-                    "years_of_experience": 10,
-                }
-            ),
-            content_type="application/json",
-            HTTP_AUTHORIZATION=(
-                f"Bearer {refresh.access_token}"
-            ),
-        )
-
-        self.assertEqual(
-            response.status_code,
-            403,
-        )
-
-    def test_owner_can_update_professional_skill(
-        self,
-    ):
-        professional_skill = (
-            ProfessionalSkill.objects.create(
-                professional_account=
-                    self.professional_account,
-                skill=self.skill,
-                years_of_experience=2,
-            )
-        )
-
-        refresh = RefreshToken.for_user(
-            self.identity
-        )
-
-        response = self.client.patch(
-            f"/api/identity/professional-skills/"
-            f"{professional_skill.id}/update/",
-            data=json.dumps(
-                {
-                    "years_of_experience": 6,
-                }
-            ),
-            content_type="application/json",
-            HTTP_AUTHORIZATION=(
-                f"Bearer {refresh.access_token}"
-            ),
-        )
-
-        self.assertEqual(
-            response.status_code,
-            200,
-        )
-
-    def test_other_user_cannot_delete_professional_skill(
-        self,
-    ):
-        professional_skill = (
-            ProfessionalSkill.objects.create(
-                professional_account=
-                    self.professional_account,
-                skill=self.skill,
-            )
-        )
-
-        other_identity = UserIdentity.objects.create(
-            email="other-professional-skill-delete@example.com",
-        )
-
-        refresh = RefreshToken.for_user(
-            other_identity
-        )
-
-        response = self.client.delete(
-            f"/api/identity/professional-skills/"
-            f"{professional_skill.id}/delete/",
-            HTTP_AUTHORIZATION=(
-                f"Bearer {refresh.access_token}"
-            ),
-        )
-
-        self.assertEqual(
-            response.status_code,
-            403,
-        )
-
-    def test_owner_can_delete_professional_skill(
-        self,
-    ):
-        professional_skill = (
-            ProfessionalSkill.objects.create(
-                professional_account=
-                    self.professional_account,
-                skill=self.skill,
-            )
-        )
-
-        refresh = RefreshToken.for_user(
-            self.identity
-        )
-
-        response = self.client.delete(
-            f"/api/identity/professional-skills/"
-            f"{professional_skill.id}/delete/",
-            HTTP_AUTHORIZATION=(
-                f"Bearer {refresh.access_token}"
-            ),
-        )
-
-        self.assertEqual(
-            response.status_code,
-            200,
         )
 
 
