@@ -5,6 +5,12 @@ from . import views
 
 urlpatterns = [
     path(
+        "countries/",
+        views.country_list,
+        name="country-list",
+    ),
+
+    path(
         "",
         views.company_list,
         name="company-list",
