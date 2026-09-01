@@ -5,7 +5,30 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from .models import Company
+from .models import Company, Country
+
+
+@require_http_methods(["GET"])
+def country_list(request):
+    countries = (
+        Country.objects
+        .filter(is_active=True)
+        .order_by("name")
+    )
+
+    return JsonResponse(
+        {
+            "count": countries.count(),
+            "results": [
+                {
+                    "id": country.id,
+                    "name": country.name,
+                    "code": country.code,
+                }
+                for country in countries
+            ],
+        }
+    )
 
 
 def _company_data(company):
