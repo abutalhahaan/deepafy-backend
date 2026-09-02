@@ -16,6 +16,8 @@ from .models import (
 
     PersonalInterestedCategory,
 
+    PersonalResponsibility,
+
     ProfessionalAccount,
 
     UserIdentity,
@@ -278,6 +280,29 @@ class JobExperienceSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+
+class PersonalResponsibilitySerializer(
+    serializers.ModelSerializer
+):
+    class Meta:
+        model = PersonalResponsibility
+        fields = [
+            "id",
+            "personal_account",
+            "title",
+            "description",
+            "display_order",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "personal_account",
+            "created_at",
+            "updated_at",
+        ]        
 
 
 class SignupSerializer(serializers.ModelSerializer):

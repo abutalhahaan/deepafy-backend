@@ -175,6 +175,30 @@ urlpatterns = [
         name="personal-job-experience-delete",
     ),
 
+        # Personal Responsibilities
+    path(
+        "personal-accounts/<int:personal_account_id>/responsibilities/create/",
+        views.personal_responsibility_create,
+        name="personal-responsibility-create",
+    ),
+    path(
+        "personal-accounts/<int:personal_account_id>/responsibilities/",
+        views.personal_responsibility_list,
+        name="personal-responsibility-list",
+    ),
+
+    path(
+        "personal-accounts/<int:personal_account_id>/responsibilities/<int:responsibility_id>/update/",
+        views.personal_responsibility_update,
+        name="personal-responsibility-update",
+    ),
+    path(
+        "personal-accounts/<int:personal_account_id>/responsibilities/<int:responsibility_id>/delete/",
+        views.personal_responsibility_delete,
+        name="personal-responsibility-delete",
+    ),
+
+
     # Skills
     path(
         "skills/create/",
