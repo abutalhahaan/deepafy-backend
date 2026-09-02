@@ -41,6 +41,7 @@ from .models import (
     PersonalLanguage,
     PersonalHobby,
     PersonalInterestedCategory,
+    PersonalResponsibility,
     PasswordResetOTP,
     ProfessionalAccount,
     UserIdentity,
@@ -49,6 +50,7 @@ from .models import (
 from .serializers import (
     ForgotPasswordSerializer,
     LoginSerializer,
+    PersonalResponsibilitySerializer,
     ResetPasswordSerializer,
     SignupSerializer,
     VerifyOTPSerializer,
@@ -2414,6 +2416,251 @@ def job_experience_list(request, identity_id):
             "results": results,
         }
     )
+
+# ============================================================
+# PERSONAL RESPONSIBILITIES
+# ============================================================
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@require_authentication
+def personal_responsibility_create(
+    request,
+    personal_account_id,
+):
+    personal_account, error_response = (
+        get_authenticated_personal_account_by_id(
+            request,
+            personal_account_id,
+        )
+    )
+
+    if error_response is not None:
+        return error_response
+
+    try:
+        data = json.loads(
+            request.body or "{}"
+        )
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {
+                "detail": "Invalid JSON."
+            },
+            status=400,
+        )
+
+    title = data.get(
+        "title",
+        "",
+    ).strip()
+
+    if not title:
+        return JsonResponse(
+            {
+                "detail":
+                "Responsibility title is required."
+            },
+            status=400,
+        )
+
+    responsibility = PersonalResponsibility.objects.create(
+        personal_account=personal_account,
+        title=title,
+        description=data.get(
+            "description",
+            "",
+        ),
+        display_order=data.get(
+            "display_order",
+            0,
+        ),
+        is_active=data.get(
+            "is_active",
+            True,
+        ),
+    )
+
+    return JsonResponse(
+        PersonalResponsibilitySerializer(
+            responsibility
+        ).data,
+        status=201,
+    )
+
+
+@require_http_methods(["GET"])
+@require_authentication
+def personal_responsibility_list(
+    request,
+    personal_account_id,
+):
+    personal_account, error_response = (
+        get_authenticated_personal_account_by_id(
+            request,
+            personal_account_id,
+        )
+    )
+
+    if error_response is not None:
+        return error_response
+
+    responsibilities = (
+        PersonalResponsibility.objects.filter(
+            personal_account=personal_account,
+            is_active=True,
+        ).order_by(
+            "display_order",
+            "id",
+        )
+    )
+
+    results = PersonalResponsibilitySerializer(
+        responsibilities,
+        many=True,
+    ).data
+
+    return JsonResponse(
+        {
+            "personal_account_id":
+            personal_account.id,
+            "count":
+            len(results),
+            "results":
+            results,
+        }
+    )
+
+
+@csrf_exempt
+@require_http_methods(["PATCH"])
+@require_authentication
+def personal_responsibility_update(
+    request,
+    personal_account_id,
+    responsibility_id,
+):
+    personal_account, error_response = (
+        get_authenticated_personal_account_by_id(
+            request,
+            personal_account_id,
+        )
+    )
+
+    if error_response is not None:
+        return error_response
+
+    try:
+        responsibility = PersonalResponsibility.objects.get(
+            id=responsibility_id,
+            personal_account=personal_account,
+        )
+    except PersonalResponsibility.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Responsibility not found."
+            },
+            status=404,
+        )
+
+    try:
+        data = json.loads(
+            request.body or "{}"
+        )
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {
+                "detail": "Invalid JSON."
+            },
+            status=400,
+        )
+
+    if "title" in data:
+        title = data.get(
+            "title",
+            "",
+        ).strip()
+
+        if not title:
+            return JsonResponse(
+                {
+                    "detail":
+                    "Responsibility title is required."
+                },
+                status=400,
+            )
+
+        responsibility.title = title
+
+    if "description" in data:
+        responsibility.description = data.get(
+            "description",
+            "",
+        )
+
+    if "display_order" in data:
+        responsibility.display_order = data.get(
+            "display_order",
+            0,
+        )
+
+    if "is_active" in data:
+        responsibility.is_active = data.get(
+            "is_active",
+            True,
+        )
+
+    responsibility.save()
+
+    return JsonResponse(
+        PersonalResponsibilitySerializer(
+            responsibility
+        ).data
+    )
+
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+@require_authentication
+def personal_responsibility_delete(
+    request,
+    personal_account_id,
+    responsibility_id,
+):
+    personal_account, error_response = (
+        get_authenticated_personal_account_by_id(
+            request,
+            personal_account_id,
+        )
+    )
+
+    if error_response is not None:
+        return error_response
+
+    try:
+        responsibility = PersonalResponsibility.objects.get(
+            id=responsibility_id,
+            personal_account=personal_account,
+        )
+    except PersonalResponsibility.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Responsibility not found."
+            },
+            status=404,
+        )
+
+    responsibility.delete()
+
+    return JsonResponse(
+        {
+            "detail":
+            "Responsibility deleted successfully."
+        }
+    )
+
 
 @csrf_exempt
 @require_http_methods(["PATCH"])
