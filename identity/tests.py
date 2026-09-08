@@ -1510,6 +1510,70 @@ class ProfessionalAccountAPITests(TestCase):
         )        
 
 
+    def test_owner_can_update_professional_background_image(
+        self,
+    ):
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        image_file = io.BytesIO()
+
+        image = Image.new(
+            "RGB",
+            (1200, 400),
+            "white",
+        )
+
+        image.save(
+            image_file,
+            format="JPEG",
+        )
+
+        image_file.seek(0)
+
+        uploaded_image = SimpleUploadedFile(
+            "professional-background.jpg",
+            image_file.getvalue(),
+            content_type="image/jpeg",
+        )
+
+        response = self.client.post(
+            f"/api/identity/"
+            f"{self.identity.id}/"
+            "professional-account/background-image/",
+            data={
+                "background_image": uploaded_image,
+            },
+            HTTP_AUTHORIZATION=(
+                f"Bearer {refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        self.professional_account.refresh_from_db()
+
+        self.assertIsNotNone(
+            self.professional_account.background_image
+        )
+
+        with self.professional_account.background_image.open(
+            "rb"
+        ) as saved_image:
+            processed_image = Image.open(
+                saved_image
+            )
+
+            self.assertEqual(
+                processed_image.size,
+                (1920, 1080),
+            )
+
+
 class JobExperienceTests(TestCase):
     def setUp(self):
         self.identity = UserIdentity.objects.create(

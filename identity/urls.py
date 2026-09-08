@@ -65,9 +65,19 @@ urlpatterns = [
         name="account-type-create",
     ),
     path(
+        "personal-accounts/username/<str:username>/job-experiences/",
+        views.public_personal_experiences_by_username,
+        name="public-personal-experiences-by-username",
+    ),
+    path(
         "personal-accounts/create/",
         views.personal_account_create,
         name="personal-account-create",
+    ),
+    path(
+        "personal-accounts/username/<str:username>/",
+        views.public_personal_account_by_username,
+        name="public-personal-account-by-username",
     ),
     path(
         "<int:identity_id>/personal-account/",
