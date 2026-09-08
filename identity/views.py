@@ -648,6 +648,86 @@ def personal_account_create(request):
 
 
 @require_http_methods(["GET"])
+def public_personal_account_by_username(
+    request,
+    username,
+):
+    try:
+
+        personal_account = (
+            PersonalAccount.objects.get(
+                username=username
+            )
+        )
+
+    except PersonalAccount.DoesNotExist:
+
+        return JsonResponse(
+            {
+                "detail":
+                    "Personal account not found."
+            },
+            status=404,
+        )
+
+    return JsonResponse(
+        serialize_personal_account(
+            personal_account
+        )
+    )
+
+
+@require_http_methods(["GET"])
+def public_personal_experiences_by_username(
+    request,
+    username,
+):
+    try:
+
+        personal_account = (
+            PersonalAccount.objects.get(
+                username=username
+            )
+        )
+
+    except PersonalAccount.DoesNotExist:
+
+        return JsonResponse(
+            {
+                "detail":
+                    "Personal account not found."
+            },
+            status=404,
+        )
+
+    experiences = JobExperience.objects.filter(
+        personal_account=personal_account,
+        is_active=True,
+    ).order_by(
+        "display_order",
+        "-start_date",
+    )
+
+    results = [
+        serialize_personal_job_experience(
+            experience
+        )
+        for experience in experiences
+    ]
+
+    return JsonResponse(
+        {
+            "personal_account_id":
+                personal_account.id,
+            "count":
+                len(results),
+            "results":
+                results,
+        }
+    )
+
+
+@require_http_methods(["GET"])
 @require_authentication
 def personal_account_detail(request, identity_id):
 
@@ -883,9 +963,12 @@ def personal_background_color_update(
         background_color.upper()
     )
 
+    personal_account.background_image = None
+
     personal_account.save(
         update_fields=[
             "background_color",
+            "background_image",
             "updated_at",
         ]
     )
@@ -1089,7 +1172,7 @@ def personal_background_image_update(
     try:
         processed_background_image = process_image(
             request.FILES["background_image"],
-            preset="cover",
+            preset="background",
         )
     except ValueError as error:
         return JsonResponse(
@@ -1177,7 +1260,7 @@ def professional_background_image_update(
     try:
         processed_background_image = process_image(
             request.FILES["background_image"],
-            preset="cover",
+            preset="background",
         )
     except ValueError as error:
         return JsonResponse(
