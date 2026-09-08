@@ -1074,6 +1074,7 @@ def personal_account_photos_update(request, identity_id):
     old_profile_photo = None
     old_cover_photo = None
 
+
     try:
         if "profile_photo" in request.FILES:
             processed_profile_photo = process_image(
