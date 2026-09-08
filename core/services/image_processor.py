@@ -9,7 +9,7 @@ IMAGE_PRESETS = {
     "profile": {
         "width": 800,
         "height": 800,
-        "max_size_kb": 2048,
+        "max_size_kb": 800,
         "quality": 85,
     },
     "cover": {
