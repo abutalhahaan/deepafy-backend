@@ -405,6 +405,51 @@ class PersonalAccount(models.Model):
             or f"Personal Account - {self.identity.user_id}"
         )
 
+
+class PersonalContact(models.Model):
+    class ContactType(models.TextChoices):
+        EMAIL = "email", "Email"
+        PHONE = "phone", "Phone"
+
+    personal_account = models.ForeignKey(
+        PersonalAccount,
+        on_delete=models.CASCADE,
+        related_name="contacts",
+    )
+
+    contact_type = models.CharField(
+        max_length=10,
+        choices=ContactType.choices,
+    )
+
+    value = models.CharField(max_length=255)
+
+    normalized_value = models.CharField(max_length=255)
+
+    is_primary = models.BooleanField(default=False)
+
+    is_verified = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["contact_type", "normalized_value"],
+                name="unique_personal_contact_value",
+            ),
+            models.UniqueConstraint(
+                fields=["personal_account", "contact_type"],
+                condition=models.Q(is_primary=True),
+                name="unique_primary_contact_per_type",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.contact_type}: {self.value}"
+
 class PersonalInterestedCategory(models.Model):
     personal_account = models.ForeignKey(
         PersonalAccount,
@@ -778,6 +823,53 @@ class JobExperience(models.Model):
 
     def __str__(self):
         return f"{self.job_title} - {self.company}"
+
+
+class PersonalRunningProfession(models.Model):
+    personal_account = models.ForeignKey(
+        PersonalAccount,
+        on_delete=models.CASCADE,
+        related_name="running_professions",
+    )
+
+    job_experience = models.ForeignKey(
+        JobExperience,
+        on_delete=models.CASCADE,
+        related_name="selected_running_professions",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["personal_account", "job_experience"],
+                name="unique_personal_running_profession",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.personal_account.identity.user_id} - {self.job_experience.job_title}"
+
+
+class PersonalHighestAcademicBackground(models.Model):
+    personal_account = models.OneToOneField(
+        PersonalAccount,
+        on_delete=models.CASCADE,
+        related_name="highest_academic_selection",
+    )
+
+    academic_background = models.ForeignKey(
+        AcademicBackground,
+        on_delete=models.CASCADE,
+        related_name="selected_as_highest",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.personal_account.identity.user_id} - {self.academic_background.degree_certificate}"
 
 
 class Skill(models.Model):

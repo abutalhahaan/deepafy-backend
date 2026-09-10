@@ -11,6 +11,7 @@ from .models import (
     JobExperience,
 
     PersonalAccount,
+    PersonalContact,
 
     PersonalHobby,
 
@@ -352,7 +353,7 @@ class SignupSerializer(serializers.ModelSerializer):
                 is_active=True,
             )
 
-            PersonalAccount.objects.create(
+            personal_account = PersonalAccount.objects.create(
                 identity=identity,
                 display_name=(
                     f"{identity.first_name} "
@@ -360,6 +361,25 @@ class SignupSerializer(serializers.ModelSerializer):
                 ).strip(),
                 username=identity.username,
             )
+
+            PersonalContact.objects.create(
+                personal_account=personal_account,
+                contact_type=PersonalContact.ContactType.EMAIL,
+                value=identity.email,
+                normalized_value=identity.email.lower(),
+                is_primary=True,
+                is_verified=identity.is_email_verified,
+            )
+
+            if identity.mobile_number:
+                PersonalContact.objects.create(
+                    personal_account=personal_account,
+                    contact_type=PersonalContact.ContactType.PHONE,
+                    value=identity.mobile_number,
+                    normalized_value="".join(identity.mobile_number.split()),
+                    is_primary=True,
+                    is_verified=identity.is_mobile_verified,
+                )
 
         return identity
 
