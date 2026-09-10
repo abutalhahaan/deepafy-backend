@@ -970,3 +970,130 @@ class PasswordResetOTP(models.Model):
             f"Password Reset OTP - "
             f"{self.identity.user_id}"
         )        
+class SocialMediaPlatform(models.Model):
+    name = models.CharField(
+        max_length=100,
+        unique=True,
+    )
+
+    slug = models.SlugField(
+        max_length=120,
+        unique=True,
+    )
+
+    icon = models.ImageField(
+        upload_to="social_media_platforms/",
+        null=True,
+        blank=True,
+    )
+
+    url_template = models.CharField(
+        max_length=500,
+        help_text="Use {username} as the username placeholder.",
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    display_order = models.PositiveIntegerField(
+        default=0,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        ordering = ["display_order", "name"]
+
+    def save(self, *args, **kwargs):
+        old_template = None
+
+        if self.pk:
+            old_template = (
+                type(self)
+                .objects
+                .filter(pk=self.pk)
+                .values_list("url_template", flat=True)
+                .first()
+            )
+
+        super().save(*args, **kwargs)
+
+        if old_template is not None and old_template != self.url_template:
+            social_media_items = UserSocialMedia.objects.filter(
+                platform=self
+            )
+
+            for social_media in social_media_items:
+                social_media.url = self.url_template.replace(
+                    "{username}",
+                    social_media.username.strip(),
+                )
+                type(social_media).objects.filter(
+                    pk=social_media.pk
+                ).update(
+                    url=social_media.url,
+                    updated_at=social_media.updated_at,
+                )
+
+    def __str__(self):
+        return self.name
+
+
+class UserSocialMedia(models.Model):
+    identity = models.ForeignKey(
+        UserIdentity,
+        on_delete=models.CASCADE,
+        related_name="social_media",
+    )
+
+    platform = models.ForeignKey(
+        SocialMediaPlatform,
+        on_delete=models.PROTECT,
+        related_name="user_social_media",
+    )
+
+    username = models.CharField(
+        max_length=255,
+    )
+
+    url = models.CharField(
+        max_length=1000,
+        editable=False,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["identity", "platform"],
+                name="unique_user_social_media_platform",
+            )
+        ]
+        ordering = ["platform__display_order", "platform__name"]
+
+    def save(self, *args, **kwargs):
+        self.url = self.platform.url_template.replace(
+            "{username}",
+            self.username.strip(),
+        )
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (
+            f"{self.identity.user_id} - "
+            f"{self.platform.name}"
+        )
