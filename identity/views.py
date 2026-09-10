@@ -49,7 +49,9 @@ from .models import (
     PersonalResponsibility,
     PasswordResetOTP,
     ProfessionalAccount,
+    SocialMediaPlatform,
     UserIdentity,
+    UserSocialMedia,
 )
 
 from .serializers import (
@@ -4367,6 +4369,230 @@ def reset_password(request):
             },
             status=400,
         )    
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@require_authentication
+def user_social_media_create(request):
+    identity = get_authenticated_identity(request)
+
+    if identity is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"detail": "Invalid JSON."},
+            status=400,
+        )
+
+    platform_id = data.get("platform_id")
+    username = data.get("username", "").strip()
+
+    if not platform_id:
+        return JsonResponse(
+            {"detail": "Platform is required."},
+            status=400,
+        )
+
+    if not username:
+        return JsonResponse(
+            {"detail": "Username is required."},
+            status=400,
+        )
+
+    try:
+        platform = SocialMediaPlatform.objects.get(
+            id=platform_id,
+            is_active=True,
+        )
+    except SocialMediaPlatform.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Social media platform not found or inactive."},
+            status=404,
+        )
+
+    if UserSocialMedia.objects.filter(
+        identity=identity,
+        platform=platform,
+    ).exists():
+        return JsonResponse(
+            {"detail": "This social media platform is already added."},
+            status=400,
+        )
+
+    social_media = UserSocialMedia.objects.create(
+        identity=identity,
+        platform=platform,
+        username=username,
+    )
+
+    return JsonResponse(
+        {
+            "id": social_media.id,
+            "platform_id": platform.id,
+            "platform_name": platform.name,
+            "platform_slug": platform.slug,
+            "icon": platform.icon.url if platform.icon else None,
+            "username": social_media.username,
+            "url": social_media.url,
+        },
+        status=201,
+    )
+
+
+@csrf_exempt
+@require_http_methods(["PATCH", "DELETE"])
+@require_authentication
+def user_social_media_delete(request, social_media_id):
+    identity = get_authenticated_identity(request)
+
+    if identity is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    try:
+        social_media = UserSocialMedia.objects.get(
+            id=social_media_id,
+            identity=identity,
+        )
+    except UserSocialMedia.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Social media link not found."},
+            status=404,
+        )
+
+    if request.method == "PATCH":
+        try:
+            data = json.loads(request.body or "{}")
+        except json.JSONDecodeError:
+            return JsonResponse(
+                {"detail": "Invalid JSON."},
+                status=400,
+            )
+
+        username = data.get("username", "").strip()
+
+        if not username:
+            return JsonResponse(
+                {"detail": "Username is required."},
+                status=400,
+            )
+
+        social_media.username = username
+        social_media.save()
+
+        return JsonResponse(
+            {
+                "id": social_media.id,
+                "platform_id": social_media.platform_id,
+                "platform_name": social_media.platform.name,
+                "platform_slug": social_media.platform.slug,
+                "icon": social_media.platform.icon.url if social_media.platform.icon else None,
+                "username": social_media.username,
+                "url": social_media.url,
+            }
+        )
+
+    identity = get_authenticated_identity(request)
+
+    if identity is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    try:
+        social_media = UserSocialMedia.objects.get(
+            id=social_media_id,
+            identity=identity,
+        )
+    except UserSocialMedia.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Social media link not found."},
+            status=404,
+        )
+
+    social_media.delete()
+
+    return JsonResponse(
+        {"detail": "Social media link removed successfully."}
+    )
+
+
+@require_http_methods(["GET"])
+@require_authentication
+def user_social_media_list(request):
+    identity = get_authenticated_identity(request)
+
+    if identity is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    social_media = UserSocialMedia.objects.select_related(
+        "platform"
+    ).filter(
+        identity=identity,
+        platform__is_active=True,
+    ).order_by(
+        "platform__display_order",
+        "platform__name",
+    )
+
+    results = [
+        {
+            "id": item.id,
+            "platform_id": item.platform_id,
+            "platform_name": item.platform.name,
+            "platform_slug": item.platform.slug,
+            "icon": item.platform.icon.url if item.platform.icon else None,
+            "username": item.username,
+            "url": item.url,
+        }
+        for item in social_media
+    ]
+
+    return JsonResponse(
+        {
+            "count": len(results),
+            "results": results,
+        }
+    )
+
+
+@require_http_methods(["GET"])
+def social_media_platform_list(request):
+    platforms = SocialMediaPlatform.objects.filter(is_active=True).order_by(
+        "display_order", "name"
+    )
+
+    results = [
+        {
+            "id": platform.id,
+            "name": platform.name,
+            "slug": platform.slug,
+            "icon": platform.icon.url if platform.icon else None,
+            "url_template": platform.url_template,
+            "display_order": platform.display_order,
+        }
+        for platform in platforms
+    ]
+
+    return JsonResponse(
+        {
+            "count": len(results),
+            "results": results,
+        }
+    )
+
 
 @require_http_methods(["GET"])
 def hobby_list(request):

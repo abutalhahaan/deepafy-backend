@@ -27,6 +27,8 @@ from .models import (
     ProfessionalAccount,
     Skill,
     UserIdentity,
+    SocialMediaPlatform,
+    UserSocialMedia,
 )
 
 
@@ -2705,3 +2707,125 @@ class SignupSerializerTests(TestCase):
             "01812345678",
         )
         self.assertTrue(phone_contact.is_primary)
+
+
+class UserSocialMediaTests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="social@example.com",
+            mobile_number="01711111111",
+            status=UserIdentity.Status.ACTIVE,
+        )
+        self.platform = SocialMediaPlatform.objects.create(
+            name="LinkedIn",
+            slug="linkedin",
+            url_template="https://www.linkedin.com/in/{username}/",
+            is_active=True,
+            display_order=1,
+        )
+
+    def test_social_media_url_generated(self):
+        social_media = UserSocialMedia.objects.create(
+            identity=self.identity,
+            platform=self.platform,
+            username="testuser123",
+        )
+
+        self.assertEqual(
+            social_media.url,
+            "https://www.linkedin.com/in/testuser123/",
+        )
+
+    def test_one_platform_per_identity(self):
+        UserSocialMedia.objects.create(
+            identity=self.identity,
+            platform=self.platform,
+            username="testuser123",
+        )
+
+        with self.assertRaises(Exception):
+            UserSocialMedia.objects.create(
+                identity=self.identity,
+                platform=self.platform,
+                username="anotheruser",
+            )
+
+
+class UserSocialMediaAPITests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="socialapi@example.com",
+            mobile_number="01722222222",
+            status=UserIdentity.Status.ACTIVE,
+        )
+        self.platform = SocialMediaPlatform.objects.create(
+            name="LinkedIn",
+            slug="linkedin-api",
+            url_template="https://www.linkedin.com/in/{username}/",
+            is_active=True,
+            display_order=1,
+        )
+        refresh = RefreshToken.for_user(self.identity)
+        self.auth_header = f"Bearer {refresh.access_token}"
+
+    def test_platform_list_api(self):
+        response = self.client.get(
+            "/api/identity/social-media/platforms/"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["count"], 1)
+        self.assertEqual(
+            response.json()["results"][0]["slug"],
+            "linkedin-api",
+        )
+
+    def test_social_media_create_api(self):
+        response = self.client.post(
+            "/api/identity/social-media/create/",
+            data=json.dumps({
+                "platform_id": self.platform.id,
+                "username": "apiuser123",
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            response.json()["url"],
+            "https://www.linkedin.com/in/apiuser123/",
+        )
+
+    def test_social_media_update_api(self):
+        social_media = UserSocialMedia.objects.create(
+            identity=self.identity,
+            platform=self.platform,
+            username="oldusername",
+        )
+        response = self.client.patch(
+            f"/api/identity/social-media/{social_media.id}/",
+            data=json.dumps({"username": "newusername"}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["url"],
+            "https://www.linkedin.com/in/newusername/",
+        )
+
+    def test_social_media_delete_api(self):
+        social_media = UserSocialMedia.objects.create(
+            identity=self.identity,
+            platform=self.platform,
+            username="deleteuser",
+        )
+        response = self.client.delete(
+            f"/api/identity/social-media/{social_media.id}/",
+            HTTP_AUTHORIZATION=self.auth_header,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(
+            UserSocialMedia.objects.filter(
+                id=social_media.id
+            ).exists()
+        )

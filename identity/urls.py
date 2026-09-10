@@ -70,6 +70,26 @@ urlpatterns = [
         name="public-personal-experiences-by-username",
     ),
     path(
+        "social-media/",
+        views.user_social_media_list,
+        name="user-social-media-list",
+    ),
+    path(
+        "social-media/create/",
+        views.user_social_media_create,
+        name="user-social-media-create",
+    ),
+    path(
+        "social-media/<int:social_media_id>/",
+        views.user_social_media_delete,
+        name="user-social-media-delete",
+    ),
+    path(
+        "social-media/platforms/",
+        views.social_media_platform_list,
+        name="social-media-platform-list",
+    ),
+    path(
         "personal-accounts/create/",
         views.personal_account_create,
         name="personal-account-create",
