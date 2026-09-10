@@ -90,6 +90,16 @@ urlpatterns = [
         name="personal-account-update",
     ),
     path(
+        "personal-accounts/<int:personal_account_id>/contacts/",
+        views.personal_contact_list_create,
+        name="personal-contact-list-create",
+    ),
+    path(
+        "personal-accounts/<int:personal_account_id>/contacts/<int:contact_id>/",
+        views.personal_contact_update_delete,
+        name="personal-contact-update-delete",
+    ),
+    path(
         "<int:identity_id>/personal-account/background-color/",
         views.personal_background_color_update,
         name="personal-background-color-update",
@@ -185,7 +195,20 @@ urlpatterns = [
         name="personal-job-experience-delete",
     ),
 
-        # Personal Responsibilities
+        # Edit Profile Selections
+    path(
+        "personal-accounts/<int:personal_account_id>/running-professions/",
+        views.personal_running_profession_selection,
+        name="personal-running-profession-selection",
+    ),
+    path(
+        "personal-accounts/<int:personal_account_id>/highest-academic-background/",
+        views.personal_highest_academic_selection,
+        name="personal-highest-academic-selection",
+    ),
+
+
+    # Personal Responsibilities
     path(
         "personal-accounts/<int:personal_account_id>/responsibilities/create/",
         views.personal_responsibility_create,

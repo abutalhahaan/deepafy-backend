@@ -20,6 +20,7 @@ from .models import (
     JobExperience,
     Language,
     PersonalAccount,
+    PersonalContact,
     PersonalHobby,
     PersonalInterestedCategory,
     PersonalLanguage,
@@ -461,6 +462,283 @@ class PersonalAccountAPITests(TestCase):
         self.assertIsNotNone(
             response.json()["background_image"]
         )            
+
+class PersonalContactAPITests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="contact-api@example.com",
+            mobile_number="01711111111",
+        )
+
+        self.personal_account = PersonalAccount.objects.create(
+            identity=self.identity,
+        )
+
+        refresh = RefreshToken.for_user(
+            self.identity
+        )
+
+        self.auth_headers = {
+            "HTTP_AUTHORIZATION": (
+                f"Bearer {refresh.access_token}"
+            )
+        }
+
+    def test_personal_contact_model_creation(self):
+        contact = PersonalContact.objects.create(
+            personal_account=self.personal_account,
+            contact_type=PersonalContact.ContactType.EMAIL,
+            value="secondary@example.com",
+            normalized_value="secondary@example.com",
+        )
+
+        self.assertEqual(
+            contact.personal_account,
+            self.personal_account,
+        )
+
+        self.assertEqual(
+            contact.contact_type,
+            PersonalContact.ContactType.EMAIL,
+        )
+
+    def test_personal_contact_list_api(self):
+        PersonalContact.objects.create(
+            personal_account=self.personal_account,
+            contact_type=PersonalContact.ContactType.EMAIL,
+            value="secondary@example.com",
+            normalized_value="secondary@example.com",
+        )
+
+        response = self.client.get(
+            f"/api/identity/personal-accounts/"
+            f"{self.personal_account.id}/contacts/",
+            **self.auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()["results"]), 1)
+        self.assertEqual(
+            response.json()["results"][0]["value"],
+            "secondary@example.com",
+        )
+
+    def test_personal_contact_create_primary_email_api(self):
+        response = self.client.post(
+            f"/api/identity/personal-accounts/"
+            f"{self.personal_account.id}/contacts/",
+            data=json.dumps({
+                "contact_type": "email",
+                "value": "primary@example.com",
+                "is_primary": True,
+            }),
+            content_type="application/json",
+            **self.auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            response.json()["value"],
+            "primary@example.com",
+        )
+        self.assertTrue(response.json()["is_primary"])
+
+        self.identity.refresh_from_db()
+
+        self.assertEqual(
+            self.identity.email,
+            "primary@example.com",
+        )
+
+    def test_personal_contact_create_primary_phone_api(self):
+        response = self.client.post(
+            f"/api/identity/personal-accounts/"
+            f"{self.personal_account.id}/contacts/",
+            data=json.dumps({
+                "contact_type": "phone",
+                "value": "01812345678",
+                "is_primary": True,
+            }),
+            content_type="application/json",
+            **self.auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 201)
+
+        self.identity.refresh_from_db()
+
+        self.assertEqual(
+            self.identity.mobile_number,
+            "01812345678",
+        )
+
+    def test_duplicate_personal_contact_is_rejected(self):
+        PersonalContact.objects.create(
+            personal_account=self.personal_account,
+            contact_type=PersonalContact.ContactType.EMAIL,
+            value="duplicate@example.com",
+            normalized_value="duplicate@example.com",
+        )
+
+        response = self.client.post(
+            f"/api/identity/personal-accounts/"
+            f"{self.personal_account.id}/contacts/",
+            data=json.dumps({
+                "contact_type": "email",
+                "value": "DUPLICATE@example.com",
+            }),
+            content_type="application/json",
+            **self.auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_contact_matching_other_identity_email_is_rejected(self):
+        response = self.client.post(
+            f"/api/identity/personal-accounts/{self.personal_account.id}/contacts/",
+            data=json.dumps({
+                "contact_type": "email",
+                "value": "contact-api@example.com",
+            }),
+            content_type="application/json",
+            **self.auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_contact_matching_other_identity_phone_is_rejected(self):
+        response = self.client.post(
+            f"/api/identity/personal-accounts/{self.personal_account.id}/contacts/",
+            data=json.dumps({
+                "contact_type": "phone",
+                "value": "01711111111",
+            }),
+            content_type="application/json",
+            **self.auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_other_user_cannot_access_personal_contacts(self):
+        other_identity = UserIdentity.objects.create(
+            email="other-contact@example.com",
+        )
+
+        other_account = PersonalAccount.objects.create(
+            identity=other_identity,
+        )
+
+        other_refresh = RefreshToken.for_user(
+            other_identity
+        )
+
+        response = self.client.get(
+            f"/api/identity/personal-accounts/"
+            f"{self.personal_account.id}/contacts/",
+            HTTP_AUTHORIZATION=(
+                f"Bearer {other_refresh.access_token}"
+            ),
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_personal_contact_set_primary_api(self):
+        first = PersonalContact.objects.create(
+            personal_account=self.personal_account,
+            contact_type=PersonalContact.ContactType.EMAIL,
+            value="first@example.com",
+            normalized_value="first@example.com",
+            is_primary=True,
+        )
+
+        second = PersonalContact.objects.create(
+            personal_account=self.personal_account,
+            contact_type=PersonalContact.ContactType.EMAIL,
+            value="second@example.com",
+            normalized_value="second@example.com",
+        )
+
+        response = self.client.patch(
+            f"/api/identity/personal-accounts/"
+            f"{self.personal_account.id}/contacts/{second.id}/",
+            data=json.dumps({
+                "is_primary": True,
+            }),
+            content_type="application/json",
+            **self.auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.identity.refresh_from_db()
+
+        self.assertFalse(first.is_primary)
+        self.assertTrue(second.is_primary)
+        self.assertEqual(
+            self.identity.email,
+            "second@example.com",
+        )
+
+    def test_personal_contact_delete_primary_promotes_replacement(self):
+        primary = PersonalContact.objects.create(
+            personal_account=self.personal_account,
+            contact_type=PersonalContact.ContactType.EMAIL,
+            value="primary@example.com",
+            normalized_value="primary@example.com",
+            is_primary=True,
+        )
+
+        replacement = PersonalContact.objects.create(
+            personal_account=self.personal_account,
+            contact_type=PersonalContact.ContactType.EMAIL,
+            value="replacement@example.com",
+            normalized_value="replacement@example.com",
+        )
+
+        self.identity.email = "primary@example.com"
+        self.identity.save(update_fields=["email"])
+
+        response = self.client.delete(
+            f"/api/identity/personal-accounts/"
+            f"{self.personal_account.id}/contacts/{primary.id}/",
+            **self.auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        replacement.refresh_from_db()
+        self.identity.refresh_from_db()
+
+        self.assertTrue(replacement.is_primary)
+        self.assertEqual(
+            self.identity.email,
+            "replacement@example.com",
+        )
+
+    def test_personal_contact_delete_api(self):
+        contact = PersonalContact.objects.create(
+            personal_account=self.personal_account,
+            contact_type=PersonalContact.ContactType.PHONE,
+            value="01812345678",
+            normalized_value="01812345678",
+        )
+
+        response = self.client.delete(
+            f"/api/identity/personal-accounts/"
+            f"{self.personal_account.id}/contacts/{contact.id}/",
+            **self.auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        self.assertFalse(
+            PersonalContact.objects.filter(
+                id=contact.id
+            ).exists()
+        )
+
 
 class PersonalLanguageTests(TestCase):
     def setUp(self):
@@ -2377,3 +2655,53 @@ class AcademicBackgroundAPITests(TestCase):
                 id=academic.id
             ).exists()
         )        
+
+class SignupSerializerTests(TestCase):
+    def test_signup_creates_primary_email_and_phone_contacts(self):
+        from .serializers import SignupSerializer
+
+        serializer = SignupSerializer(data={
+            "first_name": "Test",
+            "last_name": "User",
+            "username": "testsignup",
+            "email": "testsignup@example.com",
+            "mobile_number": "01812345678",
+            "password": "TestPassword123",
+        })
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+        identity = serializer.save()
+        personal_account = PersonalAccount.objects.get(
+            identity=identity
+        )
+
+        email_contact = PersonalContact.objects.get(
+            personal_account=personal_account,
+            contact_type=PersonalContact.ContactType.EMAIL,
+        )
+
+        phone_contact = PersonalContact.objects.get(
+            personal_account=personal_account,
+            contact_type=PersonalContact.ContactType.PHONE,
+        )
+
+        self.assertEqual(
+            email_contact.value,
+            "testsignup@example.com",
+        )
+        self.assertEqual(
+            email_contact.normalized_value,
+            "testsignup@example.com",
+        )
+        self.assertTrue(email_contact.is_primary)
+
+        self.assertEqual(
+            phone_contact.value,
+            "01812345678",
+        )
+        self.assertEqual(
+            phone_contact.normalized_value,
+            "01812345678",
+        )
+        self.assertTrue(phone_contact.is_primary)

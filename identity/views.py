@@ -10,11 +10,13 @@ from django.http.multipartparser import (
 )
 
 from django.http import JsonResponse
+from django.db import transaction
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.utils import timezone
 from rest_framework_simplejwt.tokens import RefreshToken
 from category_engine.models import Category
+from companies.models import Country
 
 from .permissions import (
 
@@ -38,7 +40,10 @@ from .models import (
     Language,
     Skill,
     PersonalAccount,
+    PersonalContact,
+    PersonalHighestAcademicBackground,
     PersonalLanguage,
+    PersonalRunningProfession,
     PersonalHobby,
     PersonalInterestedCategory,
     PersonalResponsibility,
@@ -770,6 +775,351 @@ def personal_account_detail(request, identity_id):
     )
 
 @csrf_exempt
+@require_http_methods(["GET", "POST"])
+@require_authentication
+def personal_contact_list_create(request, personal_account_id):
+    personal_account, error_response = (
+        get_authenticated_personal_account_by_id(
+            request,
+            personal_account_id,
+        )
+    )
+
+    if error_response is not None:
+        return error_response
+
+    if request.method == "GET":
+        contacts = PersonalContact.objects.filter(
+            personal_account=personal_account
+        ).order_by(
+            "-is_primary",
+            "contact_type",
+            "created_at",
+        )
+
+        return JsonResponse(
+            {
+                "results": [
+                    {
+                        "id": contact.id,
+                        "contact_type": contact.contact_type,
+                        "value": contact.value,
+                        "is_primary": contact.is_primary,
+                        "is_verified": contact.is_verified,
+                    }
+                    for contact in contacts
+                ]
+            }
+        )
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"detail": "Invalid JSON."},
+            status=400,
+        )
+
+    contact_type = data.get("contact_type", "").strip().lower()
+    value = data.get("value", "").strip()
+
+    if contact_type not in (
+        PersonalContact.ContactType.EMAIL,
+        PersonalContact.ContactType.PHONE,
+    ):
+        return JsonResponse(
+            {"detail": "Invalid contact type."},
+            status=400,
+        )
+
+    if not value:
+        return JsonResponse(
+            {"detail": "Contact value cannot be empty."},
+            status=400,
+        )
+
+    normalized_value = value.lower() if contact_type == "email" else (
+        "".join(value.split())
+    )
+
+    if PersonalContact.objects.filter(
+        contact_type=contact_type,
+        normalized_value=normalized_value,
+    ).exists():
+        return JsonResponse(
+            {"detail": "This contact is already in use."},
+            status=400,
+        )
+
+    identity_field = "email" if contact_type == "email" else "mobile_number"
+
+    identity_filter = {
+        identity_field: normalized_value,
+    }
+
+    if UserIdentity.objects.filter(
+        **identity_filter
+    ).exclude(
+        id=personal_account.identity_id
+    ).exists():
+        return JsonResponse(
+            {"detail": "This contact is already in use."},
+            status=400,
+        )
+
+    current_identity_value = getattr(
+        personal_account.identity,
+        identity_field,
+        "",
+    )
+
+    current_identity_normalized = (
+        current_identity_value.lower()
+        if contact_type == "email" and current_identity_value
+        else "".join(current_identity_value.split())
+        if current_identity_value
+        else ""
+    )
+
+    if (
+        current_identity_normalized
+        and current_identity_normalized == normalized_value
+    ):
+        return JsonResponse(
+            {"detail": "This contact is already in use."},
+            status=400,
+        )
+
+    is_primary = bool(data.get("is_primary", False))
+
+    with transaction.atomic():
+        if is_primary:
+            PersonalContact.objects.filter(
+                personal_account=personal_account,
+                contact_type=contact_type,
+                is_primary=True,
+            ).update(is_primary=False)
+
+        contact = PersonalContact.objects.create(
+            personal_account=personal_account,
+            contact_type=contact_type,
+            value=value,
+            normalized_value=normalized_value,
+            is_primary=is_primary,
+        )
+
+        identity = personal_account.identity
+
+        if is_primary and contact_type == "email":
+            identity.email = value
+            identity.save(update_fields=["email"])
+
+        if is_primary and contact_type == "phone":
+            identity.mobile_number = value
+            identity.save(update_fields=["mobile_number"])
+
+    return JsonResponse(
+        {
+            "id": contact.id,
+            "contact_type": contact.contact_type,
+            "value": contact.value,
+            "is_primary": contact.is_primary,
+            "is_verified": contact.is_verified,
+        },
+        status=201,
+    )
+
+
+@csrf_exempt
+@require_http_methods(["PATCH", "DELETE"])
+@require_authentication
+def personal_contact_update_delete(request, personal_account_id, contact_id):
+    personal_account, error_response = (
+        get_authenticated_personal_account_by_id(
+            request,
+            personal_account_id,
+        )
+    )
+
+    if error_response is not None:
+        return error_response
+
+    try:
+        contact = PersonalContact.objects.get(
+            id=contact_id,
+            personal_account=personal_account,
+        )
+    except PersonalContact.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Contact not found."},
+            status=404,
+        )
+
+    if request.method == "DELETE":
+        was_primary = contact.is_primary
+        contact_type = contact.contact_type
+
+        with transaction.atomic():
+            contact.delete()
+
+            if was_primary:
+                identity = personal_account.identity
+
+                if contact_type == "email":
+                    replacement = (
+                        PersonalContact.objects
+                        .filter(
+                            personal_account=personal_account,
+                            contact_type="email",
+                        )
+                        .order_by("created_at")
+                        .first()
+                    )
+
+                    if replacement:
+                        replacement.is_primary = True
+                        replacement.save(update_fields=["is_primary"])
+                        identity.email = replacement.value
+                    else:
+                        identity.email = ""
+
+                    identity.save(update_fields=["email"])
+
+                elif contact_type == "phone":
+                    replacement = (
+                        PersonalContact.objects
+                        .filter(
+                            personal_account=personal_account,
+                            contact_type="phone",
+                        )
+                        .order_by("created_at")
+                        .first()
+                    )
+
+                    if replacement:
+                        replacement.is_primary = True
+                        replacement.save(update_fields=["is_primary"])
+                        identity.mobile_number = replacement.value
+                    else:
+                        identity.mobile_number = ""
+
+                    identity.save(update_fields=["mobile_number"])
+
+        return JsonResponse(
+            {"detail": "Contact deleted successfully."}
+        )
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"detail": "Invalid JSON."},
+            status=400,
+        )
+
+    if "value" in data:
+        value = data.get("value", "").strip()
+
+        if not value:
+            return JsonResponse(
+                {"detail": "Contact value cannot be empty."},
+                status=400,
+            )
+
+        normalized_value = (
+            value.lower()
+            if contact.contact_type == "email"
+            else "".join(value.split())
+        )
+
+        if PersonalContact.objects.filter(
+            contact_type=contact.contact_type,
+            normalized_value=normalized_value,
+        ).exclude(id=contact.id).exists():
+            return JsonResponse(
+                {"detail": "This contact is already in use."},
+                status=400,
+            )
+
+        contact.value = value
+        contact.normalized_value = normalized_value
+
+    if "is_primary" in data:
+        is_primary = bool(data.get("is_primary"))
+
+        with transaction.atomic():
+            if is_primary:
+                PersonalContact.objects.filter(
+                    personal_account=personal_account,
+                    contact_type=contact.contact_type,
+                    is_primary=True,
+                ).exclude(id=contact.id).update(
+                    is_primary=False
+                )
+
+            contact.is_primary = is_primary
+            contact.save()
+
+            identity = personal_account.identity
+
+            if contact.contact_type == "email":
+                if is_primary:
+                    identity.email = contact.value
+                elif identity.email == contact.value:
+                    replacement = (
+                        PersonalContact.objects
+                        .filter(
+                            personal_account=personal_account,
+                            contact_type="email",
+                            is_primary=True,
+                        )
+                        .exclude(id=contact.id)
+                        .first()
+                    )
+                    identity.email = replacement.value if replacement else ""
+                identity.save(update_fields=["email"])
+
+            elif contact.contact_type == "phone":
+                if is_primary:
+                    identity.mobile_number = contact.value
+                elif identity.mobile_number == contact.value:
+                    replacement = (
+                        PersonalContact.objects
+                        .filter(
+                            personal_account=personal_account,
+                            contact_type="phone",
+                            is_primary=True,
+                        )
+                        .exclude(id=contact.id)
+                        .first()
+                    )
+                    identity.mobile_number = replacement.value if replacement else ""
+                identity.save(update_fields=["mobile_number"])
+
+    else:
+        contact.save()
+
+        if contact.is_primary:
+            identity = personal_account.identity
+            if contact.contact_type == "email":
+                identity.email = contact.value
+                identity.save(update_fields=["email"])
+            elif contact.contact_type == "phone":
+                identity.mobile_number = contact.value
+                identity.save(update_fields=["mobile_number"])
+
+    return JsonResponse(
+        {
+            "id": contact.id,
+            "contact_type": contact.contact_type,
+            "value": contact.value,
+            "is_primary": contact.is_primary,
+            "is_verified": contact.is_verified,
+        }
+    )
+
+
+@csrf_exempt
 @require_http_methods(["PATCH"])
 @require_authentication
 def personal_account_update(request, identity_id):
@@ -790,6 +1140,14 @@ def personal_account_update(request, identity_id):
             {"detail": "Invalid JSON."},
             status=400,
         )
+
+    identity = personal_account.identity
+
+    if "first_name" in data:
+        identity.first_name = data["first_name"]
+
+    if "last_name" in data:
+        identity.last_name = data["last_name"]
 
     fields = [
         "display_name",
@@ -814,18 +1172,27 @@ def personal_account_update(request, identity_id):
         username = data.get("username")
 
         if username:
-            username_exists = (
+            personal_username_exists = (
                 PersonalAccount.objects
                 .filter(username=username)
                 .exclude(id=personal_account.id)
                 .exists()
             )
 
-            if username_exists:
+            identity_username_exists = (
+                UserIdentity.objects
+                .filter(username=username)
+                .exclude(id=identity.id)
+                .exists()
+            )
+
+            if personal_username_exists or identity_username_exists:
                 return JsonResponse(
                     {"detail": "This username already exists."},
                     status=400,
                 )
+
+            identity.username = username
 
     if "mother_tongue_id" in data:
         mother_tongue_id = data.get("mother_tongue_id")
@@ -857,12 +1224,22 @@ def personal_account_update(request, identity_id):
         present_country_id = data.get("present_country_id")
 
         if present_country_id:
+            if not Country.objects.filter(
+                id=present_country_id,
+                is_active=True,
+            ).exists():
+                return JsonResponse(
+                    {"detail": "Selected country is not available."},
+                    status=400,
+                )
+
             personal_account.present_country_id = (
                 present_country_id
             )
         else:
             personal_account.present_country = None
 
+    identity.save()
     personal_account.save()
 
     return JsonResponse(
@@ -1746,6 +2123,218 @@ def professional_account_update(request, identity_id):
             professional_account
         )
     )
+
+@csrf_exempt
+@require_http_methods(["GET", "PATCH"])
+@require_authentication
+def personal_running_profession_selection(request, personal_account_id):
+    personal_account, error_response = (
+        get_authenticated_personal_account_by_id(
+            request,
+            personal_account_id,
+        )
+    )
+
+    if error_response is not None:
+        return error_response
+
+    if request.method == "GET":
+        selections = (
+            PersonalRunningProfession.objects
+            .filter(personal_account=personal_account)
+            .select_related("job_experience")
+            .order_by("created_at")
+        )
+
+        return JsonResponse({
+            "personal_account_id": personal_account.id,
+            "job_experience_ids": [
+                selection.job_experience_id
+                for selection in selections
+            ],
+            "results": [
+                serialize_personal_job_experience(
+                    selection.job_experience
+                )
+                for selection in selections
+            ],
+        })
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"detail": "Invalid JSON."},
+            status=400,
+        )
+
+    job_experience_ids = data.get("job_experience_ids")
+
+    if not isinstance(job_experience_ids, list):
+        return JsonResponse(
+            {"detail": "job_experience_ids must be an array."},
+            status=400,
+        )
+
+    try:
+        job_experience_ids = [
+            int(value)
+            for value in job_experience_ids
+        ]
+    except (TypeError, ValueError):
+        return JsonResponse(
+            {"detail": "Invalid job experience ID."},
+            status=400,
+        )
+
+    job_experiences = JobExperience.objects.filter(
+        id__in=job_experience_ids,
+        personal_account=personal_account,
+        is_active=True,
+    )
+
+    if job_experiences.count() != len(set(job_experience_ids)):
+        return JsonResponse(
+            {
+                "detail":
+                "One or more selected job experiences are not available."
+            },
+            status=400,
+        )
+
+    with transaction.atomic():
+        PersonalRunningProfession.objects.filter(
+            personal_account=personal_account
+        ).delete()
+
+        PersonalRunningProfession.objects.bulk_create([
+            PersonalRunningProfession(
+                personal_account=personal_account,
+                job_experience=job_experience,
+            )
+            for job_experience in job_experiences
+        ])
+
+    selections = (
+        PersonalRunningProfession.objects
+        .filter(personal_account=personal_account)
+        .select_related("job_experience")
+        .order_by("created_at")
+    )
+
+    return JsonResponse({
+        "personal_account_id": personal_account.id,
+        "job_experience_ids": [
+            selection.job_experience_id
+            for selection in selections
+        ],
+        "results": [
+            serialize_personal_job_experience(
+                selection.job_experience
+            )
+            for selection in selections
+        ],
+    })
+
+
+@csrf_exempt
+@require_http_methods(["GET", "PATCH"])
+@require_authentication
+def personal_highest_academic_selection(request, personal_account_id):
+    personal_account, error_response = (
+        get_authenticated_personal_account_by_id(
+            request,
+            personal_account_id,
+        )
+    )
+
+    if error_response is not None:
+        return error_response
+
+    if request.method == "GET":
+        try:
+            selection = (
+                PersonalHighestAcademicBackground.objects
+                .select_related("academic_background")
+                .get(personal_account=personal_account)
+            )
+        except PersonalHighestAcademicBackground.DoesNotExist:
+            return JsonResponse({
+                "personal_account_id": personal_account.id,
+                "academic_background_id": None,
+                "result": None,
+            })
+
+        return JsonResponse({
+            "personal_account_id": personal_account.id,
+            "academic_background_id": (
+                selection.academic_background_id
+            ),
+            "result": serialize_academic_background(
+                selection.academic_background
+            ),
+        })
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"detail": "Invalid JSON."},
+            status=400,
+        )
+
+    academic_background_id = data.get("academic_background_id")
+
+    if academic_background_id in (None, ""):
+        PersonalHighestAcademicBackground.objects.filter(
+            personal_account=personal_account
+        ).delete()
+
+        return JsonResponse({
+            "personal_account_id": personal_account.id,
+            "academic_background_id": None,
+            "result": None,
+        })
+
+    try:
+        academic_background_id = int(academic_background_id)
+    except (TypeError, ValueError):
+        return JsonResponse(
+            {"detail": "Invalid academic background ID."},
+            status=400,
+        )
+
+    try:
+        academic_background = AcademicBackground.objects.get(
+            id=academic_background_id,
+            personal_account=personal_account,
+        )
+    except AcademicBackground.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail":
+                "Selected academic background is not available."
+            },
+            status=400,
+        )
+
+    selection, _ = (
+        PersonalHighestAcademicBackground.objects.update_or_create(
+            personal_account=personal_account,
+            defaults={
+                "academic_background": academic_background,
+            },
+        )
+    )
+
+    return JsonResponse({
+        "personal_account_id": personal_account.id,
+        "academic_background_id": selection.academic_background_id,
+        "result": serialize_academic_background(
+            selection.academic_background
+        ),
+    })
+
 
 def serialize_academic_background(academic):
     return {
