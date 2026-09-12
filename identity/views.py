@@ -11,6 +11,7 @@ from django.http.multipartparser import (
 
 from django.http import JsonResponse
 from django.db import transaction
+from django.db.models import Q
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.utils import timezone
@@ -373,6 +374,39 @@ def identity_list(request):
             "results": results,
         }
     )
+
+
+@require_http_methods(["GET"])
+def identity_search(request):
+    query = request.GET.get("q", "").strip()
+
+    if not query:
+        return JsonResponse({
+            "count": 0,
+            "results": [],
+        })
+
+    identities = (
+        UserIdentity.objects
+        .filter(
+            Q(username__icontains=query)
+            | Q(first_name__icontains=query)
+            | Q(last_name__icontains=query)
+        )
+        .filter(is_active=True)
+        .order_by("username", "id")[:20]
+    )
+
+    results = [
+        serialize_identity(identity)
+        for identity in identities
+        if identity.username
+    ]
+
+    return JsonResponse({
+        "count": len(results),
+        "results": results,
+    })
 
 
 @require_http_methods(["GET"])
@@ -2128,19 +2162,14 @@ def professional_account_update(request, identity_id):
 
 @csrf_exempt
 @require_http_methods(["GET", "PATCH"])
-@require_authentication
 def personal_running_profession_selection(request, personal_account_id):
-    personal_account, error_response = (
-        get_authenticated_personal_account_by_id(
-            request,
-            personal_account_id,
-        )
-    )
-
-    if error_response is not None:
-        return error_response
-
     if request.method == "GET":
+        try:
+            personal_account = PersonalAccount.objects.get(id=personal_account_id)
+        except PersonalAccount.DoesNotExist:
+            return JsonResponse({"detail": "Personal account not found."}, status=404)
+
+
         selections = (
             PersonalRunningProfession.objects
             .filter(personal_account=personal_account)
@@ -2161,6 +2190,10 @@ def personal_running_profession_selection(request, personal_account_id):
                 for selection in selections
             ],
         })
+
+    personal_account, error_response = get_authenticated_personal_account_by_id(request, personal_account_id)
+    if error_response is not None:
+        return error_response
 
     try:
         data = json.loads(request.body or "{}")
@@ -2241,19 +2274,14 @@ def personal_running_profession_selection(request, personal_account_id):
 
 @csrf_exempt
 @require_http_methods(["GET", "PATCH"])
-@require_authentication
 def personal_highest_academic_selection(request, personal_account_id):
-    personal_account, error_response = (
-        get_authenticated_personal_account_by_id(
-            request,
-            personal_account_id,
-        )
-    )
-
-    if error_response is not None:
-        return error_response
-
     if request.method == "GET":
+        try:
+            personal_account = PersonalAccount.objects.get(id=personal_account_id)
+        except PersonalAccount.DoesNotExist:
+            return JsonResponse({"detail": "Personal account not found."}, status=404)
+
+
         try:
             selection = (
                 PersonalHighestAcademicBackground.objects
@@ -2276,6 +2304,10 @@ def personal_highest_academic_selection(request, personal_account_id):
                 selection.academic_background
             ),
         })
+
+    personal_account, error_response = get_authenticated_personal_account_by_id(request, personal_account_id)
+    if error_response is not None:
+        return error_response
 
     try:
         data = json.loads(request.body or "{}")
@@ -3095,6 +3127,30 @@ def job_experience_list(request, identity_id):
 # ============================================================
 # PERSONAL RESPONSIBILITIES
 # ============================================================
+
+@require_http_methods(["GET"])
+def public_personal_responsibilities_by_username(request, username):
+    try:
+        personal_account = PersonalAccount.objects.get(username=username)
+    except PersonalAccount.DoesNotExist:
+        return JsonResponse({"detail": "Personal account not found."}, status=404)
+
+    responsibilities = PersonalResponsibility.objects.filter(
+        personal_account=personal_account,
+        is_active=True,
+    ).order_by("display_order", "id")
+
+    results = PersonalResponsibilitySerializer(
+        responsibilities,
+        many=True,
+    ).data
+
+    return JsonResponse({
+        "personal_account_id": personal_account.id,
+        "count": len(results),
+        "results": results,
+    })
+
 
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -4101,6 +4157,25 @@ def login(request):
         )       
 @csrf_exempt
 @require_http_methods(["POST"])
+def logout(request):
+    try:
+        data = json.loads(request.body or "{}")
+        refresh_token = data.get("refresh")
+
+        if not refresh_token:
+            return JsonResponse({"detail": "Refresh token is required."}, status=400)
+
+        token = RefreshToken(refresh_token)
+        token.blacklist()
+
+        return JsonResponse({"message": "Logout successful."}, status=200)
+
+    except Exception:
+        return JsonResponse({"detail": "Invalid or expired refresh token."}, status=400)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
 def forgot_password(request):
     try:
         data = json.loads(request.body or "{}")
@@ -4527,11 +4602,18 @@ def user_social_media_delete(request, social_media_id):
 
 
 @require_http_methods(["GET"])
-@require_authentication
 def user_social_media_list(request):
     identity = get_authenticated_identity(request)
+    target_personal_account_id = request.GET.get("personal_account_id")
 
-    if identity is None:
+    if target_personal_account_id:
+        try:
+            target_personal_account = PersonalAccount.objects.get(id=target_personal_account_id)
+        except PersonalAccount.DoesNotExist:
+            return JsonResponse({"detail": "Personal account not found."}, status=404)
+        identity = target_personal_account.identity
+
+    elif identity is None:
         return JsonResponse(
             {"detail": "Authentication credentials were not provided."},
             status=401,
