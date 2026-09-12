@@ -15,6 +15,11 @@ urlpatterns = [
         name="login",
     ),
     path(
+        "logout/",
+        views.logout,
+        name="logout",
+    ),
+    path(
         "forgot-password/",
         views.forgot_password,
         name="forgot-password",
@@ -33,6 +38,11 @@ urlpatterns = [
         "",
         views.identity_list,
         name="identity-list",
+    ),
+    path(
+        "search/",
+        views.identity_search,
+        name="identity-search",
     ),
     path(
         "create/",
@@ -229,6 +239,12 @@ urlpatterns = [
 
 
     # Personal Responsibilities
+    path(
+        "personal-accounts/username/<str:username>/responsibilities/",
+        views.public_personal_responsibilities_by_username,
+        name="public-personal-responsibilities-by-username",
+    ),
+
     path(
         "personal-accounts/<int:personal_account_id>/responsibilities/create/",
         views.personal_responsibility_create,
