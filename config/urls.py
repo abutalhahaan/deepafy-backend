@@ -31,6 +31,16 @@ urlpatterns = [
         "api/jobs/",
         include("jobs.urls"),
     ),
+
+    path(
+        "api/core/",
+        include("core.urls"),
+    ),
+
+    path(
+        "api/notifications/",
+        include("notifications.urls"),
+    ),
 ]
 
 

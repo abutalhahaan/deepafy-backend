@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     "category_engine",
     'homepage',
     "jobs",
+    "notifications",
     "corsheaders",
 ]
 
