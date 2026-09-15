@@ -5,3 +5,7 @@ sqlparse==0.5.5
 tzdata==2026.3
 
 djangorestframework-simplejwt==5.5.1
+
+bleach==6.4.0
+tinycss2==1.5.1
+webencodings==0.5.1

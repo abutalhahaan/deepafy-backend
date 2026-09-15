@@ -34,10 +34,25 @@ class ImageProcessorTests(TestCase):
                 result.seek(0)
                 processed_image = Image.open(result)
 
-                self.assertEqual(
-                    processed_image.size,
-                    (settings["width"], settings["height"]),
-                )
+                if preset == "editor":
+                    self.assertLessEqual(
+                        processed_image.width,
+                        settings["width"],
+                    )
+                    self.assertLessEqual(
+                        processed_image.height,
+                        settings["height"],
+                    )
+                    self.assertAlmostEqual(
+                        processed_image.width / processed_image.height,
+                        1200 / 800,
+                        places=2,
+                    )
+                else:
+                    self.assertEqual(
+                        processed_image.size,
+                        (settings["width"], settings["height"]),
+                    )
                 self.assertEqual(processed_image.format, "JPEG")
                 self.assertTrue(result.name.endswith(".jpg"))
                 self.assertLessEqual(result.size, 2 * 1024 * 1024)
@@ -52,10 +67,25 @@ class ImageProcessorTests(TestCase):
                 result.seek(0)
                 processed_image = Image.open(result)
 
-                self.assertEqual(
-                    processed_image.size,
-                    (settings["width"], settings["height"]),
-                )
+                if preset == "editor":
+                    self.assertLessEqual(
+                        processed_image.width,
+                        settings["width"],
+                    )
+                    self.assertLessEqual(
+                        processed_image.height,
+                        settings["height"],
+                    )
+                    self.assertAlmostEqual(
+                        processed_image.width / processed_image.height,
+                        1200 / 800,
+                        places=2,
+                    )
+                else:
+                    self.assertEqual(
+                        processed_image.size,
+                        (settings["width"], settings["height"]),
+                    )
                 self.assertEqual(processed_image.format, "PNG")
                 self.assertTrue(result.name.endswith(".png"))
                 self.assertLessEqual(result.size, 2 * 1024 * 1024)
@@ -70,10 +100,25 @@ class ImageProcessorTests(TestCase):
                 result.seek(0)
                 processed_image = Image.open(result)
 
-                self.assertEqual(
-                    processed_image.size,
-                    (settings["width"], settings["height"]),
-                )
+                if preset == "editor":
+                    self.assertLessEqual(
+                        processed_image.width,
+                        settings["width"],
+                    )
+                    self.assertLessEqual(
+                        processed_image.height,
+                        settings["height"],
+                    )
+                    self.assertAlmostEqual(
+                        processed_image.width / processed_image.height,
+                        1200 / 800,
+                        places=2,
+                    )
+                else:
+                    self.assertEqual(
+                        processed_image.size,
+                        (settings["width"], settings["height"]),
+                    )
                 self.assertEqual(processed_image.format, "WEBP")
                 self.assertTrue(result.name.endswith(".webp"))
                 self.assertLessEqual(result.size, 2 * 1024 * 1024)

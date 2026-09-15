@@ -470,3 +470,42 @@ def premium_status(request):
         "duration_days": subscription.package.duration_days,
         "expires_at": subscription.expires_at,
     })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def editor_image_upload(request):
+    uploaded_image = request.FILES.get("image")
+
+    if not uploaded_image:
+        return Response(
+            {"detail": "image is required."},
+            status=400,
+        )
+
+    try:
+        from django.core.files.storage import default_storage
+        from .services.media_service import process_editor_image
+
+        processed_image = process_editor_image(uploaded_image)
+
+        file_path = default_storage.save(
+            f"editor/{processed_image.name}",
+            processed_image,
+        )
+
+        image_url = request.build_absolute_uri(
+            default_storage.url(file_path)
+        )
+
+        return Response({
+            "success": True,
+            "url": image_url,
+            "path": file_path,
+        })
+
+    except ValueError as error:
+        return Response(
+            {"detail": str(error)},
+            status=400,
+        )

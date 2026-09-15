@@ -12,11 +12,6 @@ from .models import PersonalAccount
 def get_authenticated_identity(request):
     jwt_authentication = JWTAuthentication()
 
-    print(
-        "AUTHORIZATION HEADER:",
-        request.headers.get("Authorization")
-    )
-
     try:
         authenticated_user = (
             jwt_authentication.authenticate(request)
@@ -24,17 +19,7 @@ def get_authenticated_identity(request):
 
     except Exception as error:
 
-        print(
-            "JWT AUTHENTICATION ERROR:",
-            repr(error)
-        )
-
         return None
-
-    print(
-        "AUTHENTICATED USER:",
-        authenticated_user
-    )
 
     if authenticated_user is None:
         return None
