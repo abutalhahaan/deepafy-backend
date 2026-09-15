@@ -24,6 +24,13 @@ IMAGE_PRESETS = {
         "height": 1080,
         "max_size_kb": 2048,
         "quality": 85,
+    },
+
+    "editor": {
+        "width": 1600,
+        "height": 1000,
+        "max_size_kb": 2048,
+        "quality": 85,
     },    
 }
 
@@ -82,12 +89,18 @@ def process_image(uploaded_file, preset):
         if image.mode not in ("RGB", "RGBA", "L", "LA"):
             image = image.convert("RGBA")
 
-    image = ImageOps.fit(
-        image,
-        (target_width, target_height),
-        method=Image.Resampling.LANCZOS,
-        centering=(0.5, 0.5),
-    )
+    if preset == "editor":
+        image.thumbnail(
+            (target_width, target_height),
+            Image.Resampling.LANCZOS,
+        )
+    else:
+        image = ImageOps.fit(
+            image,
+            (target_width, target_height),
+            method=Image.Resampling.LANCZOS,
+            centering=(0.5, 0.5),
+        )
     output = BytesIO()
     current_quality = quality
 

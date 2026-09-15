@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'homepage',
     "jobs",
     "notifications",
+    "activity",
     "corsheaders",
 ]
 

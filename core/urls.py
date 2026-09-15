@@ -1,9 +1,10 @@
 from django.urls import path
 
-from .views import feature_access_controls, update_feature_access, start_feature_trial, check_feature_access, premium_packages, premium_status, activate_premium, payment_methods, create_payment_transaction, review_payment_transaction, personal_font_styles
+from .views import feature_access_controls, update_feature_access, start_feature_trial, check_feature_access, premium_packages, premium_status, activate_premium, payment_methods, create_payment_transaction, review_payment_transaction, personal_font_styles, editor_image_upload
 
 urlpatterns = [
     path("personal-font-styles/", personal_font_styles, name="personal-font-styles"),
+    path("editor-image-upload/", editor_image_upload, name="editor-image-upload"),
     path("premium-status/", premium_status, name="premium-status"),
     path("premium-activate/", activate_premium, name="premium-activate"),
     path("premium-packages/", premium_packages, name="premium-packages"),
