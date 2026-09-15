@@ -23,6 +23,7 @@ ALLOWED_TAGS = [
     "code",
     "pre",
     "span",
+    "mark",
     "a",
     "img",
 ]
@@ -38,6 +39,7 @@ ALLOWED_ATTRIBUTES = {
     "h6": ["style"],
 
     "span": ["style"],
+    "mark": ["style", "data-color"],
     "a": ["href", "title", "target", "rel"],
     "img": ["src", "alt", "title", "width", "height", "data-width"],
 }
