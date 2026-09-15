@@ -83,6 +83,18 @@ def activity_create(request):
         {
             "id": activity.id,
             "personal_account_id": activity.personal_account_id,
+            "author": {
+                "id": activity.personal_account.id,
+                "display_name": activity.personal_account.display_name,
+                "username": activity.personal_account.username,
+                "profile_photo": (
+                    activity.personal_account.profile_photo.url
+                    if activity.personal_account.profile_photo
+                    else ""
+                ),
+                "first_name": activity.personal_account.identity.first_name,
+                "last_name": activity.personal_account.identity.last_name,
+            },
             "category": activity.category,
             "activity_type": activity.activity_type,
             "content": activity.content,
@@ -111,6 +123,18 @@ def activity_feed(request):
                 {
                     "id": activity.id,
                     "personal_account_id": activity.personal_account_id,
+                    "author": {
+                        "id": activity.personal_account.id,
+                        "display_name": activity.personal_account.display_name,
+                        "username": activity.personal_account.username,
+                        "profile_photo": (
+                            activity.personal_account.profile_photo.url
+                            if activity.personal_account.profile_photo
+                            else ""
+                        ),
+                        "first_name": activity.personal_account.identity.first_name,
+                        "last_name": activity.personal_account.identity.last_name,
+                    },
                     "category": activity.category,
                     "activity_type": activity.activity_type,
                     "content": activity.content,
