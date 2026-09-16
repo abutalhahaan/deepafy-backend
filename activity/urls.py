@@ -14,4 +14,14 @@ urlpatterns = [
         views.activity_create,
         name="activity-create",
     ),
+    path(
+        "<int:activity_id>/comments/",
+        views.activity_comments,
+        name="activity-comments",
+    ),
+    path(
+        "<int:activity_id>/like/",
+        views.activity_like,
+        name="activity-like",
+    ),
 ]
