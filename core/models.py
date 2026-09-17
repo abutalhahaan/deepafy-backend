@@ -236,3 +236,28 @@ class PersonalFontStyle(TimeStampedModel):
 
     def __str__(self):
         return self.font_name
+
+
+class UserFontFavorite(TimeStampedModel):
+    personal_account = models.ForeignKey(
+        'identity.PersonalAccount',
+        on_delete=models.CASCADE,
+        related_name='favorite_fonts',
+    )
+    font = models.ForeignKey(
+        PersonalFontStyle,
+        on_delete=models.CASCADE,
+        related_name='user_favorites',
+    )
+
+    class Meta:
+        ordering = ['created_at', 'id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=('personal_account', 'font'),
+                name='unique_user_font_favorite',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.personal_account_id} - {self.font.font_key}'

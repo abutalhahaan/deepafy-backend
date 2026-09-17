@@ -1,10 +1,10 @@
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.authentication import SessionAuthentication
 from rest_framework_simplejwt.authentication import JWTAuthentication
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from .models import FeatureAccessControl, UserFeatureTrial, UserPremiumSubscription, PremiumPackage, PersonalFontStyle
+from .models import FeatureAccessControl, UserFeatureTrial, UserPremiumSubscription, PremiumPackage, PersonalFontStyle, UserFontFavorite
 from core.services.feature_access import get_current_feature, get_feature_access, start_feature_trial_for_user
 
 
@@ -31,6 +31,73 @@ def personal_font_styles(request):
             for font in fonts
         ],
     })
+
+
+@api_view(["GET", "POST", "DELETE"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def personal_font_favorites(request, personal_account_id):
+    from identity.permissions import get_authenticated_personal_account_by_id
+
+    personal_account, error_response = get_authenticated_personal_account_by_id(
+        request, personal_account_id
+    )
+    if error_response is not None:
+        return error_response
+
+    if request.method == "GET":
+        favorites = (
+            UserFontFavorite.objects
+            .filter(personal_account=personal_account, font__is_enabled=True)
+            .select_related("font")
+            .order_by("created_at", "id")
+        )
+        return Response({
+            "success": True,
+            "max_favorites": 6,
+            "fonts": [
+                {
+                    "font_key": favorite.font.font_key,
+                    "font_name": favorite.font.font_name,
+                    "display_order": index,
+                }
+                for index, favorite in enumerate(favorites, start=1)
+            ],
+        })
+
+    font_key = request.data.get("font_key")
+    if not font_key:
+        return Response({"success": False, "detail": "font_key is required."}, status=400)
+
+    try:
+        font = PersonalFontStyle.objects.get(font_key=font_key, is_enabled=True)
+    except PersonalFontStyle.DoesNotExist:
+        return Response({"success": False, "detail": "Font not found."}, status=404)
+
+    if request.method == "POST":
+        if UserFontFavorite.objects.filter(
+            personal_account=personal_account, font=font
+        ).exists():
+            return Response({"success": True, "already_favorite": True})
+
+        if UserFontFavorite.objects.filter(personal_account=personal_account).count() >= 6:
+            return Response(
+                {"success": False, "detail": "You can favorite up to 6 fonts."},
+                status=400,
+            )
+
+        UserFontFavorite.objects.create(
+            personal_account=personal_account,
+            font=font,
+        )
+        return Response({"success": True}, status=201)
+
+    deleted, _ = UserFontFavorite.objects.filter(
+        personal_account=personal_account,
+        font=font,
+    ).delete()
+
+    return Response({"success": True, "removed": deleted > 0})
 
 
 @api_view(["GET"])
