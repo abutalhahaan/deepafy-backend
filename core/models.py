@@ -223,6 +223,7 @@ class PersonalFontStyle(TimeStampedModel):
     font_name = models.CharField(max_length=150)
     font_family = models.CharField(max_length=255)
     font_source = models.URLField(max_length=500, blank=True, default='')
+    local_font_file = models.FileField(upload_to='personal_fonts/', blank=True, null=True)
     font_weights = models.CharField(max_length=100, blank=True, default='')
     language_support = models.CharField(max_length=255, blank=True, default='')
     category = models.CharField(max_length=50, default='Standard')
