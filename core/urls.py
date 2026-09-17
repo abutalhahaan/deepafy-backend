@@ -14,5 +14,5 @@ urlpatterns = [
     path("feature-access/", feature_access_controls, name="feature-access-controls"),
     path("feature-access/<str:feature_key>/trial/", start_feature_trial, name="start-feature-trial"),
     path("feature-access/<str:feature_key>/check/", check_feature_access, name="check-feature-access"),
-    path("admin/feature-access/<str:feature_key>/", update_feature_access, name="admin-update-feature-access"),
+    path("admin/feature-access/<str:feature_key>/<str:account_type>/", update_feature_access, name="admin-update-feature-access"),
 ]

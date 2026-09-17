@@ -113,3 +113,67 @@ class ActivityComment(models.Model):
 
     def __str__(self):
         return f"{self.personal_account} commented on Activity #{self.activity_id}"
+
+class ActivityAppearance(models.Model):
+    personal_account = models.OneToOneField(
+        PersonalAccount,
+        on_delete=models.CASCADE,
+        related_name="activity_appearance",
+    )
+
+    background_color = models.CharField(
+        max_length=20,
+        null=True,
+        blank=True,
+        default=None,
+    )
+
+    wallpaper = models.ImageField(
+        upload_to="activity_wallpapers/",
+        null=True,
+        blank=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    def __str__(self):
+        return f"Activity Appearance - {self.personal_account}"
+
+class ActivityDefaultAppearance(models.Model):
+    singleton_key = models.PositiveSmallIntegerField(
+        default=1,
+        unique=True,
+        editable=False,
+    )
+
+    background_color = models.CharField(
+        max_length=20,
+        default="#F5F8FC",
+    )
+
+    wallpaper = models.ImageField(
+        upload_to="activity_default_wallpapers/",
+        null=True,
+        blank=True,
+    )
+
+    is_enabled = models.BooleanField(
+        default=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    def __str__(self):
+        return "Activity Default Appearance"

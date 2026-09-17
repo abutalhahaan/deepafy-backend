@@ -153,3 +153,8 @@ class PersonalFontStyleAdmin(admin.ModelAdmin):
     list_filter = ('category', 'access_level', 'is_enabled')
     search_fields = ('font_name', 'font_key', 'font_family')
     ordering = ('display_order', 'font_name')
+    fieldsets = (
+        ('Font Information', {'fields': ('font_key', 'font_name', 'font_family', 'category')}),
+        ('Font Loading', {'fields': ('font_source', 'font_weights', 'language_support')}),
+        ('Access & Display', {'fields': ('access_level', 'is_enabled', 'display_order')}),
+    )

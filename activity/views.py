@@ -7,12 +7,20 @@ from django.views.decorators.http import require_http_methods
 
 from identity.models import PersonalAccount
 from identity.permissions import (
+    is_owner,
+    permission_denied,
     require_authentication,
 )
 
-from .models import Activity, ActivityComment, ActivityLike
+from .models import Activity, ActivityAppearance, ActivityComment, ActivityDefaultAppearance, ActivityLike
 from core.services.html_sanitizer import sanitize_html
+from core.services.image_processor import process_image
+from core.services.feature_access import get_feature_access
 from notifications.services import create_notification
+
+
+def _get_activity_default_appearance():
+    return ActivityDefaultAppearance.objects.order_by("id").first()
 
 
 def _notify_activity_comment_participants(*, activity, comment, actor_user):
@@ -423,5 +431,239 @@ def activity_like(request, activity_id):
             "activity_id": activity.id,
             "liked": liked,
             "like_count": like_count,
+        }
+    )
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+@require_authentication
+def activity_appearance(request):
+    try:
+        personal_account = PersonalAccount.objects.get(
+            identity_id=request.authenticated_identity.id,
+            is_active=True,
+        )
+    except PersonalAccount.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Personal account not found."},
+            status=404,
+        )
+
+    appearance = ActivityAppearance.objects.filter(
+        personal_account=personal_account,
+    ).first()
+
+    default_appearance = _get_activity_default_appearance()
+
+    if appearance:
+        background_color = (
+            appearance.background_color
+            or (
+                default_appearance.background_color
+                if default_appearance and default_appearance.is_enabled
+                else "#F5F8FC"
+            )
+        )
+        wallpaper = (
+            appearance.wallpaper.url
+            if appearance.wallpaper
+            else (
+                default_appearance.wallpaper.url
+                if default_appearance and default_appearance.is_enabled and default_appearance.wallpaper
+                else ""
+            )
+        )
+        appearance_id = appearance.id
+        created_at = appearance.created_at
+        updated_at = appearance.updated_at
+    else:
+        background_color = (
+            default_appearance.background_color
+            if default_appearance and default_appearance.is_enabled
+            else "#F5F8FC"
+        )
+        wallpaper = (
+            default_appearance.wallpaper.url
+            if default_appearance and default_appearance.is_enabled and default_appearance.wallpaper
+            else ""
+        )
+        appearance_id = None
+        created_at = None
+        updated_at = None
+
+    return JsonResponse(
+        {
+            "id": appearance_id,
+            "personal_account_id": personal_account.id,
+            "background_color": background_color,
+            "wallpaper": wallpaper,
+            "created_at": created_at,
+            "updated_at": updated_at,
+        }
+    )
+
+
+@csrf_exempt
+@require_http_methods(["PUT"])
+@require_authentication
+def activity_background_color_update(request):
+    access = get_feature_access(request, "activity_background_color")
+
+    if access["access"] == "error":
+        return JsonResponse(
+            {"detail": access["detail"]},
+            status=400,
+        )
+
+    if access["access"] == "locked":
+        return JsonResponse(
+            {
+                "detail": "This feature is not available for the current account.",
+                "feature_key": "activity_background_color",
+            },
+            status=403,
+        )
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"detail": "Invalid JSON."},
+            status=400,
+        )
+
+    background_color = str(
+        data.get("background_color", "")
+    ).strip()
+
+    if not background_color:
+        return JsonResponse(
+            {"detail": "background_color is required."},
+            status=400,
+        )
+
+    if not background_color.startswith("#") or len(background_color) not in {4, 7}:
+        return JsonResponse(
+            {"detail": "Invalid background color."},
+            status=400,
+        )
+
+    try:
+        int(background_color[1:], 16)
+    except ValueError:
+        return JsonResponse(
+            {"detail": "Invalid background color."},
+            status=400,
+        )
+
+    try:
+        personal_account = PersonalAccount.objects.get(
+            identity_id=request.authenticated_identity.id,
+            is_active=True,
+        )
+    except PersonalAccount.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Personal account not found."},
+            status=404,
+        )
+
+    appearance, _ = ActivityAppearance.objects.get_or_create(
+        personal_account=personal_account,
+    )
+
+    appearance.background_color = background_color.upper()
+    appearance.save(update_fields=["background_color", "updated_at"])
+
+    return JsonResponse(
+        {
+            "id": appearance.id,
+            "personal_account_id": appearance.personal_account_id,
+            "background_color": appearance.background_color,
+            "wallpaper": (
+                appearance.wallpaper.url
+                if appearance.wallpaper
+                else ""
+            ),
+            "updated_at": appearance.updated_at,
+        }
+    )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@require_authentication
+def activity_wallpaper_update(request):
+    access = get_feature_access(request, "activity_wallpaper")
+
+    if access["access"] == "error":
+        return JsonResponse(
+            {"detail": access["detail"]},
+            status=400,
+        )
+
+    if access["access"] == "locked":
+        return JsonResponse(
+            {
+                "detail": "This feature is not available for the current account.",
+                "feature_key": "activity_wallpaper",
+            },
+            status=403,
+        )
+
+    try:
+        personal_account = PersonalAccount.objects.get(
+            identity_id=request.authenticated_identity.id,
+            is_active=True,
+        )
+    except PersonalAccount.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Personal account not found."},
+            status=404,
+        )
+
+    if "wallpaper" not in request.FILES:
+        return JsonResponse(
+            {"detail": "wallpaper is required."},
+            status=400,
+        )
+
+    old_wallpaper = None
+
+    try:
+        processed_wallpaper = process_image(
+            request.FILES["wallpaper"],
+            preset="background",
+        )
+    except ValueError as error:
+        return JsonResponse(
+            {"detail": str(error)},
+            status=400,
+        )
+
+    appearance, _ = ActivityAppearance.objects.get_or_create(
+        personal_account=personal_account,
+    )
+
+    if appearance.wallpaper:
+        old_wallpaper = appearance.wallpaper.name
+
+    appearance.wallpaper = processed_wallpaper
+    appearance.save(update_fields=["wallpaper", "updated_at"])
+
+    if old_wallpaper:
+        appearance.wallpaper.storage.delete(old_wallpaper)
+
+    return JsonResponse(
+        {
+            "id": appearance.id,
+            "personal_account_id": appearance.personal_account_id,
+            "background_color": appearance.background_color,
+            "wallpaper": (
+                appearance.wallpaper.url
+                if appearance.wallpaper
+                else ""
+            ),
+            "updated_at": appearance.updated_at,
         }
     )
