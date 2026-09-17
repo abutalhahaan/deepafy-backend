@@ -5,6 +5,21 @@ from . import views
 
 urlpatterns = [
     path(
+        "appearance/",
+        views.activity_appearance,
+        name="activity-appearance",
+    ),
+    path(
+        "appearance/background-color/",
+        views.activity_background_color_update,
+        name="activity-background-color-update",
+    ),
+    path(
+        "appearance/wallpaper/",
+        views.activity_wallpaper_update,
+        name="activity-wallpaper-update",
+    ),
+    path(
         "",
         views.activity_feed,
         name="activity-feed",

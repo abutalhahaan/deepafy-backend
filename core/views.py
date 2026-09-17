@@ -5,6 +5,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from .models import FeatureAccessControl, UserFeatureTrial, UserPremiumSubscription, PremiumPackage, PersonalFontStyle
+from core.services.feature_access import get_current_feature, get_feature_access, start_feature_trial_for_user
 
 
 @api_view(["GET"])
@@ -18,6 +19,9 @@ def personal_font_styles(request):
                 "font_key": font.font_key,
                 "font_name": font.font_name,
                 "font_family": font.font_family,
+                "font_source": font.font_source,
+                "font_weights": font.font_weights,
+                "language_support": font.language_support,
                 "category": font.category,
                 "access_level": font.access_level,
                 "is_enabled": font.is_enabled,
@@ -34,6 +38,7 @@ def feature_access_controls(request):
     features = FeatureAccessControl.objects.filter(is_enabled=True).values(
         "feature_key",
         "feature_name",
+        "account_type",
         "category",
         "access_level",
         "trial_enabled",
@@ -42,6 +47,8 @@ def feature_access_controls(request):
     )
 
     return Response(list(features))
+
+from identity.permissions import get_current_account_type
 
 from rest_framework.permissions import BasePermission, IsAuthenticated
 
@@ -60,11 +67,17 @@ class IsDeepafyAdmin(BasePermission):
 
 @api_view(["PATCH"])
 @permission_classes([IsDeepafyAdmin])
-def update_feature_access(request, feature_key):
+def update_feature_access(request, feature_key, account_type):
+    if account_type not in {"personal", "professional", "company"}:
+        return Response({"detail": "Invalid account_type."}, status=400)
+
     try:
-        feature = FeatureAccessControl.objects.get(feature_key=feature_key)
+        feature = FeatureAccessControl.objects.get(
+            feature_key=feature_key,
+            account_type=account_type,
+        )
     except FeatureAccessControl.DoesNotExist:
-        return Response({"detail": "Feature not found."}, status=404)
+        return Response({"detail": "Feature not found for this account type."}, status=404)
 
     allowed_fields = {
         "is_enabled",
@@ -83,6 +96,7 @@ def update_feature_access(request, feature_key):
     return Response({
         "feature_key": feature.feature_key,
         "feature_name": feature.feature_name,
+        "account_type": feature.account_type,
         "category": feature.category,
         "is_enabled": feature.is_enabled,
         "access_level": feature.access_level,
@@ -92,25 +106,33 @@ def update_feature_access(request, feature_key):
     })
 
 
-from datetime import timedelta
-from django.utils import timezone
-
-
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def start_feature_trial(request, feature_key):
-    try:
-        feature = FeatureAccessControl.objects.get(
-            feature_key=feature_key,
-            is_enabled=True,
+    feature, current_account_type, error = get_current_feature(
+        request,
+        feature_key,
+    )
+
+    if error:
+        return Response(
+            {
+                "detail": error,
+                "feature_key": feature_key,
+                "account_type": (
+                    current_account_type.account_type
+                    if current_account_type
+                    else None
+                ),
+            },
+            status=400 if current_account_type is None else 404,
         )
-    except FeatureAccessControl.DoesNotExist:
-        return Response({"detail": "Feature not found."}, status=404)
 
     if feature.access_level != "premium":
         return Response({
             "access": "free",
             "feature_key": feature.feature_key,
+            "account_type": feature.account_type,
         })
 
     if not feature.trial_enabled or feature.trial_days <= 0:
@@ -118,101 +140,30 @@ def start_feature_trial(request, feature_key):
             "access": "premium",
             "trial_available": False,
             "feature_key": feature.feature_key,
+            "account_type": feature.account_type,
         })
 
-    now = timezone.now()
-
-    trial, created = UserFeatureTrial.objects.get_or_create(
-        user=request.user,
-        feature=feature,
-        defaults={
-            "started_at": now,
-            "expires_at": now + timedelta(days=feature.trial_days),
-            "is_active": True,
-        },
+    return Response(
+        start_feature_trial_for_user(request, feature)
     )
-
-    if not created:
-        if trial.expires_at > now and trial.is_active:
-            return Response({
-                "access": "trial",
-                "feature_key": feature.feature_key,
-                "trial_active": True,
-                "expires_at": trial.expires_at,
-            })
-
-        return Response({
-            "access": "locked",
-            "trial_available": False,
-            "trial_expired": True,
-            "feature_key": feature.feature_key,
-        })
-
-    return Response({
-        "access": "trial",
-        "feature_key": feature.feature_key,
-        "trial_active": True,
-        "started_at": trial.started_at,
-        "expires_at": trial.expires_at,
-        "trial_days": feature.trial_days,
-    })
 
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def check_feature_access(request, feature_key):
-    try:
-        feature = FeatureAccessControl.objects.get(
-            feature_key=feature_key,
-            is_enabled=True,
+    access = get_feature_access(request, feature_key)
+
+    if access["access"] == "error":
+        return Response(
+            {
+                "detail": access["detail"],
+                "feature_key": access["feature_key"],
+                "account_type": access["account_type"],
+            },
+            status=400,
         )
-    except FeatureAccessControl.DoesNotExist:
-        return Response({"detail": "Feature not found."}, status=404)
 
-    if feature.access_level == "free":
-        return Response({
-            "access": "free",
-            "feature_key": feature.feature_key,
-        })
-
-    now = timezone.now()
-
-    premium_subscription = UserPremiumSubscription.objects.filter(
-        user=request.user,
-        is_active=True,
-        expires_at__gt=now,
-        package__is_active=True,
-    ).first()
-
-    if premium_subscription:
-        return Response({
-            "access": "premium",
-            "feature_key": feature.feature_key,
-            "premium_active": True,
-            "expires_at": premium_subscription.expires_at,
-        })
-
-    trial = UserFeatureTrial.objects.filter(
-        user=request.user,
-        feature=feature,
-        is_active=True,
-    ).first()
-
-    if trial and trial.expires_at > now:
-        return Response({
-            "access": "trial",
-            "feature_key": feature.feature_key,
-            "trial_active": True,
-            "expires_at": trial.expires_at,
-        })
-
-    return Response({
-        "access": "locked",
-        "feature_key": feature.feature_key,
-        "trial_available": bool(
-            feature.trial_enabled and feature.trial_days > 0 and not trial
-        ),
-    })
+    return Response(access)
 
 
 @api_view(["POST"])

@@ -6,7 +6,7 @@ from rest_framework_simplejwt.authentication import (
     JWTAuthentication,
 )
 
-from .models import PersonalAccount
+from .models import AccountType, PersonalAccount
 
 
 def get_authenticated_identity(request):
@@ -27,6 +27,23 @@ def get_authenticated_identity(request):
     user, _token = authenticated_user
 
     return user
+
+
+def get_current_account_type(request):
+    authenticated_identity = get_authenticated_identity(request)
+
+    if authenticated_identity is None:
+        return None
+
+    return (
+        AccountType.objects
+        .filter(
+            identity=authenticated_identity,
+            is_active=True,
+            is_primary=True,
+        )
+        .first()
+    )
 
 
 def get_authenticated_personal_account(

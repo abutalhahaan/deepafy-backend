@@ -34,7 +34,7 @@ class FeatureAccessControl(TimeStampedModel):
         ('company', 'Company'),
     ]
 
-    feature_key = models.CharField(max_length=150, unique=True)
+    feature_key = models.CharField(max_length=150)
     feature_name = models.CharField(max_length=255)
     account_type = models.CharField(max_length=20, choices=ACCOUNT_TYPES, default='personal')
     category = models.CharField(max_length=100, blank=True)
@@ -53,6 +53,12 @@ class FeatureAccessControl(TimeStampedModel):
 
     class Meta:
         ordering = ["category", "feature_name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["feature_key", "account_type"],
+                name="unique_feature_per_account_type",
+            ),
+        ]
 
     def __str__(self):
         return self.feature_name
@@ -216,6 +222,9 @@ class PersonalFontStyle(TimeStampedModel):
     font_key = models.CharField(max_length=100, unique=True)
     font_name = models.CharField(max_length=150)
     font_family = models.CharField(max_length=255)
+    font_source = models.URLField(max_length=500, blank=True, default='')
+    font_weights = models.CharField(max_length=100, blank=True, default='')
+    language_support = models.CharField(max_length=255, blank=True, default='')
     category = models.CharField(max_length=50, default='Standard')
     access_level = models.CharField(max_length=20, choices=ACCESS_LEVELS, default='free')
     is_enabled = models.BooleanField(default=True)

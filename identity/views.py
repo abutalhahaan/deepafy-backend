@@ -584,12 +584,30 @@ def account_type_create(request):
                 status=400,
             )
 
-        account = AccountType.objects.create(
-            identity=identity,
-            account_type=account_type,
-            is_primary=data.get("is_primary", False),
-            is_active=data.get("is_active", True),
-        )
+        requested_primary = bool(data.get("is_primary", False))
+        is_active = bool(data.get("is_active", True))
+
+        with transaction.atomic():
+            has_primary = AccountType.objects.filter(
+                identity=identity,
+                is_active=True,
+                is_primary=True,
+            ).exists()
+
+            is_primary = requested_primary or not has_primary
+
+            if is_primary:
+                AccountType.objects.filter(
+                    identity=identity,
+                    is_primary=True,
+                ).update(is_primary=False)
+
+            account = AccountType.objects.create(
+                identity=identity,
+                account_type=account_type,
+                is_primary=is_primary,
+                is_active=is_active,
+            )
 
         return JsonResponse(
             serialize_account_type(account),
@@ -601,6 +619,61 @@ def account_type_create(request):
             {"detail": "Invalid JSON."},
             status=400,
         )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@require_authentication
+def account_type_switch(request):
+    try:
+        data = json.loads(request.body or "{}")
+        identity_id = data.get("identity_id")
+        account_type = data.get("account_type")
+
+        if not identity_id:
+            return JsonResponse({"detail": "identity_id is required."}, status=400)
+
+        if not account_type:
+            return JsonResponse({"detail": "account_type is required."}, status=400)
+
+        if not any(value == account_type for value, _ in AccountType.Type.choices):
+            return JsonResponse({"detail": "Invalid account_type."}, status=400)
+
+        try:
+            identity = UserIdentity.objects.get(id=identity_id)
+        except UserIdentity.DoesNotExist:
+            return JsonResponse({"detail": "Identity not found."}, status=404)
+
+        if not is_owner(request.authenticated_identity, identity.id):
+            return permission_denied(
+                "You do not have permission to switch the account type for this identity."
+            )
+
+        try:
+            account = AccountType.objects.get(
+                identity=identity,
+                account_type=account_type,
+                is_active=True,
+            )
+        except AccountType.DoesNotExist:
+            return JsonResponse(
+                {"detail": "Active account type not found."},
+                status=404,
+            )
+
+        with transaction.atomic():
+            AccountType.objects.filter(
+                identity=identity,
+                is_primary=True,
+            ).update(is_primary=False)
+
+            account.is_primary = True
+            account.save(update_fields=["is_primary", "updated_at"])
+
+        return JsonResponse(serialize_account_type(account))
+
+    except json.JSONDecodeError:
+        return JsonResponse({"detail": "Invalid JSON."}, status=400)
 
 
 @require_http_methods(["GET"])
