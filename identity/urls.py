@@ -157,6 +157,38 @@ urlpatterns = [
         name="personal-account-photos-update",
     ),
 
+    # Connections
+    path(
+        "connections/<int:receiver_id>/request/",
+        views.connection_request_create,
+        name="connection-request-create",
+    ),
+
+    path(
+        "connections/",
+        views.connection_list,
+        name="connection-list",
+    ),
+    path(
+        "connections/<int:target_id>/status/",
+        views.connection_status,
+        name="connection-status",
+    ),
+    path(
+        "connections/<int:connection_id>/cancel/",
+        views.connection_request_cancel,
+        name="connection-request-cancel",
+    ),
+    path(
+        "connections/<int:connection_id>/decline/",
+        views.connection_request_decline,
+        name="connection-request-decline",
+    ),
+    path(
+        "connections/<int:connection_id>/accept/",
+        views.connection_request_accept,
+        name="connection-request-accept",
+    ),
     # Professional Account
     path(
         "professional-accounts/create/",
