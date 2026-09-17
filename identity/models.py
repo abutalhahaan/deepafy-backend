@@ -1097,3 +1097,44 @@ class UserSocialMedia(models.Model):
             f"{self.identity.user_id} - "
             f"{self.platform.name}"
         )
+
+
+class Connection(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        ACCEPTED = "accepted", "Accepted"
+        DECLINED = "declined", "Declined"
+        BLOCKED = "blocked", "Blocked"
+
+    sender = models.ForeignKey(
+        UserIdentity,
+        on_delete=models.CASCADE,
+        related_name="sent_connections",
+    )
+
+    receiver = models.ForeignKey(
+        UserIdentity,
+        on_delete=models.CASCADE,
+        related_name="received_connections",
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["sender", "receiver"],
+                name="unique_connection_request_direction",
+            )
+        ]
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.sender.user_id} -> {self.receiver.user_id} ({self.status})"

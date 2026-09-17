@@ -10,7 +10,7 @@ from django.http.multipartparser import (
 )
 
 from django.http import JsonResponse
-from django.db import transaction
+from django.db import models, transaction
 from django.db.models import Q
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -37,6 +37,7 @@ from .permissions import (
 from .models import (
     AcademicBackground,
     AccountType,
+    Connection,
     Hobby,
     JobExperience,
     Language,
@@ -64,6 +65,439 @@ from .serializers import (
     SignupSerializer,
     VerifyOTPSerializer,
 )
+
+@csrf_exempt
+def connection_request_create(request, receiver_id):
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed."}, status=405)
+
+    sender = get_authenticated_identity(request)
+
+    if sender is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    try:
+        receiver = UserIdentity.objects.get(id=receiver_id)
+    except UserIdentity.DoesNotExist:
+        return JsonResponse(
+            {"detail": "User not found."},
+            status=404,
+        )
+
+    if sender.id == receiver.id:
+        return JsonResponse(
+            {"detail": "You cannot send a connection request to yourself."},
+            status=400,
+        )
+
+    existing = Connection.objects.filter(
+        sender=sender,
+        receiver=receiver,
+    ).first()
+
+    if existing is not None:
+        if existing.status == Connection.Status.PENDING:
+            return JsonResponse(
+                {"success": True, "status": "pending", "already_pending": True},
+                status=200,
+            )
+
+        if existing.status == Connection.Status.ACCEPTED:
+            return JsonResponse(
+                {"success": True, "status": "accepted", "already_connected": True},
+                status=200,
+            )
+
+        if existing.status == Connection.Status.BLOCKED:
+            return JsonResponse(
+                {"success": False, "detail": "Connection is blocked."},
+                status=403,
+            )
+
+    reverse = Connection.objects.filter(
+        sender=receiver,
+        receiver=sender,
+    ).first()
+
+    if reverse is not None:
+        if reverse.status == Connection.Status.PENDING:
+            return JsonResponse(
+                {
+                    "success": False,
+                    "detail": "This user has already sent you a connection request.",
+                    "status": "pending_received",
+                },
+                status=409,
+            )
+
+        if reverse.status == Connection.Status.ACCEPTED:
+            return JsonResponse(
+                {"success": True, "status": "accepted", "already_connected": True},
+                status=200,
+            )
+
+        if reverse.status == Connection.Status.BLOCKED:
+            return JsonResponse(
+                {"success": False, "detail": "Connection is blocked."},
+                status=403,
+            )
+
+    connection = Connection.objects.create(
+        sender=sender,
+        receiver=receiver,
+        status=Connection.Status.PENDING,
+    )
+
+    return JsonResponse(
+        {
+            "success": True,
+            "status": connection.status,
+            "connection_id": connection.id,
+        },
+        status=201,
+    )
+
+
+@csrf_exempt
+@csrf_exempt
+@csrf_exempt
+def connection_list(request):
+    if request.method != "GET":
+        return JsonResponse({"detail": "Method not allowed."}, status=405)
+
+    current_user = get_authenticated_identity(request)
+
+    if current_user is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    connections = Connection.objects.filter(
+        models.Q(sender=current_user, status=Connection.Status.ACCEPTED)
+        | models.Q(receiver=current_user, status=Connection.Status.ACCEPTED)
+    )
+
+    received_requests = Connection.objects.filter(
+        receiver=current_user,
+        status=Connection.Status.PENDING,
+    )
+
+    sent_requests = Connection.objects.filter(
+        sender=current_user,
+        status=Connection.Status.PENDING,
+    )
+
+    def serialize_connection(connection, request_type):
+        other_user = (
+            connection.receiver
+            if connection.sender_id == current_user.id
+            else connection.sender
+        )
+
+        return {
+            "connection_id": connection.id,
+            "user_id": other_user.id,
+            "username": other_user.username,
+            "first_name": other_user.first_name,
+            "last_name": other_user.last_name,
+            "status": connection.status,
+            "request_type": request_type,
+            "created_at": connection.created_at.isoformat(),
+        }
+
+    return JsonResponse(
+        {
+            "success": True,
+            "connections": [
+                serialize_connection(connection, "connected")
+                for connection in connections
+            ],
+            "received_requests": [
+                serialize_connection(connection, "received")
+                for connection in received_requests
+            ],
+            "sent_requests": [
+                serialize_connection(connection, "sent")
+                for connection in sent_requests
+            ],
+        },
+        status=200,
+    )
+
+
+def connection_status(request, target_id):
+    if request.method != "GET":
+        return JsonResponse({"detail": "Method not allowed."}, status=405)
+
+    current_user = get_authenticated_identity(request)
+
+    if current_user is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    if current_user.id == target_id:
+        return JsonResponse(
+            {
+                "success": True,
+                "status": "self",
+                "connection_id": None,
+            },
+            status=200,
+        )
+
+    connection = Connection.objects.filter(
+        sender=current_user,
+        receiver_id=target_id,
+    ).first()
+
+    if connection is not None:
+        if connection.status == Connection.Status.PENDING:
+            return JsonResponse(
+                {
+                    "success": True,
+                    "status": "pending_sent",
+                    "connection_id": connection.id,
+                },
+                status=200,
+            )
+
+        if connection.status == Connection.Status.ACCEPTED:
+            return JsonResponse(
+                {
+                    "success": True,
+                    "status": "connected",
+                    "connection_id": connection.id,
+                },
+                status=200,
+            )
+
+        return JsonResponse(
+            {
+                "success": True,
+                "status": connection.status,
+                "connection_id": connection.id,
+            },
+            status=200,
+        )
+
+    reverse = Connection.objects.filter(
+        sender_id=target_id,
+        receiver=current_user,
+    ).first()
+
+    if reverse is not None:
+        if reverse.status == Connection.Status.PENDING:
+            return JsonResponse(
+                {
+                    "success": True,
+                    "status": "pending_received",
+                    "connection_id": reverse.id,
+                },
+                status=200,
+            )
+
+        if reverse.status == Connection.Status.ACCEPTED:
+            return JsonResponse(
+                {
+                    "success": True,
+                    "status": "connected",
+                    "connection_id": reverse.id,
+                },
+                status=200,
+            )
+
+        return JsonResponse(
+            {
+                "success": True,
+                "status": reverse.status,
+                "connection_id": reverse.id,
+            },
+            status=200,
+        )
+
+    return JsonResponse(
+        {
+            "success": True,
+            "status": "none",
+            "connection_id": None,
+        },
+        status=200,
+    )
+
+
+def connection_request_cancel(request, connection_id):
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed."}, status=405)
+
+    sender = get_authenticated_identity(request)
+
+    if sender is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    try:
+        connection = Connection.objects.get(id=connection_id)
+    except Connection.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Connection request not found."},
+            status=404,
+        )
+
+    if connection.sender_id != sender.id:
+        return JsonResponse(
+            {"detail": "You are not allowed to cancel this request."},
+            status=403,
+        )
+
+    if connection.status != Connection.Status.PENDING:
+        return JsonResponse(
+            {
+                "success": False,
+                "detail": "Only pending connection requests can be cancelled.",
+                "status": connection.status,
+            },
+            status=409,
+        )
+
+    connection.delete()
+
+    return JsonResponse(
+        {
+            "success": True,
+            "status": "cancelled",
+            "connection_id": connection_id,
+        },
+        status=200,
+    )
+
+
+def connection_request_decline(request, connection_id):
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed."}, status=405)
+
+    receiver = get_authenticated_identity(request)
+
+    if receiver is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    try:
+        connection = Connection.objects.get(id=connection_id)
+    except Connection.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Connection request not found."},
+            status=404,
+        )
+
+    if connection.receiver_id != receiver.id:
+        return JsonResponse(
+            {"detail": "You are not allowed to decline this request."},
+            status=403,
+        )
+
+    if connection.status == Connection.Status.DECLINED:
+        return JsonResponse(
+            {
+                "success": True,
+                "status": Connection.Status.DECLINED,
+                "already_declined": True,
+                "connection_id": connection.id,
+            },
+            status=200,
+        )
+
+    if connection.status != Connection.Status.PENDING:
+        return JsonResponse(
+            {
+                "success": False,
+                "detail": "Only pending connection requests can be declined.",
+                "status": connection.status,
+            },
+            status=409,
+        )
+
+    connection.status = Connection.Status.DECLINED
+    connection.save(update_fields=["status", "updated_at"])
+
+    return JsonResponse(
+        {
+            "success": True,
+            "status": connection.status,
+            "connection_id": connection.id,
+        },
+        status=200,
+    )
+
+
+def connection_request_accept(request, connection_id):
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed."}, status=405)
+
+    receiver = get_authenticated_identity(request)
+
+    if receiver is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    try:
+        connection = Connection.objects.get(id=connection_id)
+    except Connection.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Connection request not found."},
+            status=404,
+        )
+
+    if connection.receiver_id != receiver.id:
+        return JsonResponse(
+            {"detail": "You are not allowed to accept this request."},
+            status=403,
+        )
+
+    if connection.status == Connection.Status.ACCEPTED:
+        return JsonResponse(
+            {
+                "success": True,
+                "status": Connection.Status.ACCEPTED,
+                "already_accepted": True,
+                "connection_id": connection.id,
+            },
+            status=200,
+        )
+
+    if connection.status != Connection.Status.PENDING:
+        return JsonResponse(
+            {
+                "success": False,
+                "detail": "Only pending connection requests can be accepted.",
+                "status": connection.status,
+            },
+            status=409,
+        )
+
+    connection.status = Connection.Status.ACCEPTED
+    connection.save(update_fields=["status", "updated_at"])
+
+    return JsonResponse(
+        {
+            "success": True,
+            "status": connection.status,
+            "connection_id": connection.id,
+        },
+        status=200,
+    )
+
 
 def get_authenticated_personal_account(
     request,
