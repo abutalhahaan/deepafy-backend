@@ -20,6 +20,7 @@ def personal_font_styles(request):
                 "font_name": font.font_name,
                 "font_family": font.font_family,
                 "font_source": font.font_source,
+                "local_font_file": request.build_absolute_uri(font.local_font_file.url) if font.local_font_file else "",
                 "font_weights": font.font_weights,
                 "language_support": font.language_support,
                 "category": font.category,
