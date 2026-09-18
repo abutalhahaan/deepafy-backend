@@ -26,6 +26,13 @@ IMAGE_PRESETS = {
         "quality": 85,
     },
 
+    "popup_background": {
+        "width": 1920,
+        "height": 1080,
+        "max_size_kb": 2048,
+        "quality": 85,
+    },
+
     "editor": {
         "width": 1600,
         "height": 1000,

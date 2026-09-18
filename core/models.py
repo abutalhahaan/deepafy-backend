@@ -276,3 +276,455 @@ class ColleagueSetting(TimeStampedModel):
 
     def __str__(self):
         return "Colleague Settings"
+
+class CentralPopupSetting(TimeStampedModel):
+    SIZE_CHOICES = [
+        ("small", "Small"),
+        ("medium", "Medium"),
+        ("large", "Large"),
+        ("custom", "Custom"),
+        ("fullscreen", "Fullscreen"),
+    ]
+
+    POSITION_CHOICES = [
+        ("center", "Center"),
+        ("top", "Top"),
+        ("bottom", "Bottom"),
+        ("left", "Left"),
+        ("right", "Right"),
+    ]
+
+    popups = models.ManyToManyField(
+        "CentralPopupRegistry",
+        related_name="settings",
+        blank=True,
+    )
+
+    all_popups = models.BooleanField(
+        default=False,
+    )
+
+    country = models.ForeignKey(
+        "organization.Country",
+        on_delete=models.PROTECT,
+        related_name="popup_settings",
+    )
+
+    is_enabled = models.BooleanField(
+        default=True,
+    )
+
+    size = models.CharField(
+        max_length=20,
+        choices=SIZE_CHOICES,
+        default="medium",
+    )
+
+    position = models.CharField(
+        max_length=20,
+        choices=POSITION_CHOICES,
+        default="center",
+    )
+
+    width = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+    )
+
+    height = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+    )
+
+    # Content
+    content_title = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+    )
+
+    content_subtitle = models.CharField(
+        max_length=500,
+        blank=True,
+        default="",
+    )
+
+    content_body = models.TextField(
+        blank=True,
+        default="",
+    )
+
+    button_url = models.URLField(
+        blank=True,
+        default="",
+    )
+
+    # Schedule
+    schedule_enabled = models.BooleanField(
+        default=False,
+    )
+
+    start_date = models.DateField(
+        blank=True,
+        null=True,
+    )
+
+    end_date = models.DateField(
+        blank=True,
+        null=True,
+    )
+
+    repeat_yearly = models.BooleanField(
+        default=False,
+    )
+
+    display_start_time = models.TimeField(
+        blank=True,
+        null=True,
+    )
+
+    display_end_time = models.TimeField(
+        blank=True,
+        null=True,
+    )
+
+    # Background
+    background_color = models.CharField(
+        max_length=20,
+        blank=True,
+        default="#ffffff",
+    )
+
+    background_opacity = models.PositiveSmallIntegerField(
+        default=100,
+    )
+
+    background_image = models.ImageField(
+        upload_to="popup/backgrounds/",
+        blank=True,
+        null=True,
+    )
+
+    # Border / Shadow
+    border = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+    )
+
+    border_radius = models.CharField(
+        max_length=30,
+        default="18px",
+    )
+
+    box_shadow = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+    )
+
+    # Backdrop
+    backdrop_enabled = models.BooleanField(
+        default=True,
+    )
+
+    backdrop_color = models.CharField(
+        max_length=20,
+        default="#0f172a",
+    )
+
+    backdrop_opacity = models.PositiveSmallIntegerField(
+        default=55,
+    )
+
+    backdrop_blur = models.PositiveSmallIntegerField(
+        default=6,
+    )
+
+    # Close Behaviour
+    show_close_button = models.BooleanField(
+        default=True,
+    )
+
+    close_on_outside_click = models.BooleanField(
+        default=True,
+    )
+
+    close_on_escape = models.BooleanField(
+        default=True,
+    )
+
+    auto_close_enabled = models.BooleanField(
+        default=False,
+    )
+
+    auto_close_seconds = models.PositiveIntegerField(
+        default=0,
+    )
+
+    # Typography
+    font_family = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+    )
+
+    title_font_size = models.CharField(
+        max_length=30,
+        default="20px",
+    )
+
+    title_font_weight = models.CharField(
+        max_length=30,
+        default="600",
+    )
+
+    title_color = models.CharField(
+        max_length=20,
+        default="#111827",
+    )
+
+    body_font_size = models.CharField(
+        max_length=30,
+        default="16px",
+    )
+
+    body_font_weight = models.CharField(
+        max_length=30,
+        default="400",
+    )
+
+    body_color = models.CharField(
+        max_length=20,
+        default="#374151",
+    )
+
+    line_height = models.CharField(
+        max_length=30,
+        default="1.5",
+    )
+
+    letter_spacing = models.CharField(
+        max_length=30,
+        default="normal",
+    )
+
+    text_align = models.CharField(
+        max_length=20,
+        choices=[
+            ("left", "Left"),
+            ("center", "Center"),
+            ("right", "Right"),
+        ],
+        default="left",
+    )
+
+    # Header
+    header_enabled = models.BooleanField(
+        default=True,
+    )
+
+    header_title = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+    )
+
+    header_subtitle = models.CharField(
+        max_length=500,
+        blank=True,
+        default="",
+    )
+
+    header_alignment = models.CharField(
+        max_length=20,
+        choices=[
+            ("left", "Left"),
+            ("center", "Center"),
+            ("right", "Right"),
+        ],
+        default="left",
+    )
+
+    header_height = models.CharField(
+        max_length=30,
+        blank=True,
+        default="",
+    )
+
+    header_border = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+    )
+
+    # Button
+    button_enabled = models.BooleanField(
+        default=True,
+    )
+
+    button_text = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+    )
+
+    button_background_color = models.CharField(
+        max_length=20,
+        default="#0A66C2",
+    )
+
+    button_text_color = models.CharField(
+        max_length=20,
+        default="#ffffff",
+    )
+
+    button_font_size = models.CharField(
+        max_length=30,
+        default="14px",
+    )
+
+    button_font_weight = models.CharField(
+        max_length=30,
+        default="500",
+    )
+
+    button_border = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+    )
+
+    button_border_radius = models.CharField(
+        max_length=30,
+        default="8px",
+    )
+
+    button_padding = models.CharField(
+        max_length=50,
+        default="10px 18px",
+    )
+
+    button_alignment = models.CharField(
+        max_length=20,
+        choices=[
+            ("left", "Left"),
+            ("center", "Center"),
+            ("right", "Right"),
+        ],
+        default="left",
+    )
+
+    # Animation
+    animation = models.CharField(
+        max_length=30,
+        choices=[
+            ("fade", "Fade"),
+            ("scale", "Scale"),
+            ("slide-up", "Slide Up"),
+            ("slide-down", "Slide Down"),
+            ("slide-left", "Slide Left"),
+            ("slide-right", "Slide Right"),
+            ("none", "None"),
+        ],
+        default="scale",
+    )
+
+    animation_duration = models.PositiveIntegerField(
+        default=220,
+    )
+
+    # Mobile / Responsive
+    mobile_enabled = models.BooleanField(
+        default=True,
+    )
+
+    mobile_width = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+    )
+
+    mobile_height = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+    )
+
+    mobile_position = models.CharField(
+        max_length=20,
+        choices=[
+            ("center", "Center"),
+            ("top", "Top"),
+            ("bottom", "Bottom"),
+            ("left", "Left"),
+            ("right", "Right"),
+        ],
+        default="bottom",
+    )
+
+    mobile_bottom_sheet = models.BooleanField(
+        default=False,
+    )
+
+    mobile_border_radius = models.CharField(
+        max_length=30,
+        default="18px",
+    )
+
+    mobile_padding = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+    )
+
+    class Meta:
+        ordering = ["country__name", "id"]
+
+    def __str__(self):
+        popup_names = ", ".join(
+            self.popups.values_list("popup_id", flat=True)
+        )
+        return f"{popup_names or 'No Popup'} - {self.country.name}"
+
+
+class CentralPopupRegistry(TimeStampedModel):
+    POPUP_TYPES = [
+        ("special_day", "Special Day"),
+        ("iconic_person", "Iconic Person"),
+        ("memorial", "Memorial / Tribute"),
+        ("national_event", "National Event"),
+        ("announcement", "Announcement"),
+        ("custom", "Custom"),
+    ]
+
+    popup_id = models.CharField(
+        max_length=100,
+        unique=True,
+    )
+
+    popup_name = models.CharField(
+        max_length=255,
+    )
+
+    popup_type = models.CharField(
+        max_length=30,
+        choices=POPUP_TYPES,
+        default="custom",
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    display_order = models.PositiveIntegerField(
+        default=0,
+    )
+
+    class Meta:
+        ordering = ["display_order", "popup_name"]
+
+    def __str__(self):
+        return f"{self.popup_name} ({self.popup_id})"
