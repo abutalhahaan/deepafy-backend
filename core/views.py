@@ -528,3 +528,262 @@ def editor_image_upload(request):
             {"detail": str(error)},
             status=400,
         )
+
+
+# ---------------------------------------------------------------------------
+# Central Popup API
+# ---------------------------------------------------------------------------
+
+from datetime import datetime
+
+from django.utils import timezone
+
+from .models import CentralPopupSetting, CentralPopupRegistry
+
+
+def _popup_schedule_is_active(setting, now):
+    if not setting.schedule_enabled:
+        return True
+
+    current_date = now.date()
+    current_time = now.time()
+
+    if setting.repeat_yearly:
+        if setting.start_date and current_date.month < setting.start_date.month:
+            return False
+
+        if (
+            setting.start_date
+            and current_date.month == setting.start_date.month
+            and current_date.day < setting.start_date.day
+        ):
+            return False
+
+        if setting.end_date and current_date.month > setting.end_date.month:
+            return False
+
+        if (
+            setting.end_date
+            and current_date.month == setting.end_date.month
+            and current_date.day > setting.end_date.day
+        ):
+            return False
+    else:
+        if setting.start_date and current_date < setting.start_date:
+            return False
+
+        if setting.end_date and current_date > setting.end_date:
+            return False
+
+    if setting.display_start_time and current_time < setting.display_start_time:
+        return False
+
+    if setting.display_end_time and current_time > setting.display_end_time:
+        return False
+
+    return True
+
+
+def _serialize_popup_setting(setting, popup):
+    background_image = ""
+
+    if setting.background_image:
+        background_image = setting.background_image.url
+
+    return {
+        "popup_id": popup.popup_id,
+        "popup_name": popup.popup_name,
+        "popup_type": popup.popup_type,
+
+        "enabled": setting.is_enabled,
+
+        "content": {
+            "title": setting.content_title,
+            "subtitle": setting.content_subtitle,
+            "body": setting.content_body,
+            "button_url": setting.button_url,
+        },
+
+        "layout": {
+            "size": setting.size,
+            "position": setting.position,
+            "width": setting.width,
+            "height": setting.height,
+        },
+
+        "background": {
+            "color": setting.background_color,
+            "opacity": setting.background_opacity,
+            "image": background_image,
+        },
+
+        "border": {
+            "value": setting.border,
+            "radius": setting.border_radius,
+            "shadow": setting.box_shadow,
+        },
+
+        "backdrop": {
+            "enabled": setting.backdrop_enabled,
+            "color": setting.backdrop_color,
+            "opacity": setting.backdrop_opacity,
+            "blur": setting.backdrop_blur,
+        },
+
+        "close_behavior": {
+            "show_close_button": setting.show_close_button,
+            "close_on_outside_click": setting.close_on_outside_click,
+            "close_on_escape": setting.close_on_escape,
+            "auto_close_enabled": setting.auto_close_enabled,
+            "auto_close_seconds": setting.auto_close_seconds,
+        },
+
+        "typography": {
+            "font_family": setting.font_family,
+            "title_font_size": setting.title_font_size,
+            "title_font_weight": setting.title_font_weight,
+            "title_color": setting.title_color,
+            "body_font_size": setting.body_font_size,
+            "body_font_weight": setting.body_font_weight,
+            "body_color": setting.body_color,
+            "line_height": setting.line_height,
+            "letter_spacing": setting.letter_spacing,
+            "text_align": setting.text_align,
+        },
+
+        "header": {
+            "enabled": setting.header_enabled,
+            "title": setting.header_title,
+            "subtitle": setting.header_subtitle,
+            "alignment": setting.header_alignment,
+            "height": setting.header_height,
+            "border": setting.header_border,
+        },
+
+        "button": {
+            "enabled": setting.button_enabled,
+            "text": setting.button_text,
+            "background_color": setting.button_background_color,
+            "text_color": setting.button_text_color,
+            "font_size": setting.button_font_size,
+            "font_weight": setting.button_font_weight,
+            "border": setting.button_border,
+            "border_radius": setting.button_border_radius,
+            "padding": setting.button_padding,
+            "alignment": setting.button_alignment,
+        },
+
+        "animation": {
+            "type": setting.animation,
+            "duration": setting.animation_duration,
+        },
+
+        "mobile": {
+            "enabled": setting.mobile_enabled,
+            "width": setting.mobile_width,
+            "height": setting.mobile_height,
+            "position": setting.mobile_position,
+            "bottom_sheet": setting.mobile_bottom_sheet,
+            "border_radius": setting.mobile_border_radius,
+            "padding": setting.mobile_padding,
+        },
+    }
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def central_popup_settings(request):
+    """
+    Return active Central Popup settings for the requested country.
+
+    Query parameters:
+        country_id   -> Country primary key
+        country_code -> Country code
+        popup_id     -> Optional technical Popup ID
+
+    If popup_id is omitted, all matching active popup configurations
+    are returned.
+    """
+
+    country_id = request.query_params.get("country_id")
+    country_code = request.query_params.get("country_code")
+    popup_id = request.query_params.get("popup_id")
+
+    if not country_id and not country_code:
+        return Response(
+            {
+                "success": False,
+                "detail": "country_id or country_code is required.",
+            },
+            status=400,
+        )
+
+    settings = (
+        CentralPopupSetting.objects
+        .filter(is_enabled=True)
+        .prefetch_related("popups")
+        .select_related("country")
+    )
+
+    if country_id:
+        settings = settings.filter(country_id=country_id)
+    else:
+        settings = settings.filter(country__code__iexact=country_code)
+
+    now = timezone.localtime()
+
+    # Newest updated setting has priority for each country + popup.
+    settings = settings.order_by("-updated_at", "-id")
+
+    latest_settings_by_popup = {}
+
+    for setting in settings:
+        if not _popup_schedule_is_active(setting, now):
+            continue
+
+        active_popups = [
+            popup
+            for popup in setting.popups.all()
+            if popup.is_active
+        ]
+
+        if setting.all_popups:
+            active_popups = list(
+                CentralPopupRegistry.objects.filter(is_active=True)
+            )
+
+        if popup_id:
+            active_popups = [
+                popup
+                for popup in active_popups
+                if popup.popup_id == popup_id
+            ]
+
+        for popup in active_popups:
+            if popup.popup_id not in latest_settings_by_popup:
+                latest_settings_by_popup[popup.popup_id] = (
+                    setting,
+                    popup,
+                )
+
+    results = [
+        _serialize_popup_setting(setting, popup)
+        for setting, popup in latest_settings_by_popup.values()
+    ]
+
+    return Response(
+        {
+            "success": True,
+            "country": (
+                {
+                    "id": settings[0].country_id,
+                    "name": settings[0].country.name,
+                    "code": settings[0].country.code,
+                }
+                if settings
+                else None
+            ),
+            "popup_count": len(results),
+            "popups": results,
+        }
+    )
