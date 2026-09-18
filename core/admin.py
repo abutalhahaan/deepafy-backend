@@ -5,7 +5,7 @@ from django.http import HttpResponseRedirect
 
 # Register your models here.
 
-from .models import FeatureAccessControl, PersonalFontStyle
+from .models import FeatureAccessControl, PersonalFontStyle, ColleagueSetting
 
 @admin.register(FeatureAccessControl)
 class FeatureAccessControlAdmin(admin.ModelAdmin):
@@ -158,3 +158,75 @@ class PersonalFontStyleAdmin(admin.ModelAdmin):
         ('Font Loading', {'fields': ('font_source', 'local_font_file', 'font_weights', 'language_support')}),
         ('Access & Display', {'fields': ('access_level', 'is_enabled', 'display_order')}),
     )
+
+
+@admin.register(ColleagueSetting)
+class ColleagueSettingAdmin(admin.ModelAdmin):
+    list_display = (
+        "is_enabled",
+        "allow_user_remove",
+        "allow_status_change",
+        "require_mutual_confirmation",
+        "running_status_enabled",
+        "previous_status_enabled",
+        "updated_at",
+    )
+
+    list_filter = (
+        "is_enabled",
+        "allow_user_remove",
+        "allow_status_change",
+        "require_mutual_confirmation",
+        "running_status_enabled",
+        "previous_status_enabled",
+    )
+
+    readonly_fields = (
+        "created_at",
+        "updated_at",
+    )
+
+    fieldsets = (
+        (
+            "Colleague System",
+            {
+                "fields": (
+                    "is_enabled",
+                )
+            },
+        ),
+        (
+            "User Permissions",
+            {
+                "fields": (
+                    "allow_user_remove",
+                    "allow_status_change",
+                    "require_mutual_confirmation",
+                )
+            },
+        ),
+        (
+            "Status Options",
+            {
+                "fields": (
+                    "running_status_enabled",
+                    "previous_status_enabled",
+                )
+            },
+        ),
+        (
+            "System Information",
+            {
+                "fields": (
+                    "created_at",
+                    "updated_at",
+                )
+            },
+        ),
+    )
+
+    def has_add_permission(self, request):
+        return not ColleagueSetting.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
