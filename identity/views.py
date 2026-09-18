@@ -162,8 +162,6 @@ def connection_request_create(request, receiver_id):
 
 
 @csrf_exempt
-@csrf_exempt
-@csrf_exempt
 def connection_list(request):
     if request.method != "GET":
         return JsonResponse({"detail": "Method not allowed."}, status=405)
@@ -331,6 +329,7 @@ def connection_status(request, target_id):
     )
 
 
+@csrf_exempt
 def connection_request_cancel(request, connection_id):
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed."}, status=405)
@@ -379,6 +378,7 @@ def connection_request_cancel(request, connection_id):
     )
 
 
+@csrf_exempt
 def connection_request_decline(request, connection_id):
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed."}, status=405)
@@ -439,6 +439,7 @@ def connection_request_decline(request, connection_id):
     )
 
 
+@csrf_exempt
 def connection_request_accept(request, connection_id):
     if request.method != "POST":
         return JsonResponse({"detail": "Method not allowed."}, status=405)
