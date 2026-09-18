@@ -261,3 +261,18 @@ class UserFontFavorite(TimeStampedModel):
 
     def __str__(self):
         return f'{self.personal_account_id} - {self.font.font_key}'
+
+class ColleagueSetting(TimeStampedModel):
+    is_enabled = models.BooleanField(default=True)
+    allow_user_remove = models.BooleanField(default=False)
+    allow_status_change = models.BooleanField(default=True)
+    require_mutual_confirmation = models.BooleanField(default=True)
+    running_status_enabled = models.BooleanField(default=True)
+    previous_status_enabled = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = "Colleague Setting"
+        verbose_name_plural = "Colleague Settings"
+
+    def __str__(self):
+        return "Colleague Settings"

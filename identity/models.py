@@ -1138,3 +1138,56 @@ class Connection(models.Model):
 
     def __str__(self):
         return f"{self.sender.user_id} -> {self.receiver.user_id} ({self.status})"
+
+class Colleague(models.Model):
+    class RequestStatus(models.TextChoices):
+        PENDING = "pending", "Pending"
+        ACCEPTED = "accepted", "Accepted"
+        DECLINED = "declined", "Declined"
+
+    class Status(models.TextChoices):
+        RUNNING = "running", "Running"
+        PREVIOUS = "previous", "Previous"
+
+    sender = models.ForeignKey(
+        UserIdentity,
+        on_delete=models.CASCADE,
+        related_name="sent_colleague_requests",
+    )
+
+    receiver = models.ForeignKey(
+        UserIdentity,
+        on_delete=models.CASCADE,
+        related_name="received_colleague_requests",
+    )
+
+    request_status = models.CharField(
+        max_length=20,
+        choices=RequestStatus.choices,
+        default=RequestStatus.PENDING,
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.RUNNING,
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["sender", "receiver"],
+                name="unique_colleague_request_direction",
+            )
+        ]
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return (
+            f"{self.sender.user_id} -> "
+            f"{self.receiver.user_id} "
+            f"({self.request_status}, {self.status})"
+        )

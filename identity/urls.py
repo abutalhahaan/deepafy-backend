@@ -189,6 +189,38 @@ urlpatterns = [
         views.connection_request_accept,
         name="connection-request-accept",
     ),
+    # Colleagues
+    path(
+        "colleagues/",
+        views.colleague_list,
+        name="colleague-list",
+    ),
+    path(
+        "colleagues/<int:colleague_id>/accept/",
+        views.colleague_request_accept,
+        name="colleague-request-accept",
+    ),
+    path(
+        "colleagues/<int:colleague_id>/decline/",
+        views.colleague_request_decline,
+        name="colleague-request-decline",
+    ),
+    path(
+        "colleagues/<int:colleague_id>/cancel/",
+        views.colleague_request_cancel,
+        name="colleague-request-cancel",
+    ),
+    path(
+        "colleagues/<int:colleague_id>/status/",
+        views.colleague_status_update,
+        name="colleague-status-update",
+    ),
+    path(
+        "colleagues/<int:receiver_id>/request/",
+        views.colleague_request_create,
+        name="colleague-request-create",
+    ),
+
     # Professional Account
     path(
         "professional-accounts/create/",

@@ -3,6 +3,8 @@ import secrets
 
 from datetime import date, timedelta
 from core.services.image_processor import process_image
+from core.models import ColleagueSetting
+from notifications.services import create_notification
 
 from django.http.multipartparser import (
     MultiPartParser,
@@ -38,6 +40,7 @@ from .models import (
     AcademicBackground,
     AccountType,
     Connection,
+    Colleague,
     Hobby,
     JobExperience,
     Language,
@@ -65,6 +68,562 @@ from .serializers import (
     SignupSerializer,
     VerifyOTPSerializer,
 )
+
+@csrf_exempt
+def colleague_request_create(request, receiver_id):
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed."}, status=405)
+
+    sender = get_authenticated_identity(request)
+
+    if sender is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    settings = ColleagueSetting.objects.first()
+
+    if settings is None or not settings.is_enabled:
+        return JsonResponse(
+            {"detail": "Colleague feature is currently disabled."},
+            status=403,
+        )
+
+    try:
+        receiver = UserIdentity.objects.get(id=receiver_id)
+    except UserIdentity.DoesNotExist:
+        return JsonResponse(
+            {"detail": "User not found."},
+            status=404,
+        )
+
+    if sender.id == receiver.id:
+        return JsonResponse(
+            {"detail": "You cannot add yourself as a colleague."},
+            status=400,
+        )
+
+    existing = Colleague.objects.filter(
+        sender=sender,
+        receiver=receiver,
+    ).first()
+
+    if existing is not None:
+        if existing.request_status == Colleague.RequestStatus.PENDING:
+            return JsonResponse(
+                {
+                    "success": True,
+                    "status": "pending",
+                    "already_pending": True,
+                    "colleague_id": existing.id,
+                },
+                status=200,
+            )
+
+        if existing.request_status == Colleague.RequestStatus.ACCEPTED:
+            return JsonResponse(
+                {
+                    "success": True,
+                    "status": "accepted",
+                    "already_colleague": True,
+                    "colleague_id": existing.id,
+                },
+                status=200,
+            )
+
+        if existing.request_status == Colleague.RequestStatus.DECLINED:
+            existing.request_status = Colleague.RequestStatus.PENDING
+            existing.status = Colleague.Status.RUNNING
+            existing.save(
+                update_fields=[
+                    "request_status",
+                    "status",
+                    "updated_at",
+                ]
+            )
+
+            create_notification(
+                user=receiver,
+                category="system",
+                notification_type="colleague_request",
+                title="New colleague request",
+                message=(
+                    f"{sender.first_name} {sender.last_name} "
+                    "sent you a colleague request."
+                ).strip(),
+                source="colleague",
+                action_url="/connections",
+                priority="normal",
+            )
+
+            return JsonResponse(
+                {
+                    "success": True,
+                    "status": existing.request_status,
+                    "colleague_id": existing.id,
+                    "resent": True,
+                },
+                status=200,
+            )
+
+    reverse = Colleague.objects.filter(
+        sender=receiver,
+        receiver=sender,
+    ).first()
+
+    if reverse is not None:
+        if reverse.request_status == Colleague.RequestStatus.PENDING:
+            return JsonResponse(
+                {
+                    "success": False,
+                    "detail": "This user has already sent you a colleague request.",
+                    "status": "pending_received",
+                    "colleague_id": reverse.id,
+                },
+                status=409,
+            )
+
+        if reverse.request_status == Colleague.RequestStatus.ACCEPTED:
+            return JsonResponse(
+                {
+                    "success": True,
+                    "status": "accepted",
+                    "already_colleague": True,
+                    "colleague_id": reverse.id,
+                },
+                status=200,
+            )
+
+    colleague = Colleague.objects.create(
+        sender=sender,
+        receiver=receiver,
+        request_status=Colleague.RequestStatus.PENDING,
+    )
+
+    create_notification(
+        user=receiver,
+        category="system",
+        notification_type="colleague_request",
+        title="New colleague request",
+        message=(
+            f"{sender.first_name} {sender.last_name} "
+            "sent you a colleague request."
+        ).strip(),
+        source="colleague",
+        action_url="/connections",
+        priority="normal",
+    )
+
+    return JsonResponse(
+        {
+            "success": True,
+            "status": colleague.request_status,
+            "colleague_id": colleague.id,
+        },
+        status=201,
+    )
+
+
+@csrf_exempt
+def colleague_status_update(request, colleague_id):
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed."}, status=405)
+
+    current_user = get_authenticated_identity(request)
+
+    if current_user is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    settings = ColleagueSetting.objects.first()
+
+    if settings is None or not settings.is_enabled:
+        return JsonResponse(
+            {"detail": "Colleague feature is currently disabled."},
+            status=403,
+        )
+
+    if not settings.allow_status_change:
+        return JsonResponse(
+            {"detail": "Colleague status changes are currently disabled."},
+            status=403,
+        )
+
+    try:
+        colleague = Colleague.objects.get(
+            id=colleague_id,
+            request_status=Colleague.RequestStatus.ACCEPTED,
+        )
+    except Colleague.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Accepted colleague relationship not found."},
+            status=404,
+        )
+
+    if current_user.id not in (colleague.sender_id, colleague.receiver_id):
+        return JsonResponse(
+            {"detail": "You are not part of this colleague relationship."},
+            status=403,
+        )
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse(
+            {"detail": "Invalid JSON body."},
+            status=400,
+        )
+
+    new_status = data.get("status")
+
+    if new_status not in (
+        Colleague.Status.RUNNING,
+        Colleague.Status.PREVIOUS,
+    ):
+        return JsonResponse(
+            {
+                "detail": "Invalid status.",
+                "allowed_statuses": [
+                    Colleague.Status.RUNNING,
+                    Colleague.Status.PREVIOUS,
+                ],
+            },
+            status=400,
+        )
+
+    if (
+        new_status == Colleague.Status.RUNNING
+        and not settings.running_status_enabled
+    ):
+        return JsonResponse(
+            {"detail": "Running colleague status is currently disabled."},
+            status=403,
+        )
+
+    if (
+        new_status == Colleague.Status.PREVIOUS
+        and not settings.previous_status_enabled
+    ):
+        return JsonResponse(
+            {"detail": "Previous colleague status is currently disabled."},
+            status=403,
+        )
+
+    if colleague.status == new_status:
+        return JsonResponse(
+            {
+                "success": True,
+                "status": colleague.status,
+                "colleague_id": colleague.id,
+                "changed": False,
+            },
+            status=200,
+        )
+
+    colleague.status = new_status
+    colleague.save(update_fields=["status", "updated_at"])
+
+    other_user = (
+        colleague.receiver
+        if colleague.sender_id == current_user.id
+        else colleague.sender
+    )
+
+    create_notification(
+        user=other_user,
+        category="system",
+        notification_type="colleague_status_changed",
+        title="Colleague status updated",
+        message=(
+            f"{current_user.first_name} {current_user.last_name} "
+            f"changed your colleague relationship to "
+            f"{colleague.get_status_display()}."
+        ).strip(),
+        source="colleague",
+        action_url="/connections",
+        priority="normal",
+    )
+
+    return JsonResponse(
+        {
+            "success": True,
+            "status": colleague.status,
+            "colleague_id": colleague.id,
+            "changed": True,
+        },
+        status=200,
+    )
+
+
+@csrf_exempt
+def colleague_request_cancel(request, colleague_id):
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed."}, status=405)
+
+    current_user = get_authenticated_identity(request)
+
+    if current_user is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    settings = ColleagueSetting.objects.first()
+
+    if settings is None or not settings.is_enabled:
+        return JsonResponse(
+            {"detail": "Colleague feature is currently disabled."},
+            status=403,
+        )
+
+    try:
+        colleague = Colleague.objects.get(
+            id=colleague_id,
+            sender=current_user,
+            request_status=Colleague.RequestStatus.PENDING,
+        )
+    except Colleague.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Pending colleague request not found."},
+            status=404,
+        )
+
+    colleague.delete()
+
+    return JsonResponse(
+        {
+            "success": True,
+            "status": "cancelled",
+            "colleague_id": colleague_id,
+        },
+        status=200,
+    )
+
+
+@csrf_exempt
+def colleague_request_decline(request, colleague_id):
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed."}, status=405)
+
+    current_user = get_authenticated_identity(request)
+
+    if current_user is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    settings = ColleagueSetting.objects.first()
+
+    if settings is None or not settings.is_enabled:
+        return JsonResponse(
+            {"detail": "Colleague feature is currently disabled."},
+            status=403,
+        )
+
+    try:
+        colleague = Colleague.objects.select_related(
+            "sender",
+            "receiver",
+        ).get(
+            id=colleague_id,
+            receiver=current_user,
+            request_status=Colleague.RequestStatus.PENDING,
+        )
+    except Colleague.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Pending colleague request not found."},
+            status=404,
+        )
+
+    colleague.request_status = Colleague.RequestStatus.DECLINED
+    colleague.save(update_fields=["request_status", "updated_at"])
+
+    sender = colleague.sender
+
+    create_notification(
+        user=sender,
+        category="system",
+        notification_type="colleague_request_declined",
+        title="Colleague request declined",
+        message=(
+            f"{current_user.first_name} {current_user.last_name} "
+            "declined your colleague request."
+        ).strip(),
+        source="colleague",
+        action_url="/connections",
+        priority="normal",
+    )
+
+    return JsonResponse(
+        {
+            "success": True,
+            "status": colleague.request_status,
+            "colleague_id": colleague.id,
+        },
+        status=200,
+    )
+
+
+@csrf_exempt
+def colleague_request_accept(request, colleague_id):
+    if request.method != "POST":
+        return JsonResponse({"detail": "Method not allowed."}, status=405)
+
+    current_user = get_authenticated_identity(request)
+
+    if current_user is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    settings = ColleagueSetting.objects.first()
+
+    if settings is None or not settings.is_enabled:
+        return JsonResponse(
+            {"detail": "Colleague feature is currently disabled."},
+            status=403,
+        )
+
+    try:
+        colleague = Colleague.objects.select_related(
+            "sender",
+            "receiver",
+        ).get(
+            id=colleague_id,
+            receiver=current_user,
+            request_status=Colleague.RequestStatus.PENDING,
+        )
+    except Colleague.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Pending colleague request not found."},
+            status=404,
+        )
+
+    colleague.request_status = Colleague.RequestStatus.ACCEPTED
+    colleague.status = Colleague.Status.RUNNING
+    colleague.save(update_fields=["request_status", "status", "updated_at"])
+
+    sender = colleague.sender
+
+    create_notification(
+        user=sender,
+        category="system",
+        notification_type="colleague_request_accepted",
+        title="Colleague request accepted",
+        message=(
+            f"{current_user.first_name} {current_user.last_name} "
+            "accepted your colleague request."
+        ).strip(),
+        source="colleague",
+        action_url="/connections",
+        priority="normal",
+    )
+
+    return JsonResponse(
+        {
+            "success": True,
+            "status": colleague.request_status,
+            "colleague_status": colleague.status,
+            "colleague_id": colleague.id,
+        },
+        status=200,
+    )
+
+
+@csrf_exempt
+def colleague_list(request):
+    if request.method != "GET":
+        return JsonResponse({"detail": "Method not allowed."}, status=405)
+
+    current_user = get_authenticated_identity(request)
+
+    if current_user is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    settings = ColleagueSetting.objects.first()
+
+    if settings is None or not settings.is_enabled:
+        return JsonResponse(
+            {"detail": "Colleague feature is currently disabled."},
+            status=403,
+        )
+
+    received_requests = Colleague.objects.filter(
+        receiver=current_user,
+        request_status=Colleague.RequestStatus.PENDING,
+    )
+
+    sent_requests = Colleague.objects.filter(
+        sender=current_user,
+        request_status=Colleague.RequestStatus.PENDING,
+    )
+
+    accepted_colleagues = Colleague.objects.filter(
+        models.Q(sender=current_user) | models.Q(receiver=current_user),
+        request_status=Colleague.RequestStatus.ACCEPTED,
+    )
+
+    def serialize_colleague(colleague, request_type):
+        other_user = (
+            colleague.receiver
+            if colleague.sender_id == current_user.id
+            else colleague.sender
+        )
+
+        return {
+            "colleague_id": colleague.id,
+            "user_id": other_user.id,
+            "username": other_user.username,
+            "first_name": other_user.first_name,
+            "last_name": other_user.last_name,
+            "status": colleague.status,
+            "request_status": colleague.request_status,
+            "request_type": request_type,
+            "created_at": colleague.created_at.isoformat(),
+            "updated_at": colleague.updated_at.isoformat(),
+        }
+
+    all_colleagues = [
+        serialize_colleague(colleague, "colleague")
+        for colleague in accepted_colleagues
+    ]
+
+    running_colleagues = [
+        item for item in all_colleagues
+        if item["status"] == Colleague.Status.RUNNING
+    ]
+
+    previous_colleagues = [
+        item for item in all_colleagues
+        if item["status"] == Colleague.Status.PREVIOUS
+    ]
+
+    return JsonResponse(
+        {
+            "success": True,
+            "all_colleagues": all_colleagues,
+            "running_colleagues": running_colleagues,
+            "previous_colleagues": previous_colleagues,
+            "received_requests": [
+                serialize_colleague(colleague, "received")
+                for colleague in received_requests
+            ],
+            "sent_requests": [
+                serialize_colleague(colleague, "sent")
+                for colleague in sent_requests
+            ],
+        },
+        status=200,
+    )
+
 
 @csrf_exempt
 def connection_request_create(request, receiver_id):
