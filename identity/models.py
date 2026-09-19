@@ -1191,3 +1191,37 @@ class Colleague(models.Model):
             f"{self.receiver.user_id} "
             f"({self.request_status}, {self.status})"
         )
+
+class Follow(models.Model):
+    follower = models.ForeignKey(
+        UserIdentity,
+        on_delete=models.CASCADE,
+        related_name="following",
+    )
+
+    following = models.ForeignKey(
+        UserIdentity,
+        on_delete=models.CASCADE,
+        related_name="followers",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["follower", "following"],
+                name="unique_follow_relationship",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(follower=models.F("following")),
+                name="prevent_self_follow",
+            ),
+        ]
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return (
+            f"{self.follower.user_id} -> "
+            f"{self.following.user_id}"
+        )

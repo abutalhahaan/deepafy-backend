@@ -41,6 +41,7 @@ from .models import (
     AccountType,
     Connection,
     Colleague,
+    Follow,
     Hobby,
     JobExperience,
     Language,
@@ -68,6 +69,227 @@ from .serializers import (
     SignupSerializer,
     VerifyOTPSerializer,
 )
+
+
+@csrf_exempt
+def follow_create(request, following_id):
+    if request.method != "POST":
+        return JsonResponse(
+            {"detail": "Method not allowed."},
+            status=405,
+        )
+
+    follower = get_authenticated_identity(request)
+
+    if follower is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    if follower.id == following_id:
+        return JsonResponse(
+            {
+                "success": False,
+                "detail": "You cannot follow yourself.",
+            },
+            status=400,
+        )
+
+    try:
+        following = UserIdentity.objects.get(id=following_id)
+    except UserIdentity.DoesNotExist:
+        return JsonResponse(
+            {"detail": "User not found."},
+            status=404,
+        )
+
+    follow, created = Follow.objects.get_or_create(
+        follower=follower,
+        following=following,
+    )
+
+    return JsonResponse(
+        {
+            "success": True,
+            "status": "following",
+            "created": created,
+            "follow_id": follow.id,
+        },
+        status=201 if created else 200,
+    )
+
+
+
+def follow_status(request, target_id):
+    if request.method != "GET":
+        return JsonResponse(
+            {"detail": "Method not allowed."},
+            status=405,
+        )
+
+    viewer = get_authenticated_identity(request)
+
+    if viewer is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    try:
+        target = UserIdentity.objects.get(id=target_id)
+    except UserIdentity.DoesNotExist:
+        return JsonResponse(
+            {"detail": "User not found."},
+            status=404,
+        )
+
+    is_following = Follow.objects.filter(
+        follower=viewer,
+        following=target,
+    ).exists()
+
+    return JsonResponse(
+        {
+            "success": True,
+            "status": "self"
+            if viewer.id == target.id
+            else "following"
+            if is_following
+            else "not_following",
+            "is_following": is_following,
+            "followers_count": Follow.objects.filter(
+                following=target,
+            ).count(),
+            "following_count": Follow.objects.filter(
+                follower=target,
+            ).count(),
+        },
+        status=200,
+    )
+
+@csrf_exempt
+
+def followers_list(request, target_id):
+    if request.method != "GET":
+        return JsonResponse(
+            {"detail": "Method not allowed."},
+            status=405,
+        )
+
+    viewer = get_authenticated_identity(request)
+
+    if viewer is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    try:
+        target = UserIdentity.objects.get(id=target_id)
+    except UserIdentity.DoesNotExist:
+        return JsonResponse(
+            {"detail": "User not found."},
+            status=404,
+        )
+
+    follows = (
+        Follow.objects
+        .filter(following=target)
+        .select_related("follower")
+    )
+
+    return JsonResponse(
+        {
+            "success": True,
+            "count": follows.count(),
+            "followers": [
+                serialize_identity(follow.follower)
+                for follow in follows
+            ],
+        },
+        status=200,
+    )
+
+
+def following_list(request, target_id):
+    if request.method != "GET":
+        return JsonResponse(
+            {"detail": "Method not allowed."},
+            status=405,
+        )
+
+    viewer = get_authenticated_identity(request)
+
+    if viewer is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    try:
+        target = UserIdentity.objects.get(id=target_id)
+    except UserIdentity.DoesNotExist:
+        return JsonResponse(
+            {"detail": "User not found."},
+            status=404,
+        )
+
+    follows = (
+        Follow.objects
+        .filter(follower=target)
+        .select_related("following")
+    )
+
+    return JsonResponse(
+        {
+            "success": True,
+            "count": follows.count(),
+            "following": [
+                serialize_identity(follow.following)
+                for follow in follows
+            ],
+        },
+        status=200,
+    )
+
+def follow_remove(request, following_id):
+    if request.method != "DELETE":
+        return JsonResponse(
+            {"detail": "Method not allowed."},
+            status=405,
+        )
+
+    follower = get_authenticated_identity(request)
+
+    if follower is None:
+        return JsonResponse(
+            {"detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    deleted, _ = Follow.objects.filter(
+        follower=follower,
+        following_id=following_id,
+    ).delete()
+
+    if deleted == 0:
+        return JsonResponse(
+            {
+                "success": True,
+                "status": "not_following",
+                "already_removed": True,
+            },
+            status=200,
+        )
+
+    return JsonResponse(
+        {
+            "success": True,
+            "status": "not_following",
+        },
+        status=200,
+    )
 
 @csrf_exempt
 def colleague_request_create(request, receiver_id):
