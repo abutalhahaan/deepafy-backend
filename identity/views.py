@@ -253,6 +253,7 @@ def following_list(request, target_id):
         status=200,
     )
 
+@csrf_exempt
 def follow_remove(request, following_id):
     if request.method != "DELETE":
         return JsonResponse(
