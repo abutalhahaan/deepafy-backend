@@ -407,7 +407,173 @@ class CentralPopupSetting(TimeStampedModel):
         null=True,
     )
 
+    background_visual_priority = models.CharField(
+        max_length=10,
+        choices=[
+            ("color", "Color"),
+            ("image", "Image"),
+        ],
+        default="color",
+    )
+
+    # Header Colors
+    header_background_color = models.CharField(
+        max_length=20,
+        default="",
+        blank=True,
+    )
+
+    header_title_color = models.CharField(
+        max_length=20,
+        default="#111827",
+    )
+
+    header_subtitle_color = models.CharField(
+        max_length=20,
+        default="#6B7280",
+    )
+
+    # Header Typography
+    header_title_font_family = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+    )
+
+    header_title_font_size = models.CharField(
+        max_length=30,
+        default="28px",
+    )
+
+    header_title_font_weight = models.CharField(
+        max_length=30,
+        default="700",
+    )
+
+    header_title_line_height = models.CharField(
+        max_length=30,
+        default="1.2",
+    )
+
+    header_title_letter_spacing = models.CharField(
+        max_length=30,
+        default="normal",
+    )
+
+    header_subtitle_font_family = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+    )
+
+    header_subtitle_font_size = models.CharField(
+        max_length=30,
+        default="16px",
+    )
+
+    header_subtitle_font_weight = models.CharField(
+        max_length=30,
+        default="400",
+    )
+
+    header_subtitle_line_height = models.CharField(
+        max_length=30,
+        default="1.5",
+    )
+
+    header_subtitle_letter_spacing = models.CharField(
+        max_length=30,
+        default="normal",
+    )
+
+    # Body Colors
+    body_secondary_color = models.CharField(
+        max_length=20,
+        default="#6B7280",
+    )
+
+    body_link_color = models.CharField(
+        max_length=20,
+        default="#0A66C2",
+    )
+
+    # Tab Colors
+    tab_background_color = models.CharField(
+        max_length=20,
+        default="",
+        blank=True,
+    )
+
+    tab_active_background_color = models.CharField(
+        max_length=20,
+        default="#0A66C2",
+    )
+
+    tab_text_color = models.CharField(
+        max_length=20,
+        default="#374151",
+    )
+
+    tab_active_text_color = models.CharField(
+        max_length=20,
+        default="#ffffff",
+    )
+
+    tab_border_color = models.CharField(
+        max_length=20,
+        default="#E5E7EB",
+    )
+
+    # Tab Typography
+    tab_font_family = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+    )
+
+    tab_font_size = models.CharField(
+        max_length=30,
+        default="14px",
+    )
+
+    tab_font_weight = models.CharField(
+        max_length=30,
+        default="500",
+    )
+
+    tab_active_font_weight = models.CharField(
+        max_length=30,
+        default="600",
+    )
+
+
     # Border / Shadow
+    border_width = models.CharField(
+        max_length=20,
+        blank=True,
+        default="",
+    )
+
+    border_style = models.CharField(
+        max_length=20,
+        choices=[
+            ("none", "None"),
+            ("solid", "Solid"),
+            ("dashed", "Dashed"),
+            ("dotted", "Dotted"),
+            ("double", "Double"),
+        ],
+        default="solid",
+    )
+
+    border_color = models.CharField(
+        max_length=20,
+        blank=True,
+        default="#E5E7EB",
+    )
+
+    # Legacy combined border value.
+    # Kept temporarily so existing data is not lost during migration.
     border = models.CharField(
         max_length=100,
         blank=True,
@@ -440,7 +606,7 @@ class CentralPopupSetting(TimeStampedModel):
     )
 
     backdrop_blur = models.PositiveSmallIntegerField(
-        default=6,
+        default=8,
     )
 
     # Close Behaviour
@@ -588,13 +754,13 @@ class CentralPopupSetting(TimeStampedModel):
 
     button_font_weight = models.CharField(
         max_length=30,
-        default="500",
+        default="600",
     )
 
     button_border = models.CharField(
         max_length=100,
         blank=True,
-        default="",
+        default="1px solid #0A66C2",
     )
 
     button_border_radius = models.CharField(
@@ -614,7 +780,7 @@ class CentralPopupSetting(TimeStampedModel):
             ("center", "Center"),
             ("right", "Right"),
         ],
-        default="left",
+        default="center",
     )
 
     # Animation

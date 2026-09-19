@@ -240,19 +240,363 @@ class ColleagueSettingAdmin(admin.ModelAdmin):
         return False
 
 
-class CentralPopupSettingForm(forms.ModelForm):
-    all_popups = forms.BooleanField(
-        required=False,
-        label="All Popup IDs",
-        help_text="Enable this to apply this setting to all active registered popups.",
-    )
+class ButtonBorderWidget(forms.MultiWidget):
+    def __init__(self, attrs=None):
+        widgets = [
+            forms.Select(
+                choices=[
+                    ("0px", "None"), ("1px", "1px"), ("2px", "2px"),
+                    ("3px", "3px"), ("4px", "4px"), ("5px", "5px"),
+                    ("6px", "6px"), ("8px", "8px"), ("10px", "10px"),
+                ],
+                attrs={"class": "central-popup-button-border-width"},
+            ),
+            forms.Select(
+                choices=[
+                    ("none", "None"), ("solid", "Solid"),
+                    ("dashed", "Dashed"), ("dotted", "Dotted"),
+                    ("double", "Double"),
+                ],
+                attrs={"class": "central-popup-button-border-style"},
+            ),
+            forms.TextInput(
+                attrs={
+                    "type": "color",
+                    "class": "central-popup-color-picker central-popup-button-border-color",
+                }
+            ),
+        ]
+        super().__init__(widgets, attrs)
 
-    class Meta:
-        model = CentralPopupSetting
-        fields = "__all__"
+    def decompress(self, value):
+        if not value:
+            return ["0px", "solid", "#FFFFFF"]
+
+        parts = value.split()
+
+        width = parts[0] if len(parts) >= 1 else "0px"
+        style = parts[1] if len(parts) >= 2 else "solid"
+        color = parts[2] if len(parts) >= 3 else "#FFFFFF"
+
+        return [width, style, color]
+
+
+class ButtonBorderField(forms.MultiValueField):
+    def __init__(self, *args, **kwargs):
+        fields = [
+            forms.ChoiceField(
+                choices=[
+                    ("0px", "None"), ("1px", "1px"), ("2px", "2px"),
+                    ("3px", "3px"), ("4px", "4px"), ("5px", "5px"),
+                    ("6px", "6px"), ("8px", "8px"), ("10px", "10px"),
+                ],
+                required=False,
+            ),
+            forms.ChoiceField(
+                choices=[
+                    ("none", "None"), ("solid", "Solid"),
+                    ("dashed", "Dashed"), ("dotted", "Dotted"),
+                    ("double", "Double"),
+                ],
+                required=False,
+            ),
+            forms.CharField(
+                required=False,
+                widget=forms.TextInput(attrs={"type": "color"}),
+            ),
+        ]
+
+        kwargs.setdefault("require_all_fields", False)
+        kwargs["widget"] = ButtonBorderWidget()
+
+        super().__init__(fields=fields, *args, **kwargs)
+
+    def compress(self, data_list):
+        if not data_list:
+            return ""
+
+        width = data_list[0] or "0px"
+        style = data_list[1] or "solid"
+        color = data_list[2] or "#FFFFFF"
+
+        if width == "0px" or style == "none":
+            return "0px none #FFFFFF"
+
+        return f"{width} {style} {color}"
+
+
+class CentralPopupSettingForm(forms.ModelForm):
+    BORDER_WIDTH_CHOICES = [
+        ("0", "None"),
+        ("1px", "1px"),
+        ("2px", "2px"),
+        ("3px", "3px"),
+        ("4px", "4px"),
+        ("5px", "5px"),
+        ("6px", "6px"),
+        ("8px", "8px"),
+        ("10px", "10px"),
+    ]
+
+    BORDER_STYLE_CHOICES = [
+        ("none", "None"),
+        ("solid", "Solid"),
+        ("dashed", "Dashed"),
+        ("dotted", "Dotted"),
+        ("double", "Double"),
+    ]
+
+    FONT_FAMILY_CHOICES = [
+        ("", "Default / System"),
+        ("Arial, sans-serif", "Arial"),
+        ("Inter, sans-serif", "Inter"),
+        ("Roboto, sans-serif", "Roboto"),
+        ("Poppins, sans-serif", "Poppins"),
+        ("Montserrat, sans-serif", "Montserrat"),
+        ("Open Sans, sans-serif", "Open Sans"),
+        ("Lato, sans-serif", "Lato"),
+        ("Nunito, sans-serif", "Nunito"),
+        ("Merriweather, serif", "Merriweather"),
+        ("Georgia, serif", "Georgia"),
+        ("Times New Roman, serif", "Times New Roman"),
+        ("Courier New, monospace", "Courier New"),
+    ]
+
+    BUTTON_RADIUS_CHOICES = [
+        ("0px", "0px"),
+        ("2px", "2px"),
+        ("4px", "4px"),
+        ("6px", "6px"),
+        ("8px", "8px"),
+        ("10px", "10px"),
+        ("12px", "12px"),
+        ("16px", "16px"),
+        ("20px", "20px"),
+        ("24px", "24px"),
+        ("30px", "30px"),
+        ("50px", "50px"),
+    ]
+
+    BUTTON_BORDER_WIDTH_CHOICES = [
+        ("0px", "None"),
+        ("1px", "1px"),
+        ("2px", "2px"),
+        ("3px", "3px"),
+        ("4px", "4px"),
+        ("5px", "5px"),
+        ("6px", "6px"),
+        ("8px", "8px"),
+        ("10px", "10px"),
+    ]
+
+    BUTTON_BORDER_STYLE_CHOICES = [
+        ("none", "None"),
+        ("solid", "Solid"),
+        ("dashed", "Dashed"),
+        ("dotted", "Dotted"),
+        ("double", "Double"),
+    ]
+
+    BUTTON_PADDING_CHOICES = [
+        ("4px 8px", "4px 8px"),
+        ("6px 12px", "6px 12px"),
+        ("8px 16px", "8px 16px"),
+        ("10px 18px", "10px 18px"),
+        ("10px 20px", "10px 20px"),
+        ("12px 24px", "12px 24px"),
+        ("14px 28px", "14px 28px"),
+        ("16px 32px", "16px 32px"),
+        ("18px 36px", "18px 36px"),
+        ("20px 40px", "20px 40px"),
+    ]
+
+    FONT_SIZE_CHOICES = [
+        ("", "Default"),
+        ("12px", "12px"),
+        ("14px", "14px"),
+        ("16px", "16px"),
+        ("18px", "18px"),
+        ("20px", "20px"),
+        ("22px", "22px"),
+        ("24px", "24px"),
+        ("28px", "28px"),
+        ("32px", "32px"),
+        ("36px", "36px"),
+        ("40px", "40px"),
+        ("48px", "48px"),
+        ("56px", "56px"),
+        ("64px", "64px"),
+    ]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+        # ---------------------------------------------------------------
+        # Font Family — centralized dropdown
+        # ---------------------------------------------------------------
+        font_family_fields = [
+            "font_family",
+            "header_title_font_family",
+            "header_subtitle_font_family",
+            "tab_font_family",
+            "button_font_family",
+        ]
+
+        for field_name in font_family_fields:
+            if field_name in self.fields:
+                original = self.fields[field_name]
+                self.fields[field_name] = forms.ChoiceField(
+                    required=False,
+                    choices=self.FONT_FAMILY_CHOICES,
+                    initial=original.initial,
+                    label=original.label,
+                    help_text=original.help_text,
+                    widget=forms.Select(attrs={
+                        "class": "central-popup-font-family",
+                    }),
+                )
+
+        # ---------------------------------------------------------------
+        # Font Size — centralized dropdown
+        # ---------------------------------------------------------------
+        font_size_fields = [
+            "title_font_size",
+            "body_font_size",
+            "header_title_font_size",
+            "header_subtitle_font_size",
+            "tab_font_size",
+            "button_font_size",
+        ]
+
+        for field_name in font_size_fields:
+            if field_name in self.fields:
+                original = self.fields[field_name]
+                self.fields[field_name] = forms.ChoiceField(
+                    required=False,
+                    choices=self.FONT_SIZE_CHOICES,
+                    initial=original.initial,
+                    label=original.label,
+                    help_text=original.help_text,
+                    widget=forms.Select(attrs={
+                        "class": "central-popup-font-size",
+                    }),
+                )
+
+        # ---------------------------------------------------------------
+        # Button Border — Width / Style / Color
+        # ---------------------------------------------------------------
+        if "button_border" in self.fields:
+            original = self.fields["button_border"]
+
+            self.fields["button_border"] = ButtonBorderField(
+                required=False,
+                label=original.label,
+                help_text="Set the popup button border width, style, and color.",
+                initial=original.initial,
+            )
+
+        # ---------------------------------------------------------------
+        # Button Border Radius
+        # ---------------------------------------------------------------
+        if "button_border_radius" in self.fields:
+            original = self.fields["button_border_radius"]
+            self.fields["button_border_radius"] = forms.ChoiceField(
+                required=False,
+                choices=self.BUTTON_RADIUS_CHOICES,
+                initial=original.initial,
+                label=original.label,
+                help_text=original.help_text,
+                widget=forms.Select(attrs={
+                    "class": "central-popup-button-radius",
+                }),
+            )
+
+        # ---------------------------------------------------------------
+        # Button Padding
+        # ---------------------------------------------------------------
+        if "button_padding" in self.fields:
+            original = self.fields["button_padding"]
+            self.fields["button_padding"] = forms.ChoiceField(
+                required=False,
+                choices=self.BUTTON_PADDING_CHOICES,
+                initial=original.initial,
+                label=original.label,
+                help_text=original.help_text,
+                widget=forms.Select(attrs={
+                    "class": "central-popup-button-padding",
+                }),
+            )
+
+        # ---------------------------------------------------------------
+        # Border Width
+        # ---------------------------------------------------------------
+        if "border_width" in self.fields:
+            original = self.fields["border_width"]
+            self.fields["border_width"] = forms.ChoiceField(
+                required=False,
+                choices=self.BORDER_WIDTH_CHOICES,
+                initial=original.initial,
+                label=original.label,
+                help_text=original.help_text,
+                widget=forms.Select(attrs={
+                    "class": "central-popup-border-width",
+                }),
+            )
+
+        # ---------------------------------------------------------------
+        # Border Style
+        # ---------------------------------------------------------------
+        if "border_style" in self.fields:
+            original = self.fields["border_style"]
+            self.fields["border_style"] = forms.ChoiceField(
+                required=False,
+                choices=self.BORDER_STYLE_CHOICES,
+                initial=original.initial,
+                label=original.label,
+                help_text=original.help_text,
+                widget=forms.Select(attrs={
+                    "class": "central-popup-border-style",
+                }),
+            )
+
+        # ---------------------------------------------------------------
+        # All Color Fields — centralized color picker
+        # ---------------------------------------------------------------
+        color_fields = [
+            "background_color",
+            "header_background_color",
+            "header_title_color",
+            "header_subtitle_color",
+            "body_color",
+            "body_secondary_color",
+            "body_link_color",
+            "tab_background_color",
+            "tab_active_background_color",
+            "tab_text_color",
+            "tab_active_text_color",
+            "tab_border_color",
+            "border_color",
+            "button_border_color",
+            "button_background_color",
+            "button_text_color",
+            "backdrop_color",
+        ]
+
+        for field_name in color_fields:
+            if field_name in self.fields:
+                self.fields[field_name].widget = forms.TextInput(
+                    attrs={
+                        "type": "color",
+                        "class": "vTextField central-popup-color-picker",
+                    }
+                )
+
+        # ---------------------------------------------------------------
+        # Background priority is controlled automatically by JS.
+        # ---------------------------------------------------------------
+        if "background_visual_priority" in self.fields:
+            self.fields["background_visual_priority"].widget = forms.HiddenInput()
+
 
         self.fields["popups"].queryset = (
             CentralPopupRegistry.objects
@@ -272,45 +616,52 @@ class CentralPopupSettingForm(forms.ModelForm):
         # Central Popup Admin Help Text
         # ---------------------------------------------------------------
         help_texts = {
-            "popups": "Select the specific Popup ID(s) that should use this setting.",
-            "country": "Select the country whose users should receive this popup.",
-            "is_enabled": "Turn this popup configuration on or off.",
+            "popups": "এই সেটিং কোন কোন Popup ID-তে প্রযোজ্য হবে তা নির্বাচন করুন।",
+            "country": "কোন দেশের ব্যবহারকারীদের জন্য এই Popup দেখানো হবে তা নির্বাচন করুন।",
+            "is_enabled": "এই Popup configuration চালু বা বন্ধ করুন।",
 
-            "content_title": "Main heading displayed inside the popup.",
-            "content_subtitle": "Short supporting text displayed below the main heading.",
-            "content_body": "Main message or content displayed inside the popup.",
-            "button_url": "Destination URL opened when the popup action button is used.",
+            "content_title": "Popup-এর ভেতরে প্রদর্শিত প্রধান শিরোনাম।",
+            "content_subtitle": "প্রধান শিরোনামের নিচে প্রদর্শিত সংক্ষিপ্ত সহায়ক লেখা।",
+            "content_body": "Popup-এর ভেতরে প্রদর্শিত মূল বার্তা বা বিষয়বস্তু।",
+            "button_url": "Popup-এর action button-এ ক্লিক করলে যে URL-এ ব্যবহারকারী যাবে।",
 
-            "schedule_enabled": "Enable this when the popup should appear only during a defined period.",
-            "start_date": "Date from which this popup configuration becomes active.",
-            "end_date": "Date after which this popup configuration stops being active.",
-            "repeat_yearly": "Repeat the configured date range every year.",
-            "display_start_time": "Daily time from which the popup may be displayed.",
-            "display_end_time": "Daily time after which the popup should stop being displayed.",
+            "schedule_enabled": "নির্দিষ্ট সময়ের মধ্যে Popup দেখাতে চাইলে এটি চালু করুন।",
+            "start_date": "যে তারিখ থেকে এই Popup configuration কার্যকর হবে।",
+            "end_date": "যে তারিখের পর এই Popup configuration আর কার্যকর থাকবে না।",
+            "repeat_yearly": "নির্ধারিত তারিখের সময়সীমা প্রতি বছর পুনরায় কার্যকর করুন।",
+            "display_start_time": "প্রতিদিন যে সময় থেকে Popup দেখানো শুরু হতে পারবে।",
+            "display_end_time": "প্রতিদিন যে সময়ের পর Popup দেখানো বন্ধ হবে।",
 
-            "size": "Overall popup size preset.",
-            "position": "Where the popup appears on the screen.",
-            "width": "Popup width. Example: 600px or 80%.",
-            "height": "Popup height. Example: 500px or 80vh.",
+            "size": "Popup-এর সামগ্রিক আকারের preset।",
+            "position": "স্ক্রিনের কোন অবস্থানে Popup প্রদর্শিত হবে।",
+            "width": "Popup-এর প্রস্থ নির্ধারণ করে। যেমন: 600px বা 80%。",
+            "height": "Popup-এর উচ্চতা নির্ধারণ করে। যেমন: 500px বা 80vh।",
 
-            "background_color": "Background color used when no background image is displayed.",
-            "background_opacity": "Transparency level of the popup background color.",
-            "background_image": "Image displayed as the popup background. When an image exists, the image takes priority over the background color.",
+            "background_color": "Background image ব্যবহার না হলে Popup-এর পেছনে যে রং দেখা যাবে।",
+            "background_opacity": "Popup-এর background color কতটা স্বচ্ছ হবে তা নির্ধারণ করে।",
+            "background_image": (
+                "Upload the popup background image. A newly changed/uploaded image "
+                "automatically becomes the active background."
+            ),
+            "background_visual_priority": (
+                "Automatically controlled by the latest background color change "
+                "or image upload."
+            ),
 
             "border": "Popup border style, width, and color. Example: 2px solid #0A66C2.",
-            "border_radius": "Roundness of the popup corners.",
-            "box_shadow": "Shadow displayed around the popup.",
+            "border_radius": "Popup-এর চারটি corner কতটা গোল হবে তা নির্ধারণ করে।",
+            "box_shadow": "Popup-এর চারপাশে প্রদর্শিত shadow বা ছায়া।",
 
-            "backdrop_enabled": "Enable the dimmed/blurred layer behind the popup.",
-            "backdrop_color": "Color applied to the area behind the popup.",
-            "backdrop_opacity": "Transparency level of the backdrop.",
-            "backdrop_blur": "Amount of blur applied to the page behind the popup, in pixels.",
+            "backdrop_enabled": "Popup-এর পেছনে অন্ধকার বা blur করা overlay চালু/বন্ধ করে।",
+            "backdrop_color": "Popup-এর পেছনের overlay-এর রং নির্ধারণ করে।",
+            "backdrop_opacity": "Popup-এর পেছনের overlay কতটা স্বচ্ছ হবে তা নির্ধারণ করে।",
+            "backdrop_blur": "Popup-এর পেছনের page কত pixel blur হবে তা নির্ধারণ করে।",
 
-            "show_close_button": "Show or hide the popup close (×) button.",
-            "close_on_outside_click": "Allow the popup to close when the user clicks outside it.",
-            "close_on_escape": "Allow the popup to close when the user presses Escape.",
-            "auto_close_enabled": "Automatically close the popup after a defined number of seconds.",
-            "auto_close_seconds": "Number of seconds before automatic popup closing.",
+            "show_close_button": "Popup-এর Close (×) button দেখাবে কি না।",
+            "close_on_outside_click": "Popup-এর বাইরে ক্লিক করলে Popup বন্ধ হবে কি না।",
+            "close_on_escape": "Keyboard-এর Escape চাপলে Popup বন্ধ হবে কি না।",
+            "auto_close_enabled": "নির্দিষ্ট কয়েক সেকেন্ড পর Popup নিজে থেকে বন্ধ হবে কি না।",
+            "auto_close_seconds": "Popup নিজে থেকে বন্ধ হওয়ার আগে কত সেকেন্ড অপেক্ষা করবে।",
         }
 
         for field_name, help_text in help_texts.items():
@@ -322,113 +673,110 @@ class CentralPopupSettingForm(forms.ModelForm):
         # ---------------------------------------------------------------
         additional_help_texts = {
             "font_family": (
-                "Font family used throughout the popup text."
+                "Popup-এর লেখাগুলোতে কোন Font Family ব্যবহার হবে তা নির্ধারণ করে।"
             ),
             "title_font_size": (
-                "Font size of the main popup title. Example: 28px."
+                "Popup-এর প্রধান Title-এর লেখার আকার নির্ধারণ করে। যেমন: 28px।"
             ),
             "title_font_weight": (
-                "Font thickness of the popup title. Example: 400, 600, or 700."
+                "Popup-এর প্রধান Title-এর লেখার মোটা/পাতলা হওয়ার মাত্রা নির্ধারণ করে। যেমন: 400, 600 বা 700।"
             ),
             "title_color": (
-                "Text color of the popup title."
+                "Popup-এর প্রধান Title-এর লেখার রং নির্ধারণ করে।"
             ),
             "body_font_size": (
-                "Font size of the popup body text."
+                "Popup-এর মূল লেখার আকার নির্ধারণ করে।"
             ),
             "body_font_weight": (
-                "Font thickness of the popup body text."
+                "Popup-এর মূল লেখার মোটা/পাতলা হওয়ার মাত্রা নির্ধারণ করে।"
             ),
             "body_color": (
-                "Text color of the popup body."
+                "Popup-এর মূল লেখার রং নির্ধারণ করে।"
             ),
             "line_height": (
-                "Vertical spacing between lines of popup text."
+                "এক লাইনের লেখা থেকে পরের লাইনের লেখার উল্লম্ব দূরত্ব নির্ধারণ করে।"
             ),
             "letter_spacing": (
-                "Spacing between individual characters."
+                "প্রতিটি অক্ষরের মধ্যে কতটুকু ফাঁকা থাকবে তা নির্ধারণ করে।"
             ),
             "text_align": (
-                "Default text alignment: left, center, or right."
+                "Popup-এর সাধারণ লেখার alignment নির্ধারণ করে: Left, Center বা Right।"
             ),
 
             "header_enabled": (
-                "Enable or disable the centrally controlled popup header."
+                "Popup-এর Header অংশটি চালু বা বন্ধ করে।"
             ),
             "header_title": (
-                "Title displayed in the popup header."
+                "Popup-এর Header অংশে প্রদর্শিত Title।"
             ),
             "header_subtitle": (
-                "Supporting text displayed below the header title."
+                "Header Title-এর নিচে প্রদর্শিত সহায়ক লেখা।"
             ),
             "header_alignment": (
-                "Alignment of the header content: left, center, or right."
+                "Header-এর content কোথায় থাকবে তা নির্ধারণ করে: Left, Center বা Right।"
             ),
             "header_height": (
-                "Height of the popup header area."
+                "Popup-এর Header অংশের উচ্চতা নির্ধারণ করে।"
             ),
             "header_border": (
-                "Border or separator applied to the popup header."
+                "Header-এর চারপাশে বা নিচে Border/Separator নির্ধারণ করে।"
             ),
 
             "button_enabled": (
-                "Enable or disable the centrally controlled popup button."
+                "Popup-এর Action Button চালু বা বন্ধ করে।"
             ),
             "button_text": (
-                "Text displayed inside the popup button."
+                "Popup-এর Button-এর ভেতরে যে লেখা দেখা যাবে।"
             ),
             "button_background_color": (
-                "Background color of the popup button."
+                "Popup Button-এর background-এর রং নির্ধারণ করে।"
             ),
             "button_text_color": (
-                "Text color of the popup button."
+                "Popup Button-এর লেখার রং নির্ধারণ করে।"
             ),
             "button_font_size": (
-                "Font size of the popup button text."
+                "Popup Button-এর লেখার আকার নির্ধারণ করে।"
             ),
             "button_font_weight": (
-                "Font thickness of the popup button text."
-            ),
-            "button_border": (
-                "Border style, width, and color of the popup button."
+                "Popup Button-এর লেখার মোটা/পাতলা হওয়ার মাত্রা নির্ধারণ করে।"
             ),
             "button_border_radius": (
-                "Roundness of the popup button corners."
+                "Popup Button-এর corner কতটা গোল হবে তা নির্ধারণ করে।"
             ),
             "button_padding": (
-                "Internal spacing inside the button. Example: 12px 28px."
+                "Button-এর ভেতরের চারপাশে কতটুকু ফাঁকা জায়গা থাকবে তা নির্ধারণ করে। যেমন: 12px 28px।"
             ),
             "button_alignment": (
-                "Position of the button: left, center, or right."
+                "Popup Button কোথায় থাকবে তা নির্ধারণ করে: Left, Center বা Right।"
             ),
 
             "animation": (
-                "Animation used when the popup opens. Example: fade, scale, or slide."
+                "Popup খোলার সময় কোন ধরনের animation ব্যবহার হবে তা নির্ধারণ করে। যেমন: Fade, Scale বা Slide।"
             ),
             "animation_duration": (
-                "Opening animation duration in milliseconds. Example: 400."
+                "Popup খোলার animation কত মিলিসেকেন্ড চলবে তা নির্ধারণ করে। যেমন: 400।"
             ),
 
             "mobile_enabled": (
-                "Enable separate responsive settings for mobile devices."
+                "Mobile device-এর জন্য আলাদা Popup settings চালু বা বন্ধ করে।"
             ),
             "mobile_width": (
-                "Popup width on mobile. Example: 100%."
+                "Mobile device-এ Popup-এর প্রস্থ নির্ধারণ করে। যেমন: 100%।"
             ),
             "mobile_height": (
-                "Popup height on mobile. Example: 80vh."
+                "Mobile device-এ Popup-এর উচ্চতা নির্ধারণ করে। যেমন: 80vh।"
             ),
             "mobile_position": (
-                "Popup position on mobile devices."
+                "Mobile device-এ Popup স্ক্রিনের কোন অবস্থানে থাকবে তা নির্ধারণ করে।"
             ),
             "mobile_bottom_sheet": (
-                "Display the popup as a bottom sheet attached to the bottom of the screen."
+                "Popup-কে Mobile-এর স্ক্রিনের নিচে সংযুক্ত Bottom Sheet হিসেবে দেখায়।"
             ),
             "mobile_border_radius": (
-                "Corner roundness of the popup on mobile."
+                "Mobile device-এ Popup-এর corner কতটা গোল হবে তা নির্ধারণ করে।"
             ),
             "mobile_padding": (
-                "Internal spacing inside the popup on mobile."
+                "Mobile device-এ Popup-এর ভেতরের চারপাশে কতটুকু ফাঁকা জায়গা থাকবে তা নির্ধারণ করে।"
             ),
         }
 
@@ -437,6 +785,28 @@ class CentralPopupSettingForm(forms.ModelForm):
                 self.fields[field_name].help_text = help_text
 
 
+
+
+
+    all_popups = forms.BooleanField(
+        required=False,
+        label="All Popup IDs",
+        help_text="Enable this to apply this setting to all active registered popups.",
+    )
+
+    class Meta:
+        model = CentralPopupSetting
+        fields = "__all__"
+
+    class Media:
+        css = {
+            "all": (
+                "core/css/central_popup_admin.css",
+            )
+        }
+        js = (
+            "core/js/central_popup_admin.js",
+        )
 
     def clean_background_image(self):
         uploaded_file = self.cleaned_data.get("background_image")
@@ -694,6 +1064,7 @@ class CentralPopupSettingAdmin(admin.ModelAdmin):
             "Background",
             {
                 "fields": (
+                    "background_visual_priority",
                     "background_color",
                     "background_opacity",
                     "background_image",
@@ -704,7 +1075,9 @@ class CentralPopupSettingAdmin(admin.ModelAdmin):
             "Border & Shadow",
             {
                 "fields": (
-                    "border",
+                    "border_width",
+                    "border_style",
+                    "border_color",
                     "border_radius",
                     "box_shadow",
                 )
@@ -734,16 +1107,15 @@ class CentralPopupSettingAdmin(admin.ModelAdmin):
             },
         ),
         (
-            "Typography",
+            "Body Typography & Colors",
             {
                 "fields": (
                     "font_family",
-                    "title_font_size",
-                    "title_font_weight",
-                    "title_color",
                     "body_font_size",
                     "body_font_weight",
                     "body_color",
+                    "body_secondary_color",
+                    "body_link_color",
                     "line_height",
                     "letter_spacing",
                     "text_align",
@@ -755,11 +1127,40 @@ class CentralPopupSettingAdmin(admin.ModelAdmin):
             {
                 "fields": (
                     "header_enabled",
-                    "header_title",
-                    "header_subtitle",
+                    "header_background_color",
                     "header_alignment",
                     "header_height",
                     "header_border",
+                    "header_title_color",
+                    "header_title_font_family",
+                    "header_title_font_size",
+                    "header_title_font_weight",
+                    "header_title_line_height",
+                    "header_title_letter_spacing",
+                    "header_subtitle_color",
+                    "header_subtitle_font_family",
+                    "header_subtitle_font_size",
+                    "header_subtitle_font_weight",
+                    "header_subtitle_line_height",
+                    "header_subtitle_letter_spacing",
+                    "header_title",
+                    "header_subtitle",
+                )
+            },
+        ),
+        (
+            "Tabs",
+            {
+                "fields": (
+                    "tab_background_color",
+                    "tab_active_background_color",
+                    "tab_text_color",
+                    "tab_active_text_color",
+                    "tab_border_color",
+                    "tab_font_family",
+                    "tab_font_size",
+                    "tab_font_weight",
+                    "tab_active_font_weight",
                 )
             },
         ),
@@ -813,6 +1214,7 @@ class CentralPopupSettingAdmin(admin.ModelAdmin):
             },
         ),
     )
+
 
 
 @admin.register(CentralPopupRegistry)

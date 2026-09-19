@@ -615,6 +615,7 @@ def _serialize_popup_setting(setting, popup):
             "color": setting.background_color,
             "opacity": setting.background_opacity,
             "image": background_image,
+            "visual_priority": setting.background_visual_priority,
         },
 
         "border": {
@@ -646,6 +647,8 @@ def _serialize_popup_setting(setting, popup):
             "body_font_size": setting.body_font_size,
             "body_font_weight": setting.body_font_weight,
             "body_color": setting.body_color,
+            "body_secondary_color": setting.body_secondary_color,
+            "body_link_color": setting.body_link_color,
             "line_height": setting.line_height,
             "letter_spacing": setting.letter_spacing,
             "text_align": setting.text_align,
@@ -658,6 +661,23 @@ def _serialize_popup_setting(setting, popup):
             "alignment": setting.header_alignment,
             "height": setting.header_height,
             "border": setting.header_border,
+            "background_color": setting.header_background_color,
+            "title_color": setting.header_title_color,
+            "subtitle_color": setting.header_subtitle_color,
+            "title_typography": {
+                "font_family": setting.header_title_font_family,
+                "font_size": setting.header_title_font_size,
+                "font_weight": setting.header_title_font_weight,
+                "line_height": setting.header_title_line_height,
+                "letter_spacing": setting.header_title_letter_spacing,
+            },
+            "subtitle_typography": {
+                "font_family": setting.header_subtitle_font_family,
+                "font_size": setting.header_subtitle_font_size,
+                "font_weight": setting.header_subtitle_font_weight,
+                "line_height": setting.header_subtitle_line_height,
+                "letter_spacing": setting.header_subtitle_letter_spacing,
+            },
         },
 
         "button": {
@@ -671,6 +691,18 @@ def _serialize_popup_setting(setting, popup):
             "border_radius": setting.button_border_radius,
             "padding": setting.button_padding,
             "alignment": setting.button_alignment,
+        },
+
+        "tabs": {
+            "background_color": setting.tab_background_color,
+            "active_background_color": setting.tab_active_background_color,
+            "text_color": setting.tab_text_color,
+            "active_text_color": setting.tab_active_text_color,
+            "border_color": setting.tab_border_color,
+            "font_family": setting.tab_font_family,
+            "font_size": setting.tab_font_size,
+            "font_weight": setting.tab_font_weight,
+            "active_font_weight": setting.tab_active_font_weight,
         },
 
         "animation": {
