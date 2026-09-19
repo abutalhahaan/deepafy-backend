@@ -117,6 +117,16 @@ urlpatterns = [
         name="public-personal-account-by-username",
     ),
     path(
+        "profiles/<str:username>/colleagues/",
+        views.profile_colleague_list,
+        name="profile-colleague-list",
+    ),
+    path(
+        "profiles/<str:username>/connections/",
+        views.profile_connection_list,
+        name="profile-connection-list",
+    ),
+    path(
         "<int:identity_id>/personal-account/",
         views.personal_account_detail,
         name="personal-account-detail",

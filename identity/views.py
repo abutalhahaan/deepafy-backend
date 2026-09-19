@@ -536,6 +536,86 @@ def colleague_request_accept(request, colleague_id):
 
 
 @csrf_exempt
+def profile_colleague_list(request, username):
+    if request.method != "GET":
+        return JsonResponse({"detail": "Method not allowed."}, status=405)
+
+    settings = ColleagueSetting.objects.first()
+
+    if settings is None or not settings.is_enabled:
+        return JsonResponse(
+            {"detail": "Colleague feature is currently disabled."},
+            status=403,
+        )
+
+    try:
+        profile_user = UserIdentity.objects.get(
+            username=username,
+            is_active=True,
+        )
+    except UserIdentity.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Profile user not found."},
+            status=404,
+        )
+
+    accepted_colleagues = Colleague.objects.filter(
+        models.Q(sender=profile_user) | models.Q(receiver=profile_user),
+        request_status=Colleague.RequestStatus.ACCEPTED,
+    ).select_related("sender", "receiver")
+
+    def serialize_profile_colleague(colleague):
+        other_user = (
+            colleague.receiver
+            if colleague.sender_id == profile_user.id
+            else colleague.sender
+        )
+
+        return {
+            "colleague_id": colleague.id,
+            "user_id": other_user.id,
+            "username": other_user.username,
+            "first_name": other_user.first_name,
+            "last_name": other_user.last_name,
+            "status": colleague.status,
+            "request_status": colleague.request_status,
+            "request_type": "colleague",
+            "created_at": colleague.created_at.isoformat(),
+            "updated_at": colleague.updated_at.isoformat(),
+        }
+
+    all_colleagues = [
+        serialize_profile_colleague(colleague)
+        for colleague in accepted_colleagues
+    ]
+
+    running_colleagues = [
+        item
+        for item in all_colleagues
+        if item["status"] == Colleague.Status.RUNNING
+    ]
+
+    previous_colleagues = [
+        item
+        for item in all_colleagues
+        if item["status"] == Colleague.Status.PREVIOUS
+    ]
+
+    return JsonResponse(
+        {
+            "success": True,
+            "profile": {
+                "id": profile_user.id,
+                "username": profile_user.username,
+            },
+            "all_colleagues": all_colleagues,
+            "running_colleagues": running_colleagues,
+            "previous_colleagues": previous_colleagues,
+        },
+        status=200,
+    )
+
+
 def colleague_list(request):
     if request.method != "GET":
         return JsonResponse({"detail": "Method not allowed."}, status=405)
@@ -785,6 +865,61 @@ def connection_list(request):
         status=200,
     )
 
+
+
+@csrf_exempt
+def profile_connection_list(request, username):
+    if request.method != "GET":
+        return JsonResponse({"detail": "Method not allowed."}, status=405)
+
+    try:
+        profile_user = UserIdentity.objects.get(
+            username=username,
+            is_active=True,
+        )
+    except UserIdentity.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Profile user not found."},
+            status=404,
+        )
+
+    connections = Connection.objects.filter(
+        models.Q(sender=profile_user, status=Connection.Status.ACCEPTED)
+        | models.Q(receiver=profile_user, status=Connection.Status.ACCEPTED)
+    )
+
+    def serialize_connection(connection):
+        other_user = (
+            connection.receiver
+            if connection.sender_id == profile_user.id
+            else connection.sender
+        )
+
+        return {
+            "connection_id": connection.id,
+            "user_id": other_user.id,
+            "username": other_user.username,
+            "first_name": other_user.first_name,
+            "last_name": other_user.last_name,
+            "status": connection.status,
+            "request_type": "connected",
+            "created_at": connection.created_at.isoformat(),
+        }
+
+    return JsonResponse(
+        {
+            "success": True,
+            "profile": {
+                "id": profile_user.id,
+                "username": profile_user.username,
+            },
+            "connections": [
+                serialize_connection(connection)
+                for connection in connections
+            ],
+        },
+        status=200,
+    )
 
 def connection_status(request, target_id):
     if request.method != "GET":
