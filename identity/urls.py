@@ -167,6 +167,33 @@ urlpatterns = [
         name="personal-account-photos-update",
     ),
 
+    # Follows
+    path(
+        "follows/<int:following_id>/",
+        views.follow_create,
+        name="follow-create",
+    ),
+    path(
+        "follows/<int:following_id>/remove/",
+        views.follow_remove,
+        name="follow-remove",
+    ),
+    path(
+        "follows/<int:target_id>/status/",
+        views.follow_status,
+        name="follow-status",
+    ),
+    path(
+        "follows/<int:target_id>/followers/",
+        views.followers_list,
+        name="followers-list",
+    ),
+    path(
+        "follows/<int:target_id>/following/",
+        views.following_list,
+        name="following-list",
+    ),
+
     # Connections
     path(
         "connections/<int:receiver_id>/request/",

@@ -16,6 +16,7 @@ from companies.models import Country, Region
 from .models import (
     AcademicBackground,
     AccountType,
+    Follow,
     Hobby,
     JobExperience,
     Language,
@@ -2829,3 +2830,353 @@ class UserSocialMediaAPITests(TestCase):
                 id=social_media.id
             ).exists()
         )
+
+class FollowTests(TestCase):
+    def setUp(self):
+        self.follower = UserIdentity.objects.create(
+            email="follower@example.com",
+        )
+
+        self.following = UserIdentity.objects.create(
+            email="following@example.com",
+        )
+
+    def test_follow_creation(self):
+        follow = Follow.objects.create(
+            follower=self.follower,
+            following=self.following,
+        )
+
+        self.assertEqual(follow.follower, self.follower)
+        self.assertEqual(follow.following, self.following)
+        self.assertIsNotNone(follow.created_at)
+
+    def test_duplicate_follow_is_blocked(self):
+        Follow.objects.create(
+            follower=self.follower,
+            following=self.following,
+        )
+
+        with self.assertRaises(Exception):
+            Follow.objects.create(
+                follower=self.follower,
+                following=self.following,
+            )
+
+    def test_self_follow_is_blocked(self):
+        with self.assertRaises(Exception):
+            Follow.objects.create(
+                follower=self.follower,
+                following=self.follower,
+            )
+
+    def test_follow_reverse_relations(self):
+        Follow.objects.create(
+            follower=self.follower,
+            following=self.following,
+        )
+
+        self.assertEqual(
+            self.follower.following.count(),
+            1,
+        )
+
+        self.assertEqual(
+            self.following.followers.count(),
+            1,
+        )
+
+        self.assertEqual(
+            self.follower.following.first().following,
+            self.following,
+        )
+
+        self.assertEqual(
+            self.following.followers.first().follower,
+            self.follower,
+        )
+
+class FollowAPITests(TestCase):
+    def setUp(self):
+        self.follower = UserIdentity.objects.create(
+            email="api-follower@example.com",
+        )
+
+        self.following = UserIdentity.objects.create(
+            email="api-following@example.com",
+        )
+
+        refresh = RefreshToken.for_user(self.follower)
+        self.access_token = str(refresh.access_token)
+
+    def auth_headers(self):
+        return {
+            "HTTP_AUTHORIZATION": f"Bearer {self.access_token}",
+        }
+
+    def test_follow_create_api(self):
+        response = self.client.post(
+            f"/api/identity/follows/{self.following.id}/",
+            **self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["status"], "following")
+
+        self.assertTrue(
+            Follow.objects.filter(
+                follower=self.follower,
+                following=self.following,
+            ).exists()
+        )
+
+    def test_follow_duplicate_api(self):
+        Follow.objects.create(
+            follower=self.follower,
+            following=self.following,
+        )
+
+        response = self.client.post(
+            f"/api/identity/follows/{self.following.id}/",
+            **self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["created"])
+
+        self.assertEqual(
+            Follow.objects.filter(
+                follower=self.follower,
+                following=self.following,
+            ).count(),
+            1,
+        )
+
+    def test_follow_self_api(self):
+        response = self.client.post(
+            f"/api/identity/follows/{self.follower.id}/",
+            **self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["detail"],
+            "You cannot follow yourself.",
+        )
+
+    def test_follow_unknown_user_api(self):
+        response = self.client.post(
+            "/api/identity/follows/999999/",
+            **self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_unfollow_api(self):
+        Follow.objects.create(
+            follower=self.follower,
+            following=self.following,
+        )
+
+        response = self.client.delete(
+            f"/api/identity/follows/{self.following.id}/remove/",
+            **self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "not_following")
+
+        self.assertFalse(
+            Follow.objects.filter(
+                follower=self.follower,
+                following=self.following,
+            ).exists()
+        )
+
+    def test_follow_status_api(self):
+        response = self.client.get(
+            f"/api/identity/follows/{self.following.id}/status/",
+            **self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["success"])
+        self.assertEqual(response.json()["status"], "not_following")
+        self.assertFalse(response.json()["is_following"])
+        self.assertEqual(response.json()["followers_count"], 0)
+        self.assertEqual(response.json()["following_count"], 0)
+
+        Follow.objects.create(
+            follower=self.follower,
+            following=self.following,
+        )
+
+        response = self.client.get(
+            f"/api/identity/follows/{self.following.id}/status/",
+            **self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "following")
+        self.assertTrue(response.json()["is_following"])
+        self.assertEqual(response.json()["followers_count"], 1)
+
+    def test_follow_status_self_api(self):
+        response = self.client.get(
+            f"/api/identity/follows/{self.follower.id}/status/",
+            **self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "self")
+        self.assertFalse(response.json()["is_following"])
+
+    def test_follow_status_unknown_user_api(self):
+        response = self.client.get(
+            "/api/identity/follows/999999/status/",
+            **self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "User not found.")
+
+    def test_followers_list_api(self):
+        Follow.objects.create(
+            follower=self.follower,
+            following=self.following,
+        )
+
+        response = self.client.get(
+            f"/api/identity/follows/{self.following.id}/followers/",
+            **self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["success"])
+        self.assertEqual(response.json()["count"], 1)
+
+        followers = response.json()["followers"]
+        self.assertEqual(len(followers), 1)
+        self.assertEqual(followers[0]["id"], self.follower.id)
+        self.assertEqual(
+            followers[0]["username"],
+            self.follower.username,
+        )
+
+    def test_following_list_api(self):
+        Follow.objects.create(
+            follower=self.follower,
+            following=self.following,
+        )
+
+        response = self.client.get(
+            f"/api/identity/follows/{self.follower.id}/following/",
+            **self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["success"])
+        self.assertEqual(response.json()["count"], 1)
+
+        following = response.json()["following"]
+        self.assertEqual(len(following), 1)
+        self.assertEqual(following[0]["id"], self.following.id)
+        self.assertEqual(
+            following[0]["username"],
+            self.following.username,
+        )
+
+    def test_followers_list_multiple_api(self):
+        Follow.objects.create(
+            follower=self.follower,
+            following=self.following,
+        )
+        Follow.objects.create(
+            follower=self.following,
+            following=self.follower,
+        )
+
+        response = self.client.get(
+            f"/api/identity/follows/{self.following.id}/followers/",
+            **self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["count"], 1)
+
+        response = self.client.get(
+            f"/api/identity/follows/{self.follower.id}/followers/",
+            **self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["count"], 1)
+
+    def test_followers_list_unknown_user_api(self):
+        response = self.client.get(
+            "/api/identity/follows/999999/followers/",
+            **self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "User not found.")
+
+    def test_following_list_unknown_user_api(self):
+        response = self.client.get(
+            "/api/identity/follows/999999/following/",
+            **self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "User not found.")
+
+    def test_followers_list_requires_authentication(self):
+        self.client.logout()
+
+        response = self.client.get(
+            f"/api/identity/follows/{self.following.id}/followers/",
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_following_list_requires_authentication(self):
+        self.client.logout()
+
+        response = self.client.get(
+            f"/api/identity/follows/{self.follower.id}/following/",
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_follow_status_requires_authentication(self):
+        self.client.logout()
+
+        response = self.client.get(
+            f"/api/identity/follows/{self.following.id}/status/"
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_follow_status_following_count(self):
+        Follow.objects.create(
+            follower=self.follower,
+            following=self.following,
+        )
+
+        response = self.client.get(
+            f"/api/identity/follows/{self.follower.id}/status/",
+            **self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["following_count"], 1)
+        self.assertEqual(response.json()["followers_count"], 0)
+
+    def test_unfollow_when_not_following_api(self):
+        response = self.client.delete(
+            f"/api/identity/follows/{self.following.id}/remove/",
+            **self.auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["already_removed"])
