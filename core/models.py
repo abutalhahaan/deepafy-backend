@@ -416,6 +416,13 @@ class CentralPopupSetting(TimeStampedModel):
         default="color",
     )
 
+    tab_color_enabled = models.BooleanField(default=False)
+
+    tab_color = models.CharField(
+        max_length=20,
+        default="#0a66c2",
+    )
+
     # Header Colors
     header_background_color = models.CharField(
         max_length=20,
@@ -894,3 +901,61 @@ class CentralPopupRegistry(TimeStampedModel):
 
     def __str__(self):
         return f"{self.popup_name} ({self.popup_id})"
+
+class MessagingAppearance(TimeStampedModel):
+    ACCOUNT_TYPES = [
+        ("personal", "Personal"),
+        ("professional", "Professional"),
+        ("company", "Company"),
+    ]
+
+    identity = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.CASCADE,
+        related_name="messaging_appearances",
+    )
+
+    account_type = models.CharField(
+        max_length=20,
+        choices=ACCOUNT_TYPES,
+    )
+
+    background_color = models.CharField(
+        max_length=20,
+        default="#f8fbff",
+    )
+
+    background_image = models.ImageField(
+        upload_to="messaging_backgrounds/",
+        null=True,
+        blank=True,
+    )
+
+    background_visual_priority = models.CharField(
+        max_length=10,
+        choices=[
+            ("color", "Color"),
+            ("image", "Image"),
+        ],
+        default="color",
+    )
+
+    tab_color_enabled = models.BooleanField(default=False)
+
+    tab_color = models.CharField(
+        max_length=20,
+        default="#0a66c2",
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["identity", "account_type"],
+                name="unique_messaging_appearance_per_account",
+            )
+        ]
+        ordering = ["account_type"]
+
+    def __str__(self):
+        return f"{self.identity_id} - {self.account_type} Messaging Appearance"
+

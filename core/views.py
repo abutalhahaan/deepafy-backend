@@ -4,8 +4,9 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from .models import FeatureAccessControl, UserFeatureTrial, UserPremiumSubscription, PremiumPackage, PersonalFontStyle, UserFontFavorite
+from .models import FeatureAccessControl, UserFeatureTrial, UserPremiumSubscription, PremiumPackage, PersonalFontStyle, UserFontFavorite, MessagingAppearance
 from core.services.feature_access import get_current_feature, get_feature_access, start_feature_trial_for_user
+from core.services.image_processor import process_image
 
 
 @api_view(["GET"])
@@ -528,6 +529,143 @@ def editor_image_upload(request):
             {"detail": str(error)},
             status=400,
         )
+
+
+# ---------------------------------------------------------------------------
+# Messaging Appearance API
+# ---------------------------------------------------------------------------
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def messaging_appearance(request):
+    color_access = get_feature_access(request, "messaging_background_color")
+    image_access = get_feature_access(request, "messaging_background_image")
+
+    if color_access["access"] == "error":
+        return Response({"detail": color_access["detail"]}, status=400)
+
+    if image_access["access"] == "error":
+        return Response({"detail": image_access["detail"]}, status=400)
+
+    account_type = color_access["account_type"]
+
+    appearance, _ = MessagingAppearance.objects.get_or_create(
+        identity=request.user,
+        account_type=account_type,
+    )
+
+    return Response({
+        "success": True,
+        "account_type": account_type,
+        "background_color": appearance.background_color,
+        "background_image": (
+            request.build_absolute_uri(appearance.background_image.url)
+            if appearance.background_image
+            else ""
+        ),
+        "background_visual_priority": appearance.background_visual_priority,
+        "tab_color_enabled": appearance.tab_color_enabled,
+        "tab_color": appearance.tab_color,
+        "features": {
+            "background_color": color_access,
+            "background_image": image_access,
+        },
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def messaging_appearance_update(request):
+    color_access = get_feature_access(request, "messaging_background_color")
+
+    if color_access["access"] == "error":
+        return Response({"detail": color_access["detail"]}, status=400)
+
+    if color_access["access"] == "locked":
+        return Response({"detail": "Background Color access is locked."}, status=403)
+
+    background_color = request.data.get("background_color")
+    background_visual_priority = request.data.get("background_visual_priority", "color")
+    tab_color_enabled = request.data.get("tab_color_enabled")
+    tab_color = request.data.get("tab_color")
+
+    if not background_color:
+        return Response({"detail": "background_color is required."}, status=400)
+
+    if background_visual_priority not in ["color", "image"]:
+        return Response({"detail": "Invalid background_visual_priority."}, status=400)
+
+    appearance, _ = MessagingAppearance.objects.get_or_create(
+        identity=request.user,
+        account_type=color_access["account_type"],
+    )
+
+    appearance.background_color = background_color
+    appearance.background_visual_priority = background_visual_priority
+
+    if tab_color_enabled is not None:
+        appearance.tab_color_enabled = str(tab_color_enabled).lower() == "true"
+
+    if tab_color:
+        appearance.tab_color = tab_color
+
+    appearance.save(update_fields=["background_color", "background_visual_priority", "tab_color_enabled", "tab_color", "updated_at"])
+
+    return Response({
+        "success": True,
+        "account_type": color_access["account_type"],
+        "background_color": appearance.background_color,
+        "tab_color_enabled": appearance.tab_color_enabled,
+        "tab_color": appearance.tab_color,
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def messaging_appearance_image_update(request):
+    image_access = get_feature_access(request, "messaging_background_image")
+
+    if image_access["access"] == "error":
+        return Response({"detail": image_access["detail"]}, status=400)
+
+    if image_access["access"] == "locked":
+        return Response({"detail": "Background Image access is locked."}, status=403)
+
+    if "background_image" not in request.FILES:
+        return Response({"detail": "background_image is required."}, status=400)
+
+    try:
+        processed_image = process_image(
+            request.FILES["background_image"],
+            preset="background",
+        )
+    except ValueError as error:
+        return Response({"detail": str(error)}, status=400)
+
+    appearance, _ = MessagingAppearance.objects.get_or_create(
+        identity=request.user,
+        account_type=image_access["account_type"],
+    )
+
+    old_image = appearance.background_image.name if appearance.background_image else None
+
+    appearance.background_image = processed_image
+    appearance.background_visual_priority = "image"
+    appearance.save(update_fields=["background_image", "background_visual_priority", "updated_at"])
+
+    if old_image:
+        appearance.background_image.storage.delete(old_image)
+
+    return Response({
+        "success": True,
+        "account_type": image_access["account_type"],
+        "background_image": (
+            request.build_absolute_uri(appearance.background_image.url)
+            if appearance.background_image
+            else ""
+        ),
+        "background_visual_priority": appearance.background_visual_priority,
+    })
 
 
 # ---------------------------------------------------------------------------
