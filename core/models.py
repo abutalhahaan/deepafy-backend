@@ -416,12 +416,6 @@ class CentralPopupSetting(TimeStampedModel):
         default="color",
     )
 
-    tab_color_enabled = models.BooleanField(default=False)
-
-    tab_color = models.CharField(
-        max_length=20,
-        default="#0a66c2",
-    )
 
     # Header Colors
     header_background_color = models.CharField(
@@ -945,6 +939,11 @@ class MessagingAppearance(TimeStampedModel):
     tab_color = models.CharField(
         max_length=20,
         default="#0a66c2",
+    )
+
+    messaging_font_family = models.CharField(
+        max_length=255,
+        default="Arial",
     )
 
     class Meta:

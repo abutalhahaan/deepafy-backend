@@ -566,6 +566,7 @@ def messaging_appearance(request):
         "background_visual_priority": appearance.background_visual_priority,
         "tab_color_enabled": appearance.tab_color_enabled,
         "tab_color": appearance.tab_color,
+        "messaging_font_family": appearance.messaging_font_family,
         "features": {
             "background_color": color_access,
             "background_image": image_access,
@@ -588,6 +589,7 @@ def messaging_appearance_update(request):
     background_visual_priority = request.data.get("background_visual_priority", "color")
     tab_color_enabled = request.data.get("tab_color_enabled")
     tab_color = request.data.get("tab_color")
+    messaging_font_family = request.data.get("messaging_font_family")
 
     if not background_color:
         return Response({"detail": "background_color is required."}, status=400)
@@ -609,7 +611,10 @@ def messaging_appearance_update(request):
     if tab_color:
         appearance.tab_color = tab_color
 
-    appearance.save(update_fields=["background_color", "background_visual_priority", "tab_color_enabled", "tab_color", "updated_at"])
+    if messaging_font_family:
+        appearance.messaging_font_family = messaging_font_family
+
+    appearance.save(update_fields=["background_color", "background_visual_priority", "tab_color_enabled", "tab_color", "messaging_font_family", "updated_at"])
 
     return Response({
         "success": True,
