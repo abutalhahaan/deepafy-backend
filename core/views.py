@@ -1,3 +1,5 @@
+import uuid
+
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.authentication import SessionAuthentication
 from rest_framework_simplejwt.authentication import JWTAuthentication
@@ -1165,6 +1167,154 @@ def dmail_send(request):
                 "receiver_username": receiver.username,
                 "receiver_email": receiver.email,
                 "subject": dmail.subject,
+                "created_at": dmail.created_at,
+            },
+        },
+        status=201,
+    )
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def dmail_reply(request, message_id):
+    identity = get_authenticated_identity(request)
+
+    if identity is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Authentication credentials were not provided.",
+            },
+            status=401,
+        )
+
+    account_type = get_current_account_type(request)
+
+    if account_type is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Active account type not found.",
+            },
+            status=400,
+        )
+
+    parent = (
+        Dmail.objects
+        .select_related("sender", "receiver")
+        .filter(
+            id=message_id,
+            account_type=account_type.account_type,
+        )
+        .first()
+    )
+
+    if parent is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Message not found.",
+            },
+            status=404,
+        )
+
+    if identity.pk not in {parent.sender_id, parent.receiver_id}:
+        return Response(
+            {
+                "success": False,
+                "detail": "You do not have access to this message.",
+            },
+            status=403,
+        )
+
+    body = str(request.data.get("body", "")).strip()
+    subject = str(request.data.get("subject", "")).strip()
+
+    if not body and not subject:
+        return Response(
+            {
+                "success": False,
+                "detail": "Subject or body is required.",
+            },
+            status=400,
+        )
+
+    receiver = parent.sender if identity.pk == parent.receiver_id else parent.receiver
+
+    if receiver is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Reply receiver not found.",
+            },
+            status=400,
+        )
+
+    thread_id = parent.thread_id or uuid.uuid4()
+
+    dmail = Dmail.objects.create(
+        sender=identity,
+        receiver=receiver,
+        account_type=account_type.account_type,
+        subject=subject or parent.subject,
+        body=body,
+        thread_id=thread_id,
+        parent=parent,
+    )
+
+    if parent.thread_id is None:
+        parent.thread_id = thread_id
+        parent.save(update_fields=["thread_id", "updated_at"])
+
+    DmailMailbox.objects.create(
+        dmail=dmail,
+        user=identity,
+        folder="sent",
+        is_read=True,
+    )
+
+    DmailMailbox.objects.create(
+        dmail=dmail,
+        user=receiver,
+        folder="inbox",
+        is_read=False,
+    )
+
+    sender_name = (
+        f"{identity.first_name} {identity.last_name}"
+    ).strip() or identity.username or identity.email
+
+    notification_message = (
+        f"{sender_name} replied to your Dmail."
+    )
+
+    if dmail.subject:
+        notification_message += f" Subject: {dmail.subject}"
+
+    create_notification(
+        user=receiver,
+        category="message",
+        notification_type="new_dmail",
+        title="Dmail Reply",
+        message=notification_message,
+        source="dmail",
+        action_url="/messages",
+        priority="normal",
+    )
+
+    return Response(
+        {
+            "success": True,
+            "message": "Dmail reply sent successfully.",
+            "dmail": {
+                "id": dmail.id,
+                "parent_id": parent.id,
+                "thread_id": str(thread_id),
+                "receiver_id": str(receiver.user_id),
+                "receiver_username": receiver.username,
+                "subject": dmail.subject,
+                "body": dmail.body,
                 "created_at": dmail.created_at,
             },
         },

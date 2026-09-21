@@ -554,3 +554,104 @@ class DmailSendInboxTests(TestCase):
         self.assertEqual(notification.category, "message")
         self.assertEqual(notification.source, "dmail")
         self.assertFalse(notification.is_read)
+
+
+class DmailReplyTests(DmailSendInboxTests):
+    def test_reply_creates_message_in_same_thread(self):
+        login_response = self.client.post(
+            "/api/identity/login/",
+            {
+                "identifier": "test_sender",
+                "password": "TestPassword123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(login_response.status_code, 200)
+
+        sender_token = login_response.json()["access"]
+
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {sender_token}"
+        )
+
+        send_response = self.client.post(
+            "/api/core/messaging/send/",
+            {
+                "receiver": "test_receiver",
+                "subject": "Original message",
+                "body": "Original body.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(send_response.status_code, 201)
+
+        original = Dmail.objects.get(
+            sender=self.sender,
+            receiver=self.receiver,
+        )
+
+        receiver_login = self.client.post(
+            "/api/identity/login/",
+            {
+                "identifier": "test_receiver",
+                "password": "TestPassword123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(receiver_login.status_code, 200)
+
+        receiver_token = receiver_login.json()["access"]
+
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {receiver_token}"
+        )
+
+        reply_response = self.client.post(
+            f"/api/core/messaging/{original.id}/reply/",
+            {
+                "body": "This is my reply.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(reply_response.status_code, 201)
+
+        reply = Dmail.objects.get(
+            sender=self.receiver,
+            receiver=self.sender,
+            parent=original,
+        )
+
+        self.assertEqual(reply.body, "This is my reply.")
+        self.assertIsNotNone(reply.thread_id)
+
+        original.refresh_from_db()
+
+        self.assertEqual(reply.thread_id, original.thread_id)
+
+        sender_mailbox = DmailMailbox.objects.get(
+            dmail=reply,
+            user=self.receiver,
+        )
+
+        receiver_mailbox = DmailMailbox.objects.get(
+            dmail=reply,
+            user=self.sender,
+        )
+
+        self.assertEqual(sender_mailbox.folder, "sent")
+        self.assertTrue(sender_mailbox.is_read)
+
+        self.assertEqual(receiver_mailbox.folder, "inbox")
+        self.assertFalse(receiver_mailbox.is_read)
+
+        notification = Notification.objects.filter(
+            user=self.sender,
+            notification_type="new_dmail",
+        ).latest("created_at")
+
+        self.assertEqual(notification.category, "message")
+        self.assertEqual(notification.source, "dmail")
