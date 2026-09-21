@@ -1,9 +1,15 @@
 from django.urls import path
 
-from .views import central_popup_settings, feature_access_controls, update_feature_access, start_feature_trial, check_feature_access, premium_packages, premium_status, activate_premium, payment_methods, create_payment_transaction, review_payment_transaction, personal_font_styles, personal_font_favorites, editor_image_upload, messaging_appearance, messaging_appearance_update, messaging_appearance_image_update, dmail_inbox, dmail_send, dmail_reply, dmail_thread, dmail_sent, dmail_draft_save, dmail_draft_list, dmail_draft_update, dmail_draft_delete, dmail_draft_send
+from .views import central_popup_settings, feature_access_controls, update_feature_access, start_feature_trial, check_feature_access, premium_packages, premium_status, activate_premium, payment_methods, create_payment_transaction, review_payment_transaction, personal_font_styles, personal_font_favorites, editor_image_upload, messaging_appearance, messaging_appearance_update, messaging_appearance_image_update, dmail_inbox, dmail_mailbox_move, dmail_mailbox_list, dmail_send, dmail_reply, dmail_thread, dmail_sent, dmail_draft_save, dmail_draft_list, dmail_draft_update, dmail_draft_delete, dmail_draft_send, message_conversations, message_send, message_conversation_detail, message_send
 
 urlpatterns = [
+    path("messages/conversations/", message_conversations, name="message-conversations"),
+    path("messages/send/", message_send, name="message-send"),
+    path("messages/conversations/<int:conversation_id>/", message_conversation_detail, name="message-conversation-detail"),
+    path("messages/send/", message_send, name="message-send"),
     path("messaging/inbox/", dmail_inbox, name="dmail-inbox"),
+    path("messaging/mailbox/", dmail_mailbox_list, name="dmail-mailbox-list"),
+    path("messaging/<int:message_id>/mailbox/", dmail_mailbox_move, name="dmail-mailbox-move"),
     path("messaging/send/", dmail_send, name="dmail-send"),
     path("messaging/<int:message_id>/reply/", dmail_reply, name="dmail-reply"),
     path("messaging/<int:message_id>/thread/", dmail_thread, name="dmail-thread"),

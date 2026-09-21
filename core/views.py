@@ -1,3 +1,4 @@
+from django.db import models
 import uuid
 
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
@@ -6,7 +7,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from .models import FeatureAccessControl, UserFeatureTrial, UserPremiumSubscription, PremiumPackage, PersonalFontStyle, UserFontFavorite, MessagingAppearance, Dmail, DmailMailbox
+from .models import FeatureAccessControl, UserFeatureTrial, UserPremiumSubscription, PremiumPackage, PersonalFontStyle, UserFontFavorite, MessagingAppearance, Dmail, DmailMailbox, MessageConversation, Message
 from core.services.feature_access import get_current_feature, get_feature_access, start_feature_trial_for_user
 from core.services.image_processor import process_image
 from identity.permissions import get_authenticated_identity, get_current_account_type
@@ -967,6 +968,314 @@ def central_popup_settings(request):
         }
     )
 
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def message_send(request):
+    identity = get_authenticated_identity(request)
+
+    if identity is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Authentication credentials were not provided.",
+            },
+            status=401,
+        )
+
+    receiver_value = str(request.data.get("receiver", "")).strip()
+    body = str(request.data.get("body", "")).strip()
+
+    if not receiver_value:
+        return Response(
+            {
+                "success": False,
+                "detail": "Receiver is required.",
+            },
+            status=400,
+        )
+
+    if not body:
+        return Response(
+            {
+                "success": False,
+                "detail": "Message body is required.",
+            },
+            status=400,
+        )
+
+    from django.db.models import Q
+    from identity.models import UserIdentity
+
+    receiver = (
+        UserIdentity.objects
+        .filter(
+            Q(username__iexact=receiver_value)
+            | Q(email__iexact=receiver_value)
+        )
+        .first()
+    )
+
+    if receiver is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Receiver not found.",
+            },
+            status=404,
+        )
+
+    if receiver.pk == identity.pk:
+        return Response(
+            {
+                "success": False,
+                "detail": "You cannot send a message to yourself.",
+            },
+            status=400,
+        )
+
+    conversation = (
+        MessageConversation.objects
+        .filter(
+            Q(participant_one=identity, participant_two=receiver)
+            | Q(participant_one=receiver, participant_two=identity)
+        )
+        .first()
+    )
+
+    if conversation is None:
+        first, second = (
+            (identity, receiver)
+            if identity.pk < receiver.pk
+            else (receiver, identity)
+        )
+
+        conversation = MessageConversation.objects.create(
+            participant_one=first,
+            participant_two=second,
+        )
+
+    message = Message.objects.create(
+        conversation=conversation,
+        sender=identity,
+        receiver=receiver,
+        body=body,
+    )
+
+    conversation.save(update_fields=["updated_at"])
+
+    return Response(
+        {
+            "success": True,
+            "message": {
+                "id": message.id,
+                "conversation_id": conversation.id,
+                "sender_id": str(identity.user_id),
+                "sender_username": identity.username,
+                "receiver_id": str(receiver.user_id),
+                "receiver_username": receiver.username,
+                "body": message.body,
+                "is_read": message.is_read,
+                "created_at": message.created_at,
+            },
+        },
+        status=201,
+    )
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def message_conversation_detail(request, conversation_id):
+    identity = get_authenticated_identity(request)
+
+    if identity is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Authentication credentials were not provided.",
+            },
+            status=401,
+        )
+
+    conversation = (
+        MessageConversation.objects
+        .select_related("participant_one", "participant_two")
+        .filter(id=conversation_id)
+        .first()
+    )
+
+    if conversation is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Conversation not found.",
+            },
+            status=404,
+        )
+
+    if identity.pk not in {
+        conversation.participant_one_id,
+        conversation.participant_two_id,
+    }:
+        return Response(
+            {
+                "success": False,
+                "detail": "You are not a participant in this conversation.",
+            },
+            status=403,
+        )
+
+    messages = (
+        Message.objects
+        .select_related("sender", "receiver")
+        .filter(conversation=conversation)
+        .order_by("created_at", "id")
+    )
+
+    return Response(
+        {
+            "success": True,
+            "conversation": {
+                "id": conversation.id,
+                "participant_one_id": str(conversation.participant_one.user_id),
+                "participant_one_username": conversation.participant_one.username,
+                "participant_two_id": str(conversation.participant_two.user_id),
+                "participant_two_username": conversation.participant_two.username,
+            },
+            "messages": [
+                {
+                    "id": message.id,
+                    "sender_id": str(message.sender.user_id),
+                    "sender_username": message.sender.username,
+                    "receiver_id": str(message.receiver.user_id),
+                    "receiver_username": message.receiver.username,
+                    "body": message.body,
+                    "is_read": message.is_read,
+                    "created_at": message.created_at,
+                }
+                for message in messages
+            ],
+        }
+    )
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def message_conversations(request):
+    from django.db.models import Q
+
+    identity = get_authenticated_identity(request)
+
+    if identity is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Authentication credentials were not provided.",
+            },
+            status=401,
+        )
+
+    conversations = (
+        MessageConversation.objects
+        .filter(
+            Q(participant_one=identity)
+            | Q(participant_two=identity)
+        )
+        .prefetch_related("messages")
+        .order_by("-updated_at")
+    )
+
+    return Response(
+        {
+            "success": True,
+            "conversations": [
+                {
+                    "id": conversation.id,
+                    "participant_one_id": str(conversation.participant_one.user_id),
+                    "participant_one_identity_id": conversation.participant_one.id,
+                    "participant_one_username": conversation.participant_one.username,
+                    "participant_two_id": str(conversation.participant_two.user_id),
+                    "participant_two_identity_id": conversation.participant_two.id,
+                    "participant_two_username": conversation.participant_two.username,
+                    "updated_at": conversation.updated_at,
+                }
+                for conversation in conversations
+            ],
+        }
+    )
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def dmail_mailbox_move(request, message_id):
+    identity = get_authenticated_identity(request)
+
+    if identity is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Authentication credentials were not provided.",
+            },
+            status=401,
+        )
+
+    account_type = get_current_account_type(request)
+
+    if account_type is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Active account type not found.",
+            },
+            status=400,
+        )
+
+    folder = request.data.get("folder")
+
+    if folder not in {"inbox", "sent", "archived", "trash"}:
+        return Response(
+            {
+                "success": False,
+                "detail": "Invalid mailbox folder.",
+            },
+            status=400,
+        )
+
+    mailbox = (
+        DmailMailbox.objects
+        .filter(
+            dmail_id=message_id,
+            user=identity,
+            dmail__account_type=account_type.account_type,
+        )
+        .first()
+    )
+
+    if mailbox is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Dmail not found.",
+            },
+            status=404,
+        )
+
+    mailbox.folder = folder
+    mailbox.save(update_fields=["folder", "updated_at"])
+
+    return Response(
+        {
+            "success": True,
+            "message_id": message_id,
+            "folder": folder,
+        },
+        status=200,
+    )
+
+
 @api_view(["GET"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -1029,6 +1338,89 @@ def dmail_inbox(request):
         {
             "success": True,
             "folder": "inbox",
+            "account_type": account_type.account_type,
+            "count": len(results),
+            "messages": results,
+        }
+    )
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def dmail_mailbox_list(request):
+    identity = get_authenticated_identity(request)
+
+    if identity is None:
+        return Response(
+            {"success": False, "detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    account_type = get_current_account_type(request)
+
+    if account_type is None:
+        return Response(
+            {"success": False, "detail": "Active account type not found."},
+            status=400,
+        )
+
+    folder = request.query_params.get("folder")
+
+    if folder not in {"archived", "trash"}:
+        return Response(
+            {"success": False, "detail": "Invalid mailbox folder."},
+            status=400,
+        )
+
+    mailboxes = (
+        DmailMailbox.objects
+        .filter(
+            user=identity,
+            folder=folder,
+            dmail__account_type=account_type.account_type,
+        )
+        .select_related(
+            "dmail",
+            "dmail__sender",
+            "dmail__receiver",
+        )
+        .order_by("-dmail__created_at")
+    )
+
+    results = []
+
+    for mailbox in mailboxes:
+        dmail = mailbox.dmail
+        sender = dmail.sender
+        receiver = dmail.receiver
+
+        results.append(
+            {
+                "id": dmail.id,
+                "sender_id": str(sender.user_id),
+                "sender_name": (
+                    f"{sender.first_name} {sender.last_name}"
+                ).strip() or sender.username or sender.email,
+                "sender_username": sender.username,
+                "receiver_id": str(receiver.user_id) if receiver else None,
+                "receiver_name": (
+                    f"{receiver.first_name} {receiver.last_name}"
+                ).strip() if receiver else None,
+                "receiver_username": receiver.username if receiver else None,
+                "subject": dmail.subject,
+                "body": dmail.body,
+                "is_read": mailbox.is_read,
+                "is_starred": mailbox.is_starred,
+                "is_important": mailbox.is_important,
+                "created_at": dmail.created_at,
+            }
+        )
+
+    return Response(
+        {
+            "success": True,
+            "folder": folder,
             "account_type": account_type.account_type,
             "count": len(results),
             "messages": results,
@@ -1119,6 +1511,7 @@ def dmail_send(request):
         account_type=account_type.account_type,
         subject=subject,
         body=body,
+        thread_id=uuid.uuid4(),
     )
 
     DmailMailbox.objects.create(
