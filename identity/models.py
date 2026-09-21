@@ -142,6 +142,7 @@ class AccountType(models.Model):
         PERSONAL = "personal", "Personal Account"
         PROFESSIONAL = "professional", "Professional Account"
         COMPANY = "company", "Company Account"
+        INSTITUTION = "institution", "Institution Account"
 
     identity = models.ForeignKey(
         UserIdentity,

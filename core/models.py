@@ -958,3 +958,108 @@ class MessagingAppearance(TimeStampedModel):
     def __str__(self):
         return f"{self.identity_id} - {self.account_type} Messaging Appearance"
 
+
+class Dmail(TimeStampedModel):
+    ACCOUNT_TYPES = [
+        ("personal", "Personal"),
+        ("professional", "Professional"),
+        ("company", "Company"),
+        ("institution", "Institution"),
+    ]
+
+    sender = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.CASCADE,
+        related_name="sent_dmail",
+    )
+
+    receiver = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="received_dmail",
+    )
+
+    account_type = models.CharField(
+        max_length=20,
+        choices=ACCOUNT_TYPES,
+    )
+
+    subject = models.CharField(
+        max_length=500,
+        blank=True,
+    )
+
+    body = models.TextField(
+        blank=True,
+    )
+
+    thread_id = models.UUIDField(
+        null=True,
+        blank=True,
+        db_index=True,
+    )
+
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="replies",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.sender_id} -> {self.receiver_id}"
+
+
+class DmailMailbox(TimeStampedModel):
+    FOLDER_TYPES = [
+        ("inbox", "Inbox"),
+        ("sent", "Sent"),
+        ("draft", "Draft"),
+        ("starred", "Starred"),
+        ("important", "Important"),
+        ("archived", "Archived"),
+        ("trash", "Trash"),
+    ]
+
+    dmail = models.ForeignKey(
+        Dmail,
+        on_delete=models.CASCADE,
+        related_name="mailboxes",
+    )
+
+    user = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.CASCADE,
+        related_name="dmail_mailboxes",
+    )
+
+    folder = models.CharField(
+        max_length=20,
+        choices=FOLDER_TYPES,
+        default="inbox",
+    )
+
+    is_read = models.BooleanField(default=False)
+
+    is_starred = models.BooleanField(default=False)
+
+    is_important = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["dmail", "user"],
+                name="unique_dmail_mailbox_per_user",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.user_id} - {self.dmail_id} - {self.folder}"
+

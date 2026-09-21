@@ -4,9 +4,11 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from .models import FeatureAccessControl, UserFeatureTrial, UserPremiumSubscription, PremiumPackage, PersonalFontStyle, UserFontFavorite, MessagingAppearance
+from .models import FeatureAccessControl, UserFeatureTrial, UserPremiumSubscription, PremiumPackage, PersonalFontStyle, UserFontFavorite, MessagingAppearance, Dmail, DmailMailbox
 from core.services.feature_access import get_current_feature, get_feature_access, start_feature_trial_for_user
 from core.services.image_processor import process_image
+from identity.permissions import get_authenticated_identity, get_current_account_type
+from notifications.services import create_notification
 
 
 @api_view(["GET"])
@@ -961,4 +963,749 @@ def central_popup_settings(request):
             "popup_count": len(results),
             "popups": results,
         }
+    )
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def dmail_inbox(request):
+    identity = get_authenticated_identity(request)
+
+    if identity is None:
+        return Response(
+            {"success": False, "detail": "Authentication credentials were not provided."},
+            status=401,
+        )
+
+    account_type = get_current_account_type(request)
+
+    if account_type is None:
+        return Response(
+            {"success": False, "detail": "Active account type not found."},
+            status=400,
+        )
+
+    mailboxes = (
+        DmailMailbox.objects
+        .filter(
+            user=identity,
+            folder="inbox",
+            dmail__account_type=account_type.account_type,
+        )
+        .select_related(
+            "dmail",
+            "dmail__sender",
+            "dmail__receiver",
+        )
+        .order_by("-dmail__created_at")
+    )
+
+    results = []
+
+    for mailbox in mailboxes:
+        dmail = mailbox.dmail
+        sender = dmail.sender
+
+        results.append(
+            {
+                "id": dmail.id,
+                "sender_id": str(sender.user_id),
+                "sender_name": (
+                    f"{sender.first_name} {sender.last_name}"
+                ).strip() or sender.username or sender.email,
+                "sender_username": sender.username,
+                "subject": dmail.subject,
+                "body": dmail.body,
+                "is_read": mailbox.is_read,
+                "is_starred": mailbox.is_starred,
+                "is_important": mailbox.is_important,
+                "created_at": dmail.created_at,
+            }
+        )
+
+    return Response(
+        {
+            "success": True,
+            "folder": "inbox",
+            "account_type": account_type.account_type,
+            "count": len(results),
+            "messages": results,
+        }
+    )
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def dmail_send(request):
+    identity = get_authenticated_identity(request)
+
+    if identity is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Authentication credentials were not provided.",
+            },
+            status=401,
+        )
+
+    account_type = get_current_account_type(request)
+
+    if account_type is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Active account type not found.",
+            },
+            status=400,
+        )
+
+    receiver_value = str(request.data.get("receiver", "")).strip()
+    subject = str(request.data.get("subject", "")).strip()
+    body = str(request.data.get("body", "")).strip()
+
+    if not receiver_value:
+        return Response(
+            {
+                "success": False,
+                "detail": "Receiver is required.",
+            },
+            status=400,
+        )
+
+    if not subject and not body:
+        return Response(
+            {
+                "success": False,
+                "detail": "Subject or body is required.",
+            },
+            status=400,
+        )
+
+    from django.db.models import Q
+
+    receiver = (
+        identity.__class__.objects
+        .filter(
+            Q(username__iexact=receiver_value)
+            | Q(email__iexact=receiver_value)
+        )
+        .first()
+    )
+
+    if receiver is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Receiver not found.",
+            },
+            status=404,
+        )
+
+    if receiver.pk == identity.pk:
+        return Response(
+            {
+                "success": False,
+                "detail": "You cannot send a Dmail to yourself.",
+            },
+            status=400,
+        )
+
+    dmail = Dmail.objects.create(
+        sender=identity,
+        receiver=receiver,
+        account_type=account_type.account_type,
+        subject=subject,
+        body=body,
+    )
+
+    DmailMailbox.objects.create(
+        dmail=dmail,
+        user=identity,
+        folder="sent",
+        is_read=True,
+    )
+
+    DmailMailbox.objects.create(
+        dmail=dmail,
+        user=receiver,
+        folder="inbox",
+        is_read=False,
+    )
+
+    sender_name = (
+        f"{identity.first_name} {identity.last_name}"
+    ).strip() or identity.username or identity.email
+
+    notification_message = (
+        f"{sender_name} sent you a new Dmail."
+    )
+
+    if subject:
+        notification_message += f" Subject: {subject}"
+
+    create_notification(
+        user=receiver,
+        category="message",
+        notification_type="new_dmail",
+        title="New Dmail",
+        message=notification_message,
+        source="dmail",
+        action_url="/messages",
+        priority="normal",
+    )
+
+    return Response(
+        {
+            "success": True,
+            "message": "Dmail sent successfully.",
+            "dmail": {
+                "id": dmail.id,
+                "receiver_id": str(receiver.user_id),
+                "receiver_username": receiver.username,
+                "receiver_email": receiver.email,
+                "subject": dmail.subject,
+                "created_at": dmail.created_at,
+            },
+        },
+        status=201,
+    )
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def dmail_sent(request):
+    identity = get_authenticated_identity(request)
+
+    if identity is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Authentication credentials were not provided.",
+            },
+            status=401,
+        )
+
+    account_type = get_current_account_type(request)
+
+    if account_type is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Active account type not found.",
+            },
+            status=400,
+        )
+
+    mailboxes = (
+        DmailMailbox.objects
+        .filter(
+            user=identity,
+            folder="sent",
+            dmail__account_type=account_type.account_type,
+        )
+        .select_related(
+            "dmail",
+            "dmail__sender",
+            "dmail__receiver",
+        )
+        .order_by("-dmail__created_at")
+    )
+
+    results = []
+
+    for mailbox in mailboxes:
+        dmail = mailbox.dmail
+        receiver = dmail.receiver
+
+        results.append(
+            {
+                "id": dmail.id,
+                "receiver_id": str(receiver.user_id) if receiver else None,
+                "receiver_name": (
+                    f"{receiver.first_name} {receiver.last_name}"
+                ).strip() or receiver.username or receiver.email
+                if receiver
+                else None,
+                "receiver_username": receiver.username if receiver else None,
+                "subject": dmail.subject,
+                "body": dmail.body,
+                "is_read": mailbox.is_read,
+                "is_starred": mailbox.is_starred,
+                "is_important": mailbox.is_important,
+                "created_at": dmail.created_at,
+            }
+        )
+
+    return Response(
+        {
+            "success": True,
+            "folder": "sent",
+            "account_type": account_type.account_type,
+            "count": len(results),
+            "messages": results,
+        }
+    )
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def dmail_draft_save(request):
+    identity = get_authenticated_identity(request)
+
+    if identity is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Authentication credentials were not provided.",
+            },
+            status=401,
+        )
+
+    account_type = get_current_account_type(request)
+
+    if account_type is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Active account type not found.",
+            },
+            status=400,
+        )
+
+    receiver_value = str(request.data.get("receiver", "")).strip()
+    subject = str(request.data.get("subject", "")).strip()
+    body = str(request.data.get("body", "")).strip()
+
+    receiver = None
+
+    if receiver_value:
+        from django.db.models import Q
+
+        receiver = identity.__class__.objects.filter(
+            Q(username__iexact=receiver_value)
+            | Q(email__iexact=receiver_value)
+        ).first()
+
+        if receiver is None:
+            return Response(
+                {
+                    "success": False,
+                    "detail": "Receiver not found.",
+                },
+                status=404,
+            )
+
+        if receiver.pk == identity.pk:
+            return Response(
+                {
+                    "success": False,
+                    "detail": "You cannot send a Dmail to yourself.",
+                },
+                status=400,
+            )
+
+    dmail = Dmail.objects.create(
+        sender=identity,
+        receiver=receiver,
+        account_type=account_type.account_type,
+        subject=subject,
+        body=body,
+    )
+
+    DmailMailbox.objects.create(
+        dmail=dmail,
+        user=identity,
+        folder="draft",
+        is_read=True,
+    )
+
+    return Response(
+        {
+            "success": True,
+            "message": "Draft saved successfully.",
+            "draft": {
+                "id": dmail.id,
+                "receiver": receiver.username if receiver else None,
+                "subject": dmail.subject,
+                "body": dmail.body,
+                "account_type": dmail.account_type,
+                "created_at": dmail.created_at,
+            },
+        },
+        status=201,
+    )
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def dmail_draft_list(request):
+    identity = get_authenticated_identity(request)
+
+    if identity is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Authentication credentials were not provided.",
+            },
+            status=401,
+        )
+
+    account_type = get_current_account_type(request)
+
+    if account_type is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Active account type not found.",
+            },
+            status=400,
+        )
+
+    mailboxes = (
+        DmailMailbox.objects
+        .filter(
+            user=identity,
+            folder="draft",
+            dmail__account_type=account_type.account_type,
+        )
+        .select_related(
+            "dmail",
+            "dmail__receiver",
+        )
+        .order_by("-dmail__created_at")
+    )
+
+    results = []
+
+    for mailbox in mailboxes:
+        dmail = mailbox.dmail
+        receiver = dmail.receiver
+
+        results.append(
+            {
+                "id": dmail.id,
+                "receiver_id": str(receiver.user_id) if receiver else None,
+                "receiver_name": (
+                    f"{receiver.first_name} {receiver.last_name}"
+                ).strip() or receiver.username or receiver.email
+                if receiver
+                else None,
+                "receiver_username": receiver.username if receiver else None,
+                "subject": dmail.subject,
+                "body": dmail.body,
+                "is_starred": mailbox.is_starred,
+                "is_important": mailbox.is_important,
+                "created_at": dmail.created_at,
+            }
+        )
+
+    return Response(
+        {
+            "success": True,
+            "folder": "draft",
+            "account_type": account_type.account_type,
+            "count": len(results),
+            "drafts": results,
+        }
+    )
+
+
+@api_view(["PATCH"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def dmail_draft_update(request, draft_id):
+    identity = get_authenticated_identity(request)
+
+    if identity is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Authentication credentials were not provided.",
+            },
+            status=401,
+        )
+
+    account_type = get_current_account_type(request)
+
+    if account_type is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Active account type not found.",
+            },
+            status=400,
+        )
+
+    mailbox = (
+        DmailMailbox.objects
+        .select_related("dmail", "dmail__receiver")
+        .filter(
+            dmail_id=draft_id,
+            user=identity,
+            folder="draft",
+            dmail__account_type=account_type.account_type,
+        )
+        .first()
+    )
+
+    if mailbox is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Draft not found.",
+            },
+            status=404,
+        )
+
+    receiver_value = str(
+        request.data.get("receiver", "")
+    ).strip()
+    subject = str(
+        request.data.get("subject", "")
+    ).strip()
+    body = str(
+        request.data.get("body", "")
+    ).strip()
+
+    receiver = None
+
+    if receiver_value:
+        from django.db.models import Q
+
+        receiver = identity.__class__.objects.filter(
+            Q(username__iexact=receiver_value)
+            | Q(email__iexact=receiver_value)
+        ).first()
+
+        if receiver is None:
+            return Response(
+                {
+                    "success": False,
+                    "detail": "Receiver not found.",
+                },
+                status=404,
+            )
+
+        if receiver.pk == identity.pk:
+            return Response(
+                {
+                    "success": False,
+                    "detail": "You cannot send a Dmail to yourself.",
+                },
+                status=400,
+            )
+
+    dmail = mailbox.dmail
+
+    dmail.receiver = receiver
+    dmail.subject = subject
+    dmail.body = body
+    dmail.save(
+        update_fields=[
+            "receiver",
+            "subject",
+            "body",
+            "updated_at",
+        ]
+    )
+
+    return Response(
+        {
+            "success": True,
+            "message": "Draft updated successfully.",
+            "draft": {
+                "id": dmail.id,
+                "receiver": receiver.username if receiver else None,
+                "subject": dmail.subject,
+                "body": dmail.body,
+                "account_type": dmail.account_type,
+                "updated_at": dmail.updated_at,
+            },
+        }
+    )
+
+
+@api_view(["DELETE"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def dmail_draft_delete(request, draft_id):
+    identity = get_authenticated_identity(request)
+
+    if identity is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Authentication credentials were not provided.",
+            },
+            status=401,
+        )
+
+    account_type = get_current_account_type(request)
+
+    if account_type is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Active account type not found.",
+            },
+            status=400,
+        )
+
+    mailbox = (
+        DmailMailbox.objects
+        .filter(
+            dmail_id=draft_id,
+            user=identity,
+            folder="draft",
+            dmail__account_type=account_type.account_type,
+        )
+        .first()
+    )
+
+    if mailbox is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Draft not found.",
+            },
+            status=404,
+        )
+
+    dmail = mailbox.dmail
+    dmail.delete()
+
+    return Response(
+        {
+            "success": True,
+            "message": "Draft deleted successfully.",
+            "draft_id": draft_id,
+        }
+    )
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def dmail_draft_send(request, draft_id):
+    identity = get_authenticated_identity(request)
+
+    if identity is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Authentication credentials were not provided.",
+            },
+            status=401,
+        )
+
+    account_type = get_current_account_type(request)
+
+    if account_type is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Active account type not found.",
+            },
+            status=400,
+        )
+
+    mailbox = (
+        DmailMailbox.objects
+        .select_related("dmail", "dmail__receiver")
+        .filter(
+            dmail_id=draft_id,
+            user=identity,
+            folder="draft",
+            dmail__account_type=account_type.account_type,
+        )
+        .first()
+    )
+
+    if mailbox is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Draft not found.",
+            },
+            status=404,
+        )
+
+    dmail = mailbox.dmail
+    receiver = dmail.receiver
+
+    if receiver is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Receiver is required.",
+            },
+            status=400,
+        )
+
+    if not dmail.subject and not dmail.body:
+        return Response(
+            {
+                "success": False,
+                "detail": "Subject or body is required.",
+            },
+            status=400,
+        )
+
+    mailbox.folder = "sent"
+    mailbox.is_read = True
+    mailbox.save(
+        update_fields=[
+            "folder",
+            "is_read",
+            "updated_at",
+        ]
+    )
+
+    DmailMailbox.objects.create(
+        dmail=dmail,
+        user=receiver,
+        folder="inbox",
+        is_read=False,
+    )
+
+    sender_name = (
+        f"{identity.first_name} {identity.last_name}"
+    ).strip() or identity.username or identity.email
+
+    notification_message = (
+        f"{sender_name} sent you a new Dmail."
+    )
+
+    if dmail.subject:
+        notification_message += f" Subject: {dmail.subject}"
+
+    create_notification(
+        user=receiver,
+        category="message",
+        notification_type="new_dmail",
+        title="New Dmail",
+        message=notification_message,
+        source="dmail",
+        action_url="/messages",
+        priority="normal",
+    )
+
+    return Response(
+        {
+            "success": True,
+            "message": "Draft sent successfully.",
+            "dmail": {
+                "id": dmail.id,
+                "receiver_id": str(receiver.user_id),
+                "receiver_username": receiver.username,
+                "receiver_email": receiver.email,
+                "subject": dmail.subject,
+                "created_at": dmail.created_at,
+            },
+        },
+        status=200,
     )
