@@ -959,6 +959,62 @@ class MessagingAppearance(TimeStampedModel):
         return f"{self.identity_id} - {self.account_type} Messaging Appearance"
 
 
+class MessageConversation(TimeStampedModel):
+    participant_one = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.CASCADE,
+        related_name="message_conversations_as_one",
+    )
+
+    participant_two = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.CASCADE,
+        related_name="message_conversations_as_two",
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["participant_one", "participant_two"],
+                name="unique_message_conversation_pair",
+            )
+        ]
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"{self.participant_one_id} <-> {self.participant_two_id}"
+
+
+class Message(TimeStampedModel):
+    conversation = models.ForeignKey(
+        MessageConversation,
+        on_delete=models.CASCADE,
+        related_name="messages",
+    )
+
+    sender = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.CASCADE,
+        related_name="sent_messages",
+    )
+
+    receiver = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.CASCADE,
+        related_name="received_messages",
+    )
+
+    body = models.TextField(blank=True)
+
+    is_read = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    def __str__(self):
+        return f"{self.sender_id} -> {self.receiver_id}"
+
+
 class Dmail(TimeStampedModel):
     ACCOUNT_TYPES = [
         ("personal", "Personal"),
