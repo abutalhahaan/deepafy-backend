@@ -655,3 +655,72 @@ class DmailReplyTests(DmailSendInboxTests):
 
         self.assertEqual(notification.category, "message")
         self.assertEqual(notification.source, "dmail")
+
+
+    def test_thread_returns_original_and_replies(self):
+        login_response = self.client.post(
+            "/api/identity/login/",
+            {
+                "identifier": "test_sender",
+                "password": "TestPassword123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(login_response.status_code, 200)
+
+        sender_token = login_response.json()["access"]
+
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {sender_token}"
+        )
+
+        send_response = self.client.post(
+            "/api/core/messaging/send/",
+            {
+                "receiver": self.receiver.username,
+                "subject": "Thread subject",
+                "body": "Original message",
+            },
+            format="json",
+        )
+
+        self.assertEqual(send_response.status_code, 201)
+        original = Dmail.objects.get(
+            sender=self.sender,
+            receiver=self.receiver,
+            subject="Thread subject",
+        )
+
+        self.client.force_authenticate(user=self.receiver)
+
+        reply_response = self.client.post(
+            f"/api/core/messaging/{original.id}/reply/",
+            {
+                "body": "First reply",
+            },
+            format="json",
+        )
+
+        self.assertEqual(reply_response.status_code, 201)
+
+        original.refresh_from_db()
+
+        thread_response = self.client.get(
+            f"/api/core/messaging/{original.id}/thread/"
+        )
+
+        self.assertEqual(thread_response.status_code, 200)
+        self.assertTrue(thread_response.data["success"])
+
+        messages = thread_response.data["messages"]
+
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(messages[0]["id"], original.id)
+        self.assertEqual(messages[0]["body"], "Original message")
+        self.assertEqual(messages[1]["body"], "First reply")
+        self.assertEqual(messages[1]["parent_id"], original.id)
+        self.assertEqual(
+            messages[0]["thread_id"],
+            messages[1]["thread_id"],
+        )

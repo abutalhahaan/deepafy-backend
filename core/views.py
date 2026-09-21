@@ -1325,6 +1325,96 @@ def dmail_reply(request, message_id):
 @api_view(["GET"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
+def dmail_thread(request, message_id):
+    identity = get_authenticated_identity(request)
+
+    if identity is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Authentication credentials were not provided.",
+            },
+            status=401,
+        )
+
+    account_type = get_current_account_type(request)
+
+    if account_type is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Active account type not found.",
+            },
+            status=400,
+        )
+
+    message = (
+        Dmail.objects
+        .select_related("sender", "receiver")
+        .filter(
+            id=message_id,
+            account_type=account_type.account_type,
+        )
+        .first()
+    )
+
+    if message is None:
+        return Response(
+            {
+                "success": False,
+                "detail": "Message not found.",
+            },
+            status=404,
+        )
+
+    if identity.pk not in {message.sender_id, message.receiver_id}:
+        return Response(
+            {
+                "success": False,
+                "detail": "You do not have access to this message.",
+            },
+            status=403,
+        )
+
+    thread_id = message.thread_id or message.id
+
+    messages = (
+        Dmail.objects
+        .select_related("sender", "receiver")
+        .filter(
+            account_type=account_type.account_type,
+            thread_id=thread_id,
+        )
+        .order_by("created_at", "id")
+    )
+
+    return Response(
+        {
+            "success": True,
+            "thread_id": str(thread_id),
+            "messages": [
+                {
+                    "id": item.id,
+                    "parent_id": item.parent_id,
+                    "thread_id": str(item.thread_id) if item.thread_id else None,
+                    "sender_id": str(item.sender.user_id),
+                    "sender_username": item.sender.username,
+                    "receiver_id": str(item.receiver.user_id) if item.receiver else None,
+                    "receiver_username": item.receiver.username if item.receiver else None,
+                    "subject": item.subject,
+                    "body": item.body,
+                    "created_at": item.created_at,
+                }
+                for item in messages
+            ],
+        },
+        status=200,
+    )
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
 def dmail_sent(request):
     identity = get_authenticated_identity(request)
 
