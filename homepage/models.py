@@ -253,6 +253,38 @@ class GetStartedPageSettings(TimeStampedModel):
         blank=True,
     )
 
+    institution_title = models.CharField(
+        max_length=255,
+        default="Institution Account",
+    )
+
+    institution_description = models.TextField(
+        blank=True,
+    )
+
+    institution_card_color = models.CharField(
+        max_length=20,
+        default="#FFFFFF",
+    )
+
+    personal_icon = models.ImageField(
+        upload_to="homepage/get_started/icons/",
+        blank=True,
+        null=True,
+    )
+
+    company_icon = models.ImageField(
+        upload_to="homepage/get_started/icons/",
+        blank=True,
+        null=True,
+    )
+
+    institution_icon = models.ImageField(
+        upload_to="homepage/get_started/icons/",
+        blank=True,
+        null=True,
+    )
+
     login_text = models.CharField(
         max_length=100,
         default="Log in",

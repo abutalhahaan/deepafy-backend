@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     'core',
     'identity',
     "companies.apps.CompaniesConfig",
+    "institution",
     "category_engine",
     'homepage',
     "jobs",

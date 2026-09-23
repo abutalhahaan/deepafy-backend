@@ -5,7 +5,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from .models import Company, Country
+from .models import AdministrativeLocation, Company, Country, LocationLevel
 
 
 @require_http_methods(["GET"])
@@ -24,8 +24,86 @@ def country_list(request):
                     "id": country.id,
                     "name": country.name,
                     "code": country.code,
+                    "phone_code": country.phone_code,
                 }
                 for country in countries
+            ],
+        }
+    )
+
+
+def administrative_location_list(request):
+    country_code = request.GET.get("country")
+    level_code = request.GET.get("level")
+    parent_id = request.GET.get("parent")
+
+    if not country_code or not level_code:
+        return JsonResponse(
+            {
+                "detail": "country and level are required."
+            },
+            status=400,
+        )
+
+    try:
+        country = Country.objects.get(
+            code=country_code,
+            is_active=True,
+        )
+    except Country.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail": "Country not found."
+            },
+            status=404,
+        )
+
+    try:
+        level = LocationLevel.objects.get(
+            country=country,
+            code=level_code,
+            is_active=True,
+        )
+    except LocationLevel.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail": "Location level not found."
+            },
+            status=404,
+        )
+
+    locations = AdministrativeLocation.objects.filter(
+        country=country,
+        level=level,
+        is_active=True,
+    )
+
+    if parent_id:
+        locations = locations.filter(
+            parent_id=parent_id,
+        )
+    elif level.level > 1:
+        locations = locations.filter(
+            parent__isnull=False,
+        )
+
+    locations = locations.order_by(
+        "sort_order",
+        "name",
+    )
+
+    return JsonResponse(
+        {
+            "count": locations.count(),
+            "results": [
+                {
+                    "id": location.id,
+                    "location_id": str(location.location_id),
+                    "name": location.name,
+                    "code": location.code,
+                    "parent_id": location.parent_id,
+                }
+                for location in locations
             ],
         }
     )
