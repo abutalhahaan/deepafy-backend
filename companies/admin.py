@@ -8,6 +8,8 @@ from .models import (
     Country,
     CountryDepartment,
     Region,
+    LocationLevel,
+    AdministrativeLocation,
 )
 
 
@@ -99,6 +101,7 @@ class AdministrativeAssignmentAdmin(admin.ModelAdmin):
 class RegionAdmin(admin.ModelAdmin):
     list_display = [
         "name",
+        "sort_order",
         "is_active",
         "created_at",
     ]
@@ -107,11 +110,17 @@ class RegionAdmin(admin.ModelAdmin):
         "is_active",
     ]
 
+    list_editable = [
+        "sort_order",
+        "is_active",
+    ]
+
     search_fields = [
         "name",
     ]
 
     ordering = [
+        "sort_order",
         "name",
     ]
 
@@ -123,6 +132,7 @@ class CountryAdmin(admin.ModelAdmin):
         "code",
         "phone_code",
         "region",
+        "sort_order",
         "is_active",
     ]
 
@@ -138,7 +148,13 @@ class CountryAdmin(admin.ModelAdmin):
     ]
 
     ordering = [
+        "sort_order",
         "name",
+    ]
+
+    list_editable = [
+        "sort_order",
+        "is_active",
     ]
 
 
@@ -165,4 +181,78 @@ class CountryDepartmentAdmin(admin.ModelAdmin):
     ordering = [
         "country",
         "name",
+    ]
+
+@admin.register(LocationLevel)
+class LocationLevelAdmin(admin.ModelAdmin):
+    list_display = [
+        "country",
+        "level",
+        "name",
+        "code",
+        "sort_order",
+        "is_active",
+    ]
+
+    list_filter = [
+        "country",
+        "is_active",
+    ]
+
+    search_fields = [
+        "country__name",
+        "name",
+        "code",
+    ]
+
+    ordering = [
+        "country",
+        "level",
+        "sort_order",
+        "name",
+    ]
+
+    list_editable = [
+        "name",
+        "code",
+        "sort_order",
+        "is_active",
+    ]
+
+
+@admin.register(AdministrativeLocation)
+class AdministrativeLocationAdmin(admin.ModelAdmin):
+    list_display = [
+        "name",
+        "country",
+        "level",
+        "parent",
+        "sort_order",
+        "is_active",
+    ]
+
+    list_filter = [
+        "country",
+        "level",
+        "is_active",
+    ]
+
+    search_fields = [
+        "name",
+        "code",
+        "country__name",
+        "level__name",
+        "parent__name",
+    ]
+
+    ordering = [
+        "country",
+        "level",
+        "sort_order",
+        "name",
+    ]
+
+    list_editable = [
+        "sort_order",
+        "is_active",
     ]

@@ -23,6 +23,11 @@ urlpatterns = [
     ),
 
     path(
+        "api/institution/",
+        include("institution.urls"),
+    ),
+
+    path(
         "api/homepage/",
         include("homepage.urls"),
     ),

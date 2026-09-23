@@ -165,6 +165,25 @@ class GetStartedPageSettingsAdmin(admin.ModelAdmin):
             },
         ),
         (
+            "Institution Account Card",
+            {
+                "fields": (
+                    "institution_title",
+                    "institution_description",
+                )
+            },
+        ),
+        (
+            "Account Type Icons",
+            {
+                "fields": (
+                    "personal_icon",
+                    "company_icon",
+                    "institution_icon",
+                )
+            },
+        ),
+        (
             "Login Settings",
             {
                 "fields": (

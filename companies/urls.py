@@ -11,6 +11,12 @@ urlpatterns = [
     ),
 
     path(
+        "locations/",
+        views.administrative_location_list,
+        name="administrative-location-list",
+    ),
+
+    path(
         "",
         views.company_list,
         name="company-list",

@@ -208,13 +208,17 @@ class Region(models.Model):
 
     name = models.CharField(max_length=255)
 
+    sort_order = models.PositiveIntegerField(
+        default=0,
+    )
+
     is_active = models.BooleanField(default=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ["name"]
+        ordering = ["sort_order", "name"]
 
     def __str__(self):
         return self.name
@@ -246,6 +250,21 @@ class Country(models.Model):
         blank=True,
     )
 
+    flag = models.ImageField(
+        upload_to="countries/flags/",
+        null=True,
+        blank=True,
+    )
+
+    flag_emoji = models.CharField(
+        max_length=20,
+        blank=True,
+    )
+
+    sort_order = models.PositiveIntegerField(
+        default=0,
+    )
+
     is_active = models.BooleanField(
         default=True,
     )
@@ -270,6 +289,112 @@ class Country(models.Model):
             models.UniqueConstraint(
                 fields=["code"],
                 name="unique_country_code",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class LocationLevel(models.Model):
+    country = models.ForeignKey(
+        Country,
+        on_delete=models.PROTECT,
+        related_name="location_levels",
+    )
+
+    level = models.PositiveSmallIntegerField()
+
+    name = models.CharField(
+        max_length=100,
+    )
+
+    code = models.CharField(
+        max_length=50,
+        blank=True,
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    sort_order = models.PositiveIntegerField(
+        default=0,
+    )
+
+    class Meta:
+        ordering = ["country", "level", "sort_order", "name"]
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=["country", "level"],
+                name="unique_location_level_per_country",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.country.name} - {self.name}"
+
+
+class AdministrativeLocation(models.Model):
+    location_id = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        editable=False,
+    )
+
+    country = models.ForeignKey(
+        Country,
+        on_delete=models.PROTECT,
+        related_name="administrative_locations",
+    )
+
+    level = models.ForeignKey(
+        LocationLevel,
+        on_delete=models.PROTECT,
+        related_name="locations",
+    )
+
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="children",
+    )
+
+    name = models.CharField(
+        max_length=255,
+    )
+
+    code = models.CharField(
+        max_length=100,
+        blank=True,
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    sort_order = models.PositiveIntegerField(
+        default=0,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        ordering = ["country", "level", "sort_order", "name"]
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=["level", "parent", "name"],
+                name="unique_location_name_per_parent",
             ),
         ]
 
