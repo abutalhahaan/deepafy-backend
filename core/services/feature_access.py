@@ -3,14 +3,34 @@ from datetime import timedelta
 from django.utils import timezone
 
 from core.models import FeatureAccessControl, UserFeatureTrial, UserPremiumSubscription
-from identity.permissions import get_current_account_type
+from identity.permissions import get_current_account_type, get_authenticated_identity
+from identity.models import AccountType
 
 
-def get_current_feature(request, feature_key):
-    current_account_type = get_current_account_type(request)
+def get_current_feature(request, feature_key, account_type=None):
+    if account_type:
+        authenticated_identity = get_authenticated_identity(request)
 
-    if current_account_type is None:
-        return None, None, "No active primary account type found."
+        if authenticated_identity is None:
+            return None, None, "Authentication credentials were not provided."
+
+        current_account_type = (
+            AccountType.objects
+            .filter(
+                identity=authenticated_identity,
+                account_type=account_type,
+                is_active=True,
+            )
+            .first()
+        )
+
+        if current_account_type is None:
+            return None, None, "Requested account type is not available for this user."
+    else:
+        current_account_type = get_current_account_type(request)
+
+        if current_account_type is None:
+            return None, None, "No active primary account type found."
 
     try:
         feature = FeatureAccessControl.objects.get(
@@ -24,10 +44,11 @@ def get_current_feature(request, feature_key):
     return feature, current_account_type, None
 
 
-def get_feature_access(request, feature_key):
+def get_feature_access(request, feature_key, account_type=None):
     feature, current_account_type, error = get_current_feature(
         request,
         feature_key,
+        account_type=account_type,
     )
 
     if error:

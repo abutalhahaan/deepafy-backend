@@ -225,7 +225,12 @@ def start_feature_trial(request, feature_key):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def check_feature_access(request, feature_key):
-    access = get_feature_access(request, feature_key)
+    account_type = request.query_params.get("account_type")
+    access = get_feature_access(
+        request,
+        feature_key,
+        account_type=account_type,
+    )
 
     if access["access"] == "error":
         return Response(

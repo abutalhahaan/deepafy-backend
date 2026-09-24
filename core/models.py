@@ -32,6 +32,7 @@ class FeatureAccessControl(TimeStampedModel):
         ('personal', 'Personal'),
         ('professional', 'Professional'),
         ('company', 'Company'),
+        ('institution', 'Institution'),
     ]
 
     feature_key = models.CharField(max_length=150)

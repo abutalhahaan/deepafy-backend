@@ -6,6 +6,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from identity.models import PersonalAccount
+from institution.models import InstitutionProfile
 from identity.permissions import (
     is_owner,
     permission_denied,
@@ -173,7 +174,8 @@ def activity_create(request):
 @require_authentication
 def activity_feed(request):
     activities = Activity.objects.filter(
-        is_published=True
+        is_published=True,
+        personal_account__isnull=False,
     ).select_related(
         "personal_account"
     )[:20]
@@ -665,5 +667,122 @@ def activity_wallpaper_update(request):
                 else ""
             ),
             "updated_at": appearance.updated_at,
+        }
+    )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@require_authentication
+def institution_activity_create(request):
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"detail": "Invalid JSON."}, status=400)
+
+    activity_type = str(data.get("activity_type", "")).strip()
+    content = sanitize_html(str(data.get("content", "")).strip())
+    category = str(data.get("category", "education")).strip()
+
+    if not activity_type:
+        return JsonResponse(
+            {"detail": "Activity type is required."},
+            status=400,
+        )
+
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity_id=request.authenticated_identity.id,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Institution profile not found."},
+            status=404,
+        )
+
+    activity = Activity.objects.create(
+        institution=institution,
+        category=category,
+        activity_type=activity_type,
+        content=content,
+    )
+
+    return JsonResponse(
+        {
+            "id": activity.id,
+            "institution_id": institution.id,
+            "author": {
+                "id": institution.id,
+                "display_name": institution.institution_name,
+                "username": institution.identity.username,
+                "profile_photo": (
+                    institution.logo.url
+                    if institution.logo
+                    else ""
+                ),
+                "first_name": "",
+                "last_name": "",
+            },
+            "category": activity.category,
+            "activity_type": activity.activity_type,
+            "content": activity.content,
+            "liked": False,
+            "like_count": 0,
+            "comment_count": 0,
+            "is_published": activity.is_published,
+            "created_at": activity.created_at,
+            "updated_at": activity.updated_at,
+        },
+        status=201,
+    )
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+@require_authentication
+def institution_activity_feed(request, username):
+    activities = Activity.objects.filter(
+        institution__identity__username=username,
+        institution__is_active=True,
+        is_published=True,
+    ).select_related(
+        "institution__identity"
+    )[:20]
+
+    return JsonResponse(
+        {
+            "results": [
+                {
+                    "id": activity.id,
+                    "institution_id": activity.institution_id,
+                    "author": {
+                        "id": activity.institution.id,
+                        "display_name": activity.institution.institution_name,
+                        "username": activity.institution.identity.username,
+                        "profile_photo": (
+                            activity.institution.logo.url
+                            if activity.institution.logo
+                            else ""
+                        ),
+                        "first_name": "",
+                        "last_name": "",
+                    },
+                    "category": activity.category,
+                    "activity_type": activity.activity_type,
+                    "content": activity.content,
+                    "liked": False,
+                    "like_count": ActivityLike.objects.filter(
+                        activity=activity
+                    ).count(),
+                    "comment_count": ActivityComment.objects.filter(
+                        activity=activity
+                    ).count(),
+                    "is_published": activity.is_published,
+                    "created_at": activity.created_at,
+                    "updated_at": activity.updated_at,
+                }
+                for activity in activities
+            ]
         }
     )
