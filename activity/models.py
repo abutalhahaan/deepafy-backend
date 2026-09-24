@@ -13,6 +13,16 @@ class Activity(models.Model):
         PersonalAccount,
         on_delete=models.CASCADE,
         related_name="activities",
+        null=True,
+        blank=True,
+    )
+
+    institution = models.ForeignKey(
+        "institution.InstitutionProfile",
+        on_delete=models.CASCADE,
+        related_name="activities",
+        null=True,
+        blank=True,
     )
 
     category = models.CharField(
@@ -86,6 +96,16 @@ class ActivityComment(models.Model):
         PersonalAccount,
         on_delete=models.CASCADE,
         related_name="activity_comments",
+        null=True,
+        blank=True,
+    )
+
+    institution = models.ForeignKey(
+        "institution.InstitutionProfile",
+        on_delete=models.CASCADE,
+        related_name="activity_comments",
+        null=True,
+        blank=True,
     )
 
     parent = models.ForeignKey(

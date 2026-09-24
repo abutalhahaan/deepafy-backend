@@ -412,3 +412,123 @@ class ResetPasswordSerializer(serializers.Serializer):
         write_only=True,
         min_length=8,
     )    
+class InstitutionSignupSerializer(serializers.Serializer):
+    first_name = serializers.CharField(
+        max_length=100,
+        required=False,
+        allow_blank=True,
+    )
+
+    last_name = serializers.CharField(
+        max_length=100,
+        required=False,
+        allow_blank=True,
+    )
+
+    username = serializers.CharField(
+        max_length=50,
+    )
+
+    email = serializers.EmailField()
+
+    mobile_number = serializers.CharField(
+        max_length=30,
+    )
+
+    password = serializers.CharField(
+        write_only=True,
+        min_length=8,
+    )
+
+    institution_name = serializers.CharField(
+        max_length=255,
+    )
+
+    institution_type_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        allow_empty=False,
+    )
+
+    country_id = serializers.IntegerField()
+
+    established_year = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+    )
+
+    tagline = serializers.CharField(
+        max_length=500,
+        required=False,
+        allow_blank=True,
+    )
+
+    description = serializers.CharField(
+        required=False,
+        allow_blank=True,
+    )
+
+    administrative_location_id = serializers.UUIDField(
+        required=False,
+        allow_null=True,
+    )
+
+    full_address = serializers.CharField(
+        required=False,
+        allow_blank=True,
+    )
+
+    website = serializers.URLField(
+        required=False,
+        allow_blank=True,
+    )
+
+    phone = serializers.CharField(
+        max_length=30,
+        required=False,
+        allow_blank=True,
+    )
+
+    def validate_username(self, value):
+        if UserIdentity.objects.filter(username=value).exists():
+            raise serializers.ValidationError(
+                "This username is already taken."
+            )
+        return value
+
+    def validate_mobile_number(self, value):
+        if UserIdentity.objects.filter(mobile_number=value).exists():
+            raise serializers.ValidationError("This mobile number is already registered.")
+        return value
+
+    def validate_email(self, value):
+        if UserIdentity.objects.filter(email=value).exists():
+            raise serializers.ValidationError(
+                "This email is already registered."
+            )
+        return value
+
+    def validate_institution_type_id(self, value):
+        from institution.models import InstitutionType
+
+        if not InstitutionType.objects.filter(
+            id=value,
+            is_active=True,
+        ).exists():
+            raise serializers.ValidationError(
+                "Invalid institution type."
+            )
+
+        return value
+
+    def validate_country_id(self, value):
+        from companies.models import Country
+
+        if not Country.objects.filter(
+            id=value,
+            is_active=True,
+        ).exists():
+            raise serializers.ValidationError(
+                "Invalid country."
+            )
+
+        return value
