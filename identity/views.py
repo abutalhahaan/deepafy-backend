@@ -63,6 +63,7 @@ from .models import (
 
 from .serializers import (
     ForgotPasswordSerializer,
+    InstitutionSignupSerializer,
     LoginSerializer,
     PersonalResponsibilitySerializer,
     ResetPasswordSerializer,
@@ -5450,6 +5451,62 @@ def language_detail(request, language_id):
 
 @csrf_exempt
 @require_http_methods(["POST"])
+def institution_signup(request):
+    try:
+        data = json.loads(request.body or "{}")
+        serializer = InstitutionSignupSerializer(data=data)
+        if not serializer.is_valid():
+            return JsonResponse({"errors": serializer.errors}, status=400)
+        from institution.models import InstitutionProfile, InstitutionType
+        from companies.models import Country, AdministrativeLocation
+        validated = serializer.validated_data
+        institution_types = InstitutionType.objects.filter(
+            id__in=validated["institution_type_ids"],
+            is_active=True,
+        ).order_by("id")
+
+        if not institution_types.exists():
+            return JsonResponse(
+                {"errors": {"institution_type_ids": ["Invalid institution types."]}},
+                status=400,
+            )
+
+        country = Country.objects.get(id=validated["country_id"], is_active=True)
+        administrative_location = None
+        location_id = validated.get("administrative_location_id")
+        if location_id:
+            administrative_location = AdministrativeLocation.objects.filter(location_id=location_id, country=country, is_active=True).first()
+            if administrative_location is None:
+                return JsonResponse({"errors": {"administrative_location_id": ["Invalid administrative location."]}}, status=400)
+        password = validated.pop("password")
+        with transaction.atomic():
+            identity = UserIdentity.objects.create(first_name=validated.get("first_name", ""), last_name=validated.get("last_name", ""), username=validated["username"], email=validated["email"], mobile_number=validated["mobile_number"])
+            identity.set_password(password)
+            identity.save()
+            AccountType.objects.create(identity=identity, account_type=AccountType.Type.INSTITUTION, is_primary=True, is_active=True)
+            institution_profile = InstitutionProfile.objects.create(
+                identity=identity,
+                institution_name=validated["institution_name"],
+                institution_type=institution_types.first(),
+                established_year=validated.get("established_year"),
+                tagline=validated.get("tagline", ""),
+                description=validated.get("description", ""),
+                country=country,
+                administrative_location=administrative_location,
+                full_address=validated.get("full_address", ""),
+                website=validated.get("website", ""),
+                email=validated["email"],
+                phone=validated.get("phone", "") or validated["mobile_number"],
+            )
+
+            institution_profile.institution_types.set(institution_types)
+        refresh = RefreshToken.for_user(identity)
+        return JsonResponse({"message": "Institution account created successfully.", "access": str(refresh.access_token), "refresh": str(refresh), "user": serialize_identity(identity), "account_type": "institution"}, status=201)
+    except json.JSONDecodeError:
+        return JsonResponse({"detail": "Invalid JSON."}, status=400)
+
+@csrf_exempt
+@require_http_methods(["POST"])
 def signup(request):
     try:
         data = json.loads(request.body or "{}")
@@ -6927,4 +6984,43 @@ def personal_interested_category_remove(
             "Category removed from personal account."
         },
         status=200,
+    )
+
+@require_http_methods(["GET"])
+def public_profile_by_username(request, username):
+    try:
+        identity = UserIdentity.objects.get(
+            username=username,
+            is_active=True,
+        )
+    except UserIdentity.DoesNotExist:
+        return JsonResponse(
+            {
+                "detail": "Profile not found."
+            },
+            status=404,
+        )
+
+    account_types = (
+        identity.account_types
+        .filter(is_active=True)
+        .order_by("-is_primary", "id")
+    )
+
+    primary_account = account_types.first()
+
+    if primary_account is None:
+        return JsonResponse(
+            {
+                "detail": "No active account type found."
+            },
+            status=404,
+        )
+
+    return JsonResponse(
+        {
+            "user_id": str(identity.user_id),
+            "username": identity.username,
+            "account_type": primary_account.account_type,
+        }
     )

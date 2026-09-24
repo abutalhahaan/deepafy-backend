@@ -2,6 +2,7 @@ import json
 
 from django.http import JsonResponse
 from django.db import models
+from django.db.models import Prefetch
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
@@ -20,44 +21,101 @@ from core.services.feature_access import get_feature_access
 from notifications.services import create_notification
 
 
+def _serialize_activity_comment_author(comment):
+    if comment.personal_account_id:
+        account = comment.personal_account
+        return {
+            "id": account.id,
+            "display_name": account.display_name,
+            "username": account.username,
+            "profile_photo": (
+                account.profile_photo.url
+                if account.profile_photo
+                else ""
+            ),
+            "first_name": account.identity.first_name,
+            "last_name": account.identity.last_name,
+        }
+
+    if comment.institution_id:
+        institution = comment.institution
+        return {
+            "id": institution.id,
+            "display_name": institution.institution_name,
+            "username": institution.identity.username,
+            "profile_photo": (
+                institution.logo.url
+                if getattr(institution, "logo", None)
+                else ""
+            ),
+            "first_name": "",
+            "last_name": "",
+        }
+
+    return {
+        "id": 0,
+        "display_name": "Unknown",
+        "username": None,
+        "profile_photo": "",
+        "first_name": "",
+        "last_name": "",
+    }
+
+
 def _get_activity_default_appearance():
     return ActivityDefaultAppearance.objects.order_by("id").first()
 
 
 def _notify_activity_comment_participants(*, activity, comment, actor_user):
-    recipients = {activity.personal_account.identity}
+    recipients = set()
 
+    # Activity owner
+    if activity.personal_account_id:
+        recipients.add(activity.personal_account.identity)
+    elif activity.institution_id:
+        recipients.add(activity.institution.identity)
+
+    # Existing participants in the activity/thread
     if comment.parent_id is None:
-        participants = ActivityComment.objects.filter(
-            activity=activity,
-        ).select_related("personal_account__identity")
-
-        for participant in participants:
-            recipients.add(participant.personal_account.identity)
+        participants = (
+            ActivityComment.objects.filter(activity=activity)
+            .select_related(
+                "personal_account__identity",
+                "institution__identity",
+            )
+        )
     else:
-        thread_comments = ActivityComment.objects.filter(
-            models.Q(id=comment.parent_id) | models.Q(parent_id=comment.parent_id)
-        ).select_related("personal_account__identity")
+        participants = (
+            ActivityComment.objects.filter(
+                models.Q(id=comment.parent_id)
+                | models.Q(parent_id=comment.parent_id)
+            )
+            .select_related(
+                "personal_account__identity",
+                "institution__identity",
+            )
+        )
 
-        for participant in thread_comments:
+    for participant in participants:
+        if participant.personal_account_id:
             recipients.add(participant.personal_account.identity)
+        elif participant.institution_id:
+            recipients.add(participant.institution.identity)
 
+    # Do not notify the person/account that created the comment
     recipients.discard(actor_user)
 
     if comment.parent_id is None:
         notification_type = "activity_comment"
         title = "New Comment on Your Activity"
-        message = (
-            f"{comment.personal_account.display_name or 'Someone'} "
-            "commented on an activity."
-        )
+        message = "Someone commented on an activity."
     else:
         notification_type = "activity_comment_reply"
         title = "New Reply on Activity Comment"
-        message = (
-            f"{comment.personal_account.display_name or 'Someone'} "
-            "replied to an activity comment."
-        )
+        message = "Someone replied to an activity comment."
+
+    # Every Activity notification opens the same Activity page.
+    action_url = f"/activity?activity={activity.id}&comment={comment.id}"
 
     for recipient in recipients:
         create_notification(
@@ -67,7 +125,7 @@ def _notify_activity_comment_participants(*, activity, comment, actor_user):
             title=title,
             message=message,
             source="activity",
-            action_url=f"/activity?activity={activity.id}&comment={comment.id}",
+            action_url=action_url,
             priority="normal",
         )
 
@@ -173,52 +231,83 @@ def activity_create(request):
 @require_http_methods(["GET"])
 @require_authentication
 def activity_feed(request):
-    activities = Activity.objects.filter(
-        is_published=True,
-        personal_account__isnull=False,
-    ).select_related(
-        "personal_account"
-    )[:20]
-
-    return JsonResponse(
-        {
-            "results": [
-                {
-                    "id": activity.id,
-                    "personal_account_id": activity.personal_account_id,
-                    "author": {
-                        "id": activity.personal_account.id,
-                        "display_name": activity.personal_account.display_name,
-                        "username": activity.personal_account.username,
-                        "profile_photo": (
-                            activity.personal_account.profile_photo.url
-                            if activity.personal_account.profile_photo
-                            else ""
-                        ),
-                        "first_name": activity.personal_account.identity.first_name,
-                        "last_name": activity.personal_account.identity.last_name,
-                    },
-                    "category": activity.category,
-                    "activity_type": activity.activity_type,
-                    "content": activity.content,
-                    "liked": ActivityLike.objects.filter(
-                        activity=activity,
-                        personal_account__identity_id=request.authenticated_identity.id,
-                    ).exists(),
-                    "like_count": ActivityLike.objects.filter(
-                        activity=activity
-                    ).count(),
-                    "comment_count": ActivityComment.objects.filter(
-                        activity=activity
-                    ).count(),
-                    "is_published": activity.is_published,
-                    "created_at": activity.created_at,
-                    "updated_at": activity.updated_at,
-                }
-                for activity in activities
-            ]
-        }
+    activities = (
+        Activity.objects.filter(
+            is_published=True
+        )
+        .select_related(
+            "personal_account__identity",
+            "institution__identity",
+        )
+        .order_by("-created_at")[:20]
     )
+
+    results = []
+
+    for activity in activities:
+        if activity.personal_account_id:
+            account = activity.personal_account
+
+            author = {
+                "id": account.id,
+                "display_name": account.display_name,
+                "username": account.username,
+                "profile_photo": (
+                    account.profile_photo.url
+                    if account.profile_photo
+                    else ""
+                ),
+                "first_name": account.identity.first_name,
+                "last_name": account.identity.last_name,
+                "account_type": "personal",
+            }
+
+        elif activity.institution_id:
+            institution = activity.institution
+
+            author = {
+                "id": institution.id,
+                "display_name": institution.institution_name,
+                "username": institution.identity.username,
+                "profile_photo": (
+                    institution.logo.url
+                    if getattr(institution, "logo", None)
+                    else ""
+                ),
+                "first_name": "",
+                "last_name": "",
+                "account_type": "institution",
+            }
+
+        else:
+            continue
+
+        results.append({
+            "id": activity.id,
+            "personal_account_id": activity.personal_account_id,
+            "institution_id": activity.institution_id,
+            "author": author,
+            "category": activity.category,
+            "activity_type": activity.activity_type,
+            "content": activity.content,
+            "liked": ActivityLike.objects.filter(
+                activity=activity,
+                personal_account__identity_id=request.authenticated_identity.id,
+            ).exists(),
+            "like_count": ActivityLike.objects.filter(
+                activity=activity
+            ).count(),
+            "comment_count": ActivityComment.objects.filter(
+                activity=activity
+            ).count(),
+            "is_published": activity.is_published,
+            "created_at": activity.created_at,
+            "updated_at": activity.updated_at,
+        })
+
+    return JsonResponse({
+        "results": results
+    })
 
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
@@ -242,6 +331,18 @@ def activity_comments(request, activity_id):
         ).select_related(
             "personal_account",
             "personal_account__identity",
+            "institution",
+            "institution__identity",
+        ).prefetch_related(
+            Prefetch(
+                "replies",
+                queryset=ActivityComment.objects.select_related(
+                    "personal_account",
+                    "personal_account__identity",
+                    "institution",
+                    "institution__identity",
+                ),
+            )
         )
 
         return JsonResponse(
@@ -254,18 +355,7 @@ def activity_comments(request, activity_id):
                         "content": comment.content,
                         "created_at": comment.created_at,
                         "updated_at": comment.updated_at,
-                        "author": {
-                            "id": comment.personal_account.id,
-                            "display_name": comment.personal_account.display_name,
-                            "username": comment.personal_account.username,
-                            "profile_photo": (
-                                comment.personal_account.profile_photo.url
-                                if comment.personal_account.profile_photo
-                                else ""
-                            ),
-                            "first_name": comment.personal_account.identity.first_name,
-                            "last_name": comment.personal_account.identity.last_name,
-                        },
+                        "author": _serialize_activity_comment_author(comment),
                         "replies": [
                             {
                                 "id": reply.id,
@@ -274,18 +364,7 @@ def activity_comments(request, activity_id):
                                 "content": reply.content,
                                 "created_at": reply.created_at,
                                 "updated_at": reply.updated_at,
-                                "author": {
-                                    "id": reply.personal_account.id,
-                                    "display_name": reply.personal_account.display_name,
-                                    "username": reply.personal_account.username,
-                                    "profile_photo": (
-                                        reply.personal_account.profile_photo.url
-                                        if reply.personal_account.profile_photo
-                                        else ""
-                                    ),
-                                    "first_name": reply.personal_account.identity.first_name,
-                                    "last_name": reply.personal_account.identity.last_name,
-                                },
+                                "author": _serialize_activity_comment_author(reply),
                             }
                             for reply in comment.replies.all()
                         ],
@@ -331,28 +410,67 @@ def activity_comments(request, activity_id):
                 status=404,
             )
 
-    try:
-        personal_account = PersonalAccount.objects.get(
+    personal_account = (
+        PersonalAccount.objects.filter(
             identity_id=request.authenticated_identity.id
-        )
-    except PersonalAccount.DoesNotExist:
+        ).first()
+    )
+
+    institution = (
+        InstitutionProfile.objects.filter(
+            identity_id=request.authenticated_identity.id,
+            is_active=True,
+        ).first()
+    )
+
+    if personal_account is None and institution is None:
         return JsonResponse(
-            {"detail": "Personal account not found."},
+            {"detail": "Account not found."},
             status=404,
         )
 
     comment = ActivityComment.objects.create(
         activity=activity,
         personal_account=personal_account,
+        institution=institution,
         parent=parent,
         content=content,
     )
 
+    actor_user = request.authenticated_identity
+
     _notify_activity_comment_participants(
         activity=activity,
         comment=comment,
-        actor_user=personal_account.identity,
+        actor_user=actor_user,
     )
+
+    if personal_account:
+        author = {
+            "id": personal_account.id,
+            "display_name": personal_account.display_name,
+            "username": personal_account.username,
+            "profile_photo": (
+                personal_account.profile_photo.url
+                if personal_account.profile_photo
+                else ""
+            ),
+            "first_name": personal_account.identity.first_name,
+            "last_name": personal_account.identity.last_name,
+        }
+    else:
+        author = {
+            "id": institution.id,
+            "display_name": institution.institution_name,
+            "username": institution.identity.username,
+            "profile_photo": (
+                institution.logo.url
+                if getattr(institution, "logo", None)
+                else ""
+            ),
+            "first_name": "",
+            "last_name": "",
+        }
 
     return JsonResponse(
         {
@@ -362,18 +480,7 @@ def activity_comments(request, activity_id):
             "content": comment.content,
             "created_at": comment.created_at,
             "updated_at": comment.updated_at,
-            "author": {
-                "id": personal_account.id,
-                "display_name": personal_account.display_name,
-                "username": personal_account.username,
-                "profile_photo": (
-                    personal_account.profile_photo.url
-                    if personal_account.profile_photo
-                    else ""
-                ),
-                "first_name": personal_account.identity.first_name,
-                "last_name": personal_account.identity.last_name,
-            },
+            "author": author,
             "replies": [],
         },
         status=201,

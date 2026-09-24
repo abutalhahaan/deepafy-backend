@@ -30,6 +30,16 @@ urlpatterns = [
         name="activity-create",
     ),
     path(
+        "institution/create/",
+        views.institution_activity_create,
+        name="institution-activity-create",
+    ),
+    path(
+        "institution/<str:username>/",
+        views.institution_activity_feed,
+        name="institution-activity-feed",
+    ),
+    path(
         "<int:activity_id>/comments/",
         views.activity_comments,
         name="activity-comments",

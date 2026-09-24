@@ -11,6 +11,11 @@ urlpatterns = [
         name="signup",
     ),
     path(
+        "institution-signup/",
+        views.institution_signup,
+        name="institution-signup",
+    ),
+    path(
         "login/",
         views.login,
         name="login",
@@ -484,6 +489,11 @@ urlpatterns = [
         "<int:personal_account_id>/interested-categories/<int:category_id>/remove/",
         views.personal_interested_category_remove,
         name="personal-interested-category-remove",
+    ),
+    path(
+        "public-profile/username/<str:username>/",
+        views.public_profile_by_username,
+        name="public-profile-by-username",
     ),
 ]
 
