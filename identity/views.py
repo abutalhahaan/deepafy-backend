@@ -5457,7 +5457,11 @@ def institution_signup(request):
         serializer = InstitutionSignupSerializer(data=data)
         if not serializer.is_valid():
             return JsonResponse({"errors": serializer.errors}, status=400)
-        from institution.models import InstitutionProfile, InstitutionType
+        from institution.models import (
+            InstitutionProfile,
+            InstitutionType,
+            InstitutionAuthority,
+        )
         from companies.models import Country, AdministrativeLocation
         validated = serializer.validated_data
         institution_types = InstitutionType.objects.filter(
@@ -5471,7 +5475,56 @@ def institution_signup(request):
                 status=400,
             )
 
-        country = Country.objects.get(id=validated["country_id"], is_active=True)
+        country = Country.objects.get(
+            id=validated["country_id"],
+            is_active=True,
+        )
+
+        affiliation_ids = validated.get("affiliation_ids", [])
+
+        authorities = InstitutionAuthority.objects.filter(
+            id__in=affiliation_ids,
+            country=country,
+            is_active=True,
+        ).prefetch_related("institution_types")
+
+        valid_type_ids = set(
+            institution_types.values_list("id", flat=True)
+        )
+
+        invalid_authorities = []
+
+        for authority in authorities:
+            authority_type_ids = set(
+                authority.institution_types.values_list("id", flat=True)
+            )
+
+            if not authority_type_ids.intersection(valid_type_ids):
+                invalid_authorities.append(authority.id)
+
+        if invalid_authorities:
+            return JsonResponse(
+                {
+                    "errors": {
+                        "affiliation_ids": [
+                            "One or more selected authorities are not valid for the selected institution type."
+                        ]
+                    }
+                },
+                status=400,
+            )
+
+        if len(authorities) != len(set(affiliation_ids)):
+            return JsonResponse(
+                {
+                    "errors": {
+                        "affiliation_ids": [
+                            "One or more selected authorities are invalid or inactive."
+                        ]
+                    }
+                },
+                status=400,
+            )
         administrative_location = None
         location_id = validated.get("administrative_location_id")
         if location_id:
@@ -5489,6 +5542,8 @@ def institution_signup(request):
                 institution_name=validated["institution_name"],
                 institution_type=institution_types.first(),
                 established_year=validated.get("established_year"),
+                management_type=validated.get("management_type", ""),
+                mpo_status=validated.get("mpo_status", ""),
                 tagline=validated.get("tagline", ""),
                 description=validated.get("description", ""),
                 country=country,
@@ -5500,6 +5555,7 @@ def institution_signup(request):
             )
 
             institution_profile.institution_types.set(institution_types)
+            institution_profile.affiliations.set(authorities)
         refresh = RefreshToken.for_user(identity)
         return JsonResponse({"message": "Institution account created successfully.", "access": str(refresh.access_token), "refresh": str(refresh), "user": serialize_identity(identity), "account_type": "institution"}, status=201)
     except json.JSONDecodeError:

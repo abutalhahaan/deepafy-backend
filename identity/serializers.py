@@ -449,11 +449,36 @@ class InstitutionSignupSerializer(serializers.Serializer):
         allow_empty=False,
     )
 
+    affiliation_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        allow_empty=True,
+    )
+
     country_id = serializers.IntegerField()
 
     established_year = serializers.IntegerField(
         required=False,
         allow_null=True,
+    )
+
+    management_type = serializers.ChoiceField(
+        choices=[
+            ("government", "Government"),
+            ("non_government", "Non-Government"),
+        ],
+        required=False,
+        allow_blank=True,
+    )
+
+    mpo_status = serializers.ChoiceField(
+        choices=[
+            ("mpo", "MPO"),
+            ("non_mpo", "Non-MPO"),
+            ("not_applicable", "Not Applicable"),
+        ],
+        required=False,
+        allow_blank=True,
     )
 
     tagline = serializers.CharField(

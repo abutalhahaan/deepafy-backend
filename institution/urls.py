@@ -2,6 +2,7 @@ from django.urls import path
 
 from .views import (
     institution_type_list,
+    institution_authority_list,
     institution_profile_by_username,
     institution_appearance_update, institution_profile_update,
 )
@@ -27,5 +28,10 @@ urlpatterns = [
         "types/",
         institution_type_list,
         name="institution-type-list",
+    ),
+    path(
+        "authorities/",
+        institution_authority_list,
+        name="institution-authority-list",
     ),
 ]
