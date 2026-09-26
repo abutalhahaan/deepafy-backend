@@ -1,12 +1,125 @@
-from rest_framework.decorators import api_view, permission_classes
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication
+from urllib.parse import urlparse, parse_qs
+import re
+import json
 
 from core.services.feature_access import get_feature_access
-from .models import InstitutionTypeGroup, InstitutionProfile
+from .models import InstitutionTypeGroup, InstitutionProfile, InstitutionAuthority
+from .models import InstitutionAuthority
+
+
+def extract_map_coordinates(map_url):
+    decoded_url = map_url.replace('\u0026', '&')
+    parsed = urlparse(decoded_url)
+    query_params = parse_qs(parsed.query)
+
+    def valid_coordinates(lat, lon):
+        try:
+            lat_value = float(lat)
+            lon_value = float(lon)
+        except (TypeError, ValueError):
+            return None
+
+        if -90 <= lat_value <= 90 and -180 <= lon_value <= 180:
+            return lat_value, lon_value
+        return None
+
+    coordinate_pattern = re.compile(
+        r'(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)'
+    )
+
+    for key in ('center', 'll', 'q', 'query'):
+        for value in query_params.get(key, []):
+            match = coordinate_pattern.search(value)
+            if match:
+                coordinates = valid_coordinates(match.group(1), match.group(2))
+                if coordinates:
+                    return coordinates
+
+    match = re.search(
+        r'/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)',
+        decoded_url,
+    )
+    if match:
+        coordinates = valid_coordinates(match.group(1), match.group(2))
+        if coordinates:
+            return coordinates
+
+    match = coordinate_pattern.search(decoded_url)
+    if match:
+        coordinates = valid_coordinates(match.group(1), match.group(2))
+        if coordinates:
+            return coordinates
+
+    return None
+
+
+@api_view(["GET"])
+def institution_authority_list(request):
+    """
+    Return active authorities/boards configured for an
+    institution's country and institution type.
+    """
+
+    country_id = request.GET.get("country")
+    institution_type_id = request.GET.get("institution_type")
+
+    queryset = InstitutionAuthority.objects.filter(
+        is_active=True
+    ).prefetch_related(
+        "institution_types"
+    )
+
+    if country_id:
+        queryset = queryset.filter(
+            country_id=country_id
+        )
+
+    if institution_type_id:
+        queryset = queryset.filter(
+            institution_types__id=institution_type_id
+        ).distinct()
+
+    result = {
+        "education_boards": [],
+        "academic_affiliations": [],
+        "regulatory_authorities": [],
+        "governing_authorities": [],
+    }
+
+    for authority in queryset.order_by(
+        "display_order",
+        "name",
+    ):
+        item = {
+            "id": authority.id,
+            "name": authority.name,
+            "short_name": authority.short_name,
+            "code": authority.code,
+            "relationship_type": authority.relationship_type,
+        }
+
+        if authority.relationship_type == "education_board":
+            result["education_boards"].append(item)
+
+        elif authority.relationship_type == "academic_affiliation":
+            result["academic_affiliations"].append(item)
+
+        elif authority.relationship_type == "regulatory_authority":
+            result["regulatory_authorities"].append(item)
+
+        elif authority.relationship_type == "governing_authority":
+            result["governing_authorities"].append(item)
+
+    return Response({
+        "country": country_id,
+        "institution_type": institution_type_id,
+        "results": result,
+    })
 
 
 @api_view(["GET"])
@@ -105,6 +218,36 @@ def institution_profile_by_username(request, username):
             "established_year": profile.established_year,
             "tagline": profile.tagline,
             "description": profile.description,
+            "mission": profile.mission,
+            "vision": profile.vision,
+            "total_students": profile.total_students,
+            "total_teachers": profile.total_teachers,
+            "total_staff": profile.total_staff,
+            "teacher_student_ratio": (
+                round(profile.total_students / profile.total_teachers, 2)
+                if profile.total_students is not None and profile.total_teachers
+                else None
+            ),
+            "management_type": profile.management_type,
+            "mpo_status": profile.mpo_status,
+            "institution_code": profile.institution_code,
+            "eiin": profile.eiin,
+            "affiliation_board": profile.affiliation_board,
+            "affiliations": [
+                {
+                    "id": authority.id,
+                    "name": authority.name,
+                    "short_name": authority.short_name,
+                    "code": authority.code,
+                    "relationship_type": authority.relationship_type,
+                }
+                for authority in profile.affiliations.filter(is_active=True).order_by(
+                    "display_order", "name"
+                )
+            ],
+            "map_location_url": profile.map_location_url,
+            "map_latitude": float(profile.map_latitude) if profile.map_latitude is not None else None,
+            "map_longitude": float(profile.map_longitude) if profile.map_longitude is not None else None,
             "country": {
                 "id": profile.country.id,
                 "name": profile.country.name,
@@ -130,6 +273,9 @@ def institution_profile_by_username(request, username):
             else None,
             "cover_photo": request.build_absolute_uri(profile.cover_photo.url)
             if profile.cover_photo
+            else None,
+            "featured_image": request.build_absolute_uri(profile.featured_image.url)
+            if profile.featured_image
             else None,
             "background_color": profile.background_color,
             "background_image": (
@@ -211,6 +357,10 @@ def institution_appearance_update(request):
         profile.logo = request.FILES["logo"]
         update_fields.append("logo")
 
+    if "featured_image" in request.FILES:
+        profile.featured_image = request.FILES["featured_image"]
+        update_fields.append("featured_image")
+
     profile.save(update_fields=update_fields)
 
     return Response({
@@ -223,6 +373,11 @@ def institution_appearance_update(request):
         "cover_photo": (
             request.build_absolute_uri(profile.cover_photo.url)
             if profile.cover_photo
+            else None
+        ),
+        "featured_image": (
+            request.build_absolute_uri(profile.featured_image.url)
+            if profile.featured_image
             else None
         ),
         "logo": (
@@ -253,6 +408,16 @@ def institution_profile_update(request):
         "established_year",
         "tagline",
         "description",
+        "mission",
+        "vision",
+        "total_students",
+        "total_teachers",
+        "total_staff",
+        "management_type",
+        "mpo_status",
+        "institution_code",
+        "eiin",
+        "affiliation_board",
         "full_address",
         "website",
         "email",
@@ -265,6 +430,15 @@ def institution_profile_update(request):
 
     if "institution_types" in request.data:
         values = request.data.get("institution_types")
+
+        if isinstance(values, str):
+            try:
+                values = json.loads(values)
+            except json.JSONDecodeError:
+                return Response(
+                    {"detail": "Invalid institution types format."},
+                    status=400,
+                )
 
         if not isinstance(values, list):
             return Response(
@@ -314,6 +488,166 @@ def institution_profile_update(request):
             int(value) if value not in [None, ""] else None
         )
 
+    if "affiliation_ids" in request.data:
+        values = request.data.get("affiliation_ids")
+
+        if isinstance(values, str):
+            try:
+                values = json.loads(values)
+            except json.JSONDecodeError:
+                return Response(
+                    {"detail": "Invalid affiliation IDs format."},
+                    status=400,
+                )
+
+        if not isinstance(values, list):
+            return Response(
+                {"detail": "Affiliation IDs must be a list."},
+                status=400,
+            )
+
+        try:
+            affiliation_ids = [
+                int(value)
+                for value in values
+                if value not in [None, ""]
+            ]
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Invalid affiliation ID."},
+                status=400,
+            )
+
+        authorities = InstitutionAuthority.objects.filter(
+            id__in=affiliation_ids,
+            country_id=profile.country_id,
+            is_active=True,
+        )
+
+        if len(affiliation_ids) != authorities.count():
+            return Response(
+                {
+                    "detail": (
+                        "One or more selected affiliations are invalid "
+                        "for this institution's country."
+                    )
+                },
+                status=400,
+            )
+
+        profile.affiliations.set(authorities)
+
+    if "featured_image" in request.FILES:
+        profile.featured_image = request.FILES["featured_image"]
+
+    if "map_location_url" in request.data:
+        map_location_url = str(request.data.get("map_location_url") or "").strip()
+
+        if not map_location_url:
+            profile.map_location_url = ""
+            profile.map_latitude = None
+            profile.map_longitude = None
+        else:
+            parsed_url = urlparse(map_location_url)
+
+            if parsed_url.scheme not in ("http", "https") or not parsed_url.netloc:
+                return Response(
+                    {"detail": "Enter a valid map location URL."},
+                    status=400,
+                )
+
+            coordinates = extract_map_coordinates(map_location_url)
+
+            if not coordinates:
+                return Response(
+                    {
+                        "detail": "Could not extract latitude and longitude from the map URL. Please use a map URL containing coordinates."
+                    },
+                    status=400,
+                )
+
+            profile.map_location_url = map_location_url
+            profile.map_latitude = coordinates[0]
+            profile.map_longitude = coordinates[1]
+
+    # Admin-controlled Authority / Affiliation
+    if "affiliation_ids" in request.data:
+        from institution.models import InstitutionAuthority
+
+        raw_affiliation_ids = request.data.get("affiliation_ids")
+
+        if isinstance(raw_affiliation_ids, str):
+            try:
+                raw_affiliation_ids = json.loads(raw_affiliation_ids)
+            except json.JSONDecodeError:
+                return Response(
+                    {"detail": "Invalid affiliation IDs format."},
+                    status=400,
+                )
+
+        if raw_affiliation_ids in [None, ""]:
+            raw_affiliation_ids = []
+
+        if not isinstance(raw_affiliation_ids, list):
+            return Response(
+                {"detail": "Affiliation IDs must be a list."},
+                status=400,
+            )
+
+        try:
+            affiliation_ids = [
+                int(value)
+                for value in raw_affiliation_ids
+                if value not in [None, ""]
+            ]
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Invalid affiliation ID."},
+                status=400,
+            )
+
+        authorities = InstitutionAuthority.objects.filter(
+            id__in=affiliation_ids,
+            country_id=profile.country_id,
+            is_active=True,
+        ).prefetch_related("institution_types")
+
+        selected_type_ids = set(
+            profile.institution_types.values_list("id", flat=True)
+        )
+
+        invalid_authorities = []
+
+        for authority in authorities:
+            authority_type_ids = set(
+                authority.institution_types.values_list("id", flat=True)
+            )
+
+            if not authority_type_ids.intersection(selected_type_ids):
+                invalid_authorities.append(authority.id)
+
+        if invalid_authorities:
+            return Response(
+                {
+                    "detail": (
+                        "One or more selected authorities are not valid "
+                        "for the selected institution type."
+                    )
+                },
+                status=400,
+            )
+
+        if len(authorities) != len(set(affiliation_ids)):
+            return Response(
+                {"detail": "One or more affiliations are invalid or inactive."},
+                status=400,
+            )
+
+        profile.affiliations.set(authorities)
+
+        # New Authority/Affiliation system is now the source of truth.
+        profile.affiliation_board = ""
+
     profile.save()
 
     return Response({
@@ -325,6 +659,39 @@ def institution_profile_update(request):
         "established_year": profile.established_year,
         "tagline": profile.tagline,
         "description": profile.description,
+        "mission": profile.mission,
+        "vision": profile.vision,
+        "featured_image": (
+            request.build_absolute_uri(profile.featured_image.url)
+            if profile.featured_image
+            else None
+        ),
+        "total_students": profile.total_students,
+        "total_teachers": profile.total_teachers,
+        "total_staff": profile.total_staff,
+        "teacher_student_ratio": (
+            round(profile.total_students / profile.total_teachers, 2)
+            if profile.total_students is not None and profile.total_teachers
+            else None
+        ),
+        "management_type": profile.management_type,
+        "mpo_status": profile.mpo_status,
+        "institution_code": profile.institution_code,
+        "eiin": profile.eiin,
+        "affiliation_board": profile.affiliation_board,
+        "affiliations": [
+            {
+                "id": authority.id,
+                "name": authority.name,
+                "short_name": authority.short_name,
+                "code": authority.code,
+                "relationship_type": authority.relationship_type,
+            }
+            for authority in profile.affiliations.all()
+        ],
+        "map_location_url": profile.map_location_url,
+        "map_latitude": float(profile.map_latitude) if profile.map_latitude is not None else None,
+        "map_longitude": float(profile.map_longitude) if profile.map_longitude is not None else None,
         "country": profile.country_id,
         "administrative_location": profile.administrative_location_id,
         "full_address": profile.full_address,

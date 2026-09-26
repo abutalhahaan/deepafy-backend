@@ -36,6 +36,67 @@ class InstitutionType(models.Model):
         return f"{self.group.name} - {self.name}"
 
 
+class InstitutionAffiliationType(models.TextChoices):
+    EDUCATION_BOARD = "education_board", "Education Board"
+    ACADEMIC_AFFILIATION = "academic_affiliation", "Academic Affiliation"
+    REGULATORY_AUTHORITY = "regulatory_authority", "Regulatory Authority"
+    GOVERNING_AUTHORITY = "governing_authority", "Governing Authority"
+
+
+class InstitutionAuthority(models.Model):
+    country = models.ForeignKey(
+        "organization.Country",
+        on_delete=models.PROTECT,
+        related_name="institution_authorities",
+    )
+
+    institution_types = models.ManyToManyField(
+        InstitutionType,
+        related_name="authorities",
+        blank=True,
+    )
+
+    name = models.CharField(max_length=255)
+
+    short_name = models.CharField(
+        max_length=100,
+        blank=True,
+    )
+
+    relationship_type = models.CharField(
+        max_length=40,
+        choices=InstitutionAffiliationType.choices,
+    )
+
+    code = models.CharField(
+        max_length=100,
+        blank=True,
+    )
+
+    is_active = models.BooleanField(default=True)
+
+    display_order = models.PositiveIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["display_order", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "country",
+                    "name",
+                    "relationship_type",
+                ],
+                name="unique_country_authority_relationship",
+            )
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class InstitutionProfile(models.Model):
     identity = models.OneToOneField(
         "identity.UserIdentity",
@@ -59,6 +120,12 @@ class InstitutionProfile(models.Model):
         blank=True,
     )
 
+    affiliations = models.ManyToManyField(
+        InstitutionAuthority,
+        related_name="institution_profiles",
+        blank=True,
+    )
+
     established_year = models.PositiveSmallIntegerField(
         null=True,
         blank=True,
@@ -70,6 +137,82 @@ class InstitutionProfile(models.Model):
     )
 
     description = models.TextField(
+        blank=True,
+    )
+
+    mission = models.TextField(
+        blank=True,
+    )
+
+    vision = models.TextField(
+        blank=True,
+    )
+
+    total_students = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+    )
+
+    total_teachers = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+    )
+
+    total_staff = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+    )
+
+    management_type = models.CharField(
+        max_length=30,
+        blank=True,
+        choices=[
+            ('government', 'Government'),
+            ('non_government', 'Non-Government'),
+        ],
+    )
+
+    mpo_status = models.CharField(
+        max_length=30,
+        blank=True,
+        choices=[
+            ('mpo', 'MPO'),
+            ('non_mpo', 'Non-MPO'),
+            ('not_applicable', 'Not Applicable'),
+        ],
+    )
+
+    institution_code = models.CharField(
+        max_length=100,
+        blank=True,
+    )
+
+    eiin = models.CharField(
+        max_length=50,
+        blank=True,
+    )
+
+    affiliation_board = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    map_location_url = models.URLField(
+        max_length=1000,
+        blank=True,
+    )
+
+    map_latitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        null=True,
+        blank=True,
+    )
+
+    map_longitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        null=True,
         blank=True,
     )
 
@@ -112,6 +255,12 @@ class InstitutionProfile(models.Model):
 
     cover_photo = models.ImageField(
         upload_to="institution_covers/",
+        null=True,
+        blank=True,
+    )
+
+    featured_image = models.ImageField(
+        upload_to="institution_featured/",
         null=True,
         blank=True,
     )
