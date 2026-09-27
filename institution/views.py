@@ -1,3 +1,4 @@
+from rest_framework import status
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -8,7 +9,7 @@ import re
 import json
 
 from core.services.feature_access import get_feature_access
-from .models import InstitutionTypeGroup, InstitutionProfile, InstitutionAuthority
+from .models import InstitutionTypeGroup, InstitutionProfile, InstitutionAuthority, InstitutionAcademicData, InstitutionAcademicLevel
 from .models import InstitutionAuthority
 
 
@@ -699,3 +700,315 @@ def institution_profile_update(request):
         "email": profile.email,
         "phone": profile.phone,
     })
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_academic_levels(request):
+    """
+    GET:
+        Return all academic levels for the authenticated institution.
+
+    POST:
+        Create a new academic level.
+    """
+
+    institution = getattr(
+        request.user,
+        "institution_profile",
+        None,
+    )
+
+    if institution is None:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "GET":
+        levels = InstitutionAcademicLevel.objects.filter(
+            institution=institution
+        )
+
+        return Response(
+            [
+                {
+                    "id": level.id,
+                    "type": level.level_type,
+                    "name": level.name,
+                    "parent": level.parent or None,
+                }
+                for level in levels
+            ],
+            status=status.HTTP_200_OK,
+        )
+
+    level_type = str(
+        request.data.get("type", "Class")
+    ).strip() or "Class"
+
+    name = str(
+        request.data.get("name", "")
+    ).strip()
+
+    parent = str(
+        request.data.get("parent", "")
+    ).strip()
+
+    if not name:
+        return Response(
+            {"detail": "Level name is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    level, created = InstitutionAcademicLevel.objects.get_or_create(
+        institution=institution,
+        level_type=level_type,
+        name=name,
+        parent=parent,
+    )
+
+    return Response(
+        {
+            "id": level.id,
+            "type": level.level_type,
+            "name": level.name,
+            "parent": level.parent or None,
+            "created": created,
+        },
+        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+    )
+
+
+@api_view(["DELETE"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_academic_level_delete(request, level_id):
+
+    institution = getattr(
+        request.user,
+        "institution_profile",
+        None,
+    )
+
+    if institution is None:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    level = InstitutionAcademicLevel.objects.filter(
+        id=level_id,
+        institution=institution,
+    ).first()
+
+    if level is None:
+        return Response(
+            {"detail": "Academic level not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    level.delete()
+
+    return Response(
+        {"detail": "Academic level deleted successfully."},
+        status=status.HTTP_204_NO_CONTENT,
+    )
+
+@api_view(["GET", "POST", "PUT"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+
+def institution_academic_data(request):
+    """
+    GET:
+        Return academic data for the authenticated institution.
+
+    POST/PUT:
+        Create or update academic data for a date + category.
+    """
+
+    try:
+        profile = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=404,
+        )
+
+    if request.method == "GET":
+        date = request.query_params.get("date")
+        category = request.query_params.get("category")
+
+        queryset = InstitutionAcademicData.objects.filter(
+            institution=profile
+        )
+
+        if date:
+            queryset = queryset.filter(date=date)
+
+        if category:
+            queryset = queryset.filter(category=category)
+
+        data = [
+            {
+                "id": item.id,
+                "date": item.date.isoformat(),
+                "category": item.category,
+                "total": item.total,
+                "male": item.male,
+                "female": item.female,
+                "male_present": item.male_present,
+                "male_leave": item.male_leave,
+                "female_present": item.female_present,
+                "female_leave": item.female_leave,
+                "present": item.present,
+                "leave": item.leave,
+                "absent": item.absent,
+            }
+            for item in queryset
+        ]
+
+        return Response({"results": data})
+
+    data = request.data
+
+    date = data.get("date")
+    category = data.get("category")
+
+    if not date:
+        return Response(
+            {"detail": "Date is required."},
+            status=400,
+        )
+
+    if not category:
+        return Response(
+            {"detail": "Category is required."},
+            status=400,
+        )
+
+    numeric_fields = [
+        "total",
+        "male",
+        "female",
+        "male_present",
+        "male_leave",
+        "female_present",
+        "female_leave",
+    ]
+
+    values = {}
+
+    for field in numeric_fields:
+        value = data.get(field)
+
+        if value in [None, ""]:
+            return Response(
+                {"detail": f"{field} is required."},
+                status=400,
+            )
+
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": f"{field} must be an integer."},
+                status=400,
+            )
+
+        if value < 0:
+            return Response(
+                {"detail": f"{field} cannot be negative."},
+                status=400,
+            )
+
+        values[field] = value
+
+    if values["male"] + values["female"] != values["total"]:
+        return Response(
+            {"detail": "Male + Female must equal Total."},
+            status=400,
+        )
+
+    if (
+        values["male_present"] + values["male_leave"]
+        > values["male"]
+    ):
+        return Response(
+            {
+                "detail":
+                    "Male Present + Male Leave cannot exceed Total Male."
+            },
+            status=400,
+        )
+
+    if (
+        values["female_present"] + values["female_leave"]
+        > values["female"]
+    ):
+        return Response(
+            {
+                "detail":
+                    "Female Present + Female Leave cannot exceed Total Female."
+            },
+            status=400,
+        )
+
+    male_absent = (
+        values["male"]
+        - values["male_present"]
+        - values["male_leave"]
+    )
+
+    female_absent = (
+        values["female"]
+        - values["female_present"]
+        - values["female_leave"]
+    )
+
+    values["present"] = (
+        values["male_present"]
+        + values["female_present"]
+    )
+
+    values["leave"] = (
+        values["male_leave"]
+        + values["female_leave"]
+    )
+
+    values["absent"] = (
+        male_absent
+        + female_absent
+    )
+
+    academic_data, created = InstitutionAcademicData.objects.update_or_create(
+        institution=profile,
+        date=date,
+        category=category,
+        defaults=values,
+    )
+
+    return Response(
+        {
+            "id": academic_data.id,
+            "date": academic_data.date.isoformat(),
+            "category": academic_data.category,
+            "total": academic_data.total,
+            "male": academic_data.male,
+            "female": academic_data.female,
+            "male_present": academic_data.male_present,
+            "male_leave": academic_data.male_leave,
+            "female_present": academic_data.female_present,
+            "female_leave": academic_data.female_leave,
+            "present": academic_data.present,
+            "leave": academic_data.leave,
+            "absent": academic_data.absent,
+            "created": created,
+        },
+        status=201 if created else 200,
+    )

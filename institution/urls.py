@@ -4,7 +4,11 @@ from .views import (
     institution_type_list,
     institution_authority_list,
     institution_profile_by_username,
-    institution_appearance_update, institution_profile_update,
+    institution_appearance_update,
+    institution_profile_update,
+    institution_academic_data,
+    institution_academic_levels,
+    institution_academic_level_delete,
 )
 
 
@@ -33,5 +37,20 @@ urlpatterns = [
         "authorities/",
         institution_authority_list,
         name="institution-authority-list",
+    ),
+    path(
+        "academic/levels/",
+        institution_academic_levels,
+        name="institution-academic-levels",
+    ),
+    path(
+        "academic/levels/<int:level_id>/",
+        institution_academic_level_delete,
+        name="institution-academic-level-delete",
+    ),
+    path(
+        "academic/",
+        institution_academic_data,
+        name="institution-academic-data",
     ),
 ]
