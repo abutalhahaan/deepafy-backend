@@ -97,6 +97,116 @@ class InstitutionAuthority(models.Model):
         return self.name
 
 
+class InstitutionAcademicLevel(models.Model):
+    institution = models.ForeignKey(
+        "InstitutionProfile",
+        on_delete=models.CASCADE,
+        related_name="academic_levels",
+    )
+
+    level_type = models.CharField(
+        max_length=50,
+        default="Class",
+    )
+
+    name = models.CharField(
+        max_length=100,
+    )
+
+    parent = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["created_at", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "institution",
+                    "level_type",
+                    "name",
+                    "parent",
+                ],
+                name="unique_institution_academic_level",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["institution", "level_type"],
+                name="academic_level_inst_type_idx",
+            ),
+            models.Index(
+                fields=["institution", "name"],
+                name="academic_level_inst_name_idx",
+            ),
+        ]
+
+    def __str__(self):
+        if self.parent:
+            return f"{self.level_type}: {self.name} ({self.parent})"
+        return f"{self.level_type}: {self.name}"
+
+
+class InstitutionAcademicData(models.Model):
+    institution = models.ForeignKey(
+        "InstitutionProfile",
+        on_delete=models.CASCADE,
+        related_name="academic_data",
+    )
+
+    date = models.DateField()
+
+    category = models.CharField(
+        max_length=100,
+        help_text="Students, Teachers, Staff, Class 1, Class 2, etc.",
+    )
+
+    total = models.PositiveIntegerField(default=0)
+    male = models.PositiveIntegerField(default=0)
+    female = models.PositiveIntegerField(default=0)
+
+    # Daily gender-wise attendance
+    male_present = models.PositiveIntegerField(default=0)
+    male_leave = models.PositiveIntegerField(default=0)
+    female_present = models.PositiveIntegerField(default=0)
+    female_leave = models.PositiveIntegerField(default=0)
+
+    # Calculated aggregate attendance
+    present = models.PositiveIntegerField(default=0)
+    leave = models.PositiveIntegerField(default=0)
+    absent = models.PositiveIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date", "category"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["institution", "date", "category"],
+                name="unique_institution_academic_date_category",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["institution", "date"],
+                name="academic_institution_date_idx",
+            ),
+            models.Index(
+                fields=["institution", "category"],
+                name="academic_inst_cat_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.institution.institution_name} - {self.category} - {self.date}"
+
+
 class InstitutionProfile(models.Model):
     identity = models.OneToOneField(
         "identity.UserIdentity",
