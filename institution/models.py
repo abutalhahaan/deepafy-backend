@@ -1,6 +1,52 @@
 from django.db import models
 
 
+class Subject(models.Model):
+    """
+    Global Deepafy subject master.
+
+    An institution can create a new subject. Once created,
+    the subject becomes available to other institutions
+    for selection.
+    """
+
+    name = models.CharField(
+        max_length=255,
+        unique=True,
+    )
+
+    code = models.CharField(
+        max_length=100,
+        blank=True,
+    )
+
+    created_by_institution = models.ForeignKey(
+        "InstitutionProfile",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_subjects",
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
 class InstitutionTypeGroup(models.Model):
     name = models.CharField(max_length=100, unique=True)
     sort_order = models.PositiveIntegerField(default=0)
@@ -411,4 +457,235 @@ class InstitutionProfile(models.Model):
         return (
             self.institution_name
             or f"Institution - {self.identity.user_id}"
+        )
+
+
+class UnclaimedPerson(models.Model):
+    STATUS_RUNNING = "RUNNING"
+    STATUS_FORMER = "FORMER"
+    STATUS_RETIRED = "RETIRED"
+    STATUS_IN_MEMORY = "IN_MEMORY"
+
+    STATUS_CHOICES = [
+        (STATUS_RUNNING, "Running"),
+        (STATUS_FORMER, "Former Staff"),
+        (STATUS_RETIRED, "Retired Alumni"),
+        (STATUS_IN_MEMORY, "In Memory"),
+    ]
+
+    institution = models.ForeignKey(
+        InstitutionProfile,
+        on_delete=models.CASCADE,
+        related_name="unclaimed_people",
+    )
+
+    full_name = models.CharField(max_length=255)
+
+    profile_photo = models.ImageField(
+        upload_to="institution_staff/unclaimed/",
+        null=True,
+        blank=True,
+    )
+
+    designation = models.CharField(max_length=255)
+    department = models.CharField(max_length=255, blank=True)
+    employment_type = models.CharField(max_length=100, blank=True)
+    joining_date = models.DateField()
+    retirement_date = models.DateField(null=True, blank=True)
+    leaving_date = models.DateField(null=True, blank=True)
+    passing_date = models.DateField(null=True, blank=True)
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_RUNNING,
+    )
+
+    bio = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-joining_date", "full_name"]
+        indexes = [
+            models.Index(
+                fields=["institution", "status"],
+                name="unclaimed_status_idx",
+            ),
+            models.Index(
+                fields=["institution", "full_name"],
+                name="unclaimed_name_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.full_name} - {self.designation} - "
+            f"{self.institution.institution_name}"
+        )
+
+
+class UnclaimedPersonQualification(models.Model):
+    """
+    Educational qualification for a manually added institution staff member.
+    One UnclaimedPerson can have multiple qualifications.
+    """
+
+    person = models.ForeignKey(
+        UnclaimedPerson,
+        on_delete=models.CASCADE,
+        related_name="educational_qualifications",
+    )
+
+    education_level = models.CharField(max_length=100)
+    degree_certificate = models.CharField(max_length=255)
+    field_of_study = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+    specialization = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+    start_year = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+    )
+    end_year = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-end_year", "-start_year", "id"]
+
+    def __str__(self):
+        return (
+            f"{self.person.full_name} - "
+            f"{self.degree_certificate}"
+        )
+
+
+class InstitutionStaffService(models.Model):
+    """
+    Institution-specific employment/service record for a Deepafy Identity.
+
+    The Identity represents the person globally.
+    This model represents that person's service at one institution.
+    """
+
+    STATUS_RUNNING = "RUNNING"
+    STATUS_FORMER = "FORMER"
+    STATUS_RETIRED = "RETIRED"
+    STATUS_IN_MEMORY = "IN_MEMORY"
+
+    STATUS_CHOICES = [
+        (STATUS_RUNNING, "Running"),
+        (STATUS_FORMER, "Former Staff"),
+        (STATUS_RETIRED, "Retired Alumni"),
+        (STATUS_IN_MEMORY, "In Memory"),
+    ]
+
+    institution = models.ForeignKey(
+        InstitutionProfile,
+        on_delete=models.CASCADE,
+        related_name="staff_services",
+    )
+
+    identity = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.PROTECT,
+        related_name="institution_staff_services",
+    )
+
+    subjects = models.ManyToManyField(
+        Subject,
+        related_name="staff_services",
+        blank=True,
+    )
+
+    designation = models.CharField(
+        max_length=255,
+    )
+
+    department = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    employment_type = models.CharField(
+        max_length=100,
+        blank=True,
+    )
+
+    joining_date = models.DateField()
+
+    retirement_date = models.DateField(
+        null=True,
+        blank=True,
+    )
+
+    leaving_date = models.DateField(
+        null=True,
+        blank=True,
+    )
+
+    passing_date = models.DateField(
+        null=True,
+        blank=True,
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_RUNNING,
+    )
+
+    bio = models.TextField(
+        blank=True,
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        ordering = [
+            "-joining_date",
+            "identity_id",
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["institution", "identity"],
+                name="unique_institution_staff_identity",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["institution", "status"],
+                name="inst_staff_status_idx",
+            ),
+            models.Index(
+                fields=["identity", "status"],
+                name="identity_staff_status_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.identity.username or self.identity.user_id} - "
+            f"{self.designation} - "
+            f"{self.institution.institution_name}"
         )

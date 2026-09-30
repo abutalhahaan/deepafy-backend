@@ -9,8 +9,649 @@ import re
 import json
 
 from core.services.feature_access import get_feature_access
-from .models import InstitutionTypeGroup, InstitutionProfile, InstitutionAuthority, InstitutionAcademicData, InstitutionAcademicLevel
-from .models import InstitutionAuthority
+from .models import (
+    InstitutionTypeGroup,
+    InstitutionProfile,
+    InstitutionAuthority,
+    InstitutionAcademicData,
+    InstitutionAcademicLevel,
+    InstitutionStaffService,
+    UnclaimedPerson,
+    UnclaimedPersonQualification,
+    Subject,
+)
+from identity.models import UserIdentity, AcademicBackground
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([AllowAny])
+def institution_subjects(request):
+    """
+    List active global subjects or create a new global subject.
+
+    An authenticated institution owner can create a subject.
+    Once created, the subject becomes available globally.
+    """
+
+    if request.method == "GET":
+        query = str(request.query_params.get("q") or "").strip()
+
+        subjects = Subject.objects.filter(
+            is_active=True,
+        )
+
+        if query:
+            subjects = subjects.filter(
+                name__icontains=query,
+            )
+
+        subjects = subjects.order_by("name")[:50]
+
+        return Response({
+            "count": subjects.count(),
+            "results": [
+                {
+                    "id": subject.id,
+                    "name": subject.name,
+                    "code": subject.code,
+                }
+                for subject in subjects
+            ],
+        })
+
+    if not request.user or not request.user.is_authenticated:
+        return Response(
+            {"detail": "Authentication credentials are required."},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    try:
+        profile = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    data = request.data
+
+    name = str(data.get("name") or "").strip()
+    code = str(data.get("code") or "").strip()
+
+    if not name:
+        return Response(
+            {"detail": "Subject name is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    existing = Subject.objects.filter(
+        name__iexact=name,
+    ).first()
+
+    if existing:
+        return Response(
+            {
+                "detail": "This subject already exists.",
+                "subject": {
+                    "id": existing.id,
+                    "name": existing.name,
+                    "code": existing.code,
+                },
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    subject = Subject.objects.create(
+        name=name,
+        code=code,
+        created_by_institution=profile,
+    )
+
+    return Response(
+        {
+            "id": subject.id,
+            "name": subject.name,
+            "code": subject.code,
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_staff_services(request):
+    """
+    List or create institution-specific staff service records.
+
+    The authenticated user must own the institution profile.
+    """
+
+    try:
+        profile = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "GET":
+        services = (
+            InstitutionStaffService.objects
+            .filter(
+                institution=profile,
+                is_active=True,
+            )
+            .select_related("identity", "identity__personal_account")
+            .order_by("-joining_date", "identity_id")
+        )
+
+        results = [
+            {
+                "id": service.id,
+                "identity_id": service.identity_id,
+                "username": service.identity.username,
+                "first_name": service.identity.first_name,
+                "last_name": service.identity.last_name,
+                "profile_photo": (
+                    service.identity.personal_account.profile_photo.url
+                    if (
+                        hasattr(service.identity, "personal_account")
+                        and service.identity.personal_account.profile_photo
+                    )
+                    else None
+                ),
+                "cover_photo": (
+                    service.identity.personal_account.cover_photo.url
+                    if (
+                        hasattr(service.identity, "personal_account")
+                        and service.identity.personal_account.cover_photo
+                    )
+                    else None
+                ),
+                "educational_qualifications": [
+                    {
+                        "education_level": academic.education_level,
+                        "degree_certificate": academic.degree_certificate,
+                        "field_of_study": academic.field_of_study,
+                        "specialization": academic.specialization,
+                        "start_year": academic.start_year,
+                        "end_year": academic.end_year,
+                    }
+                    for academic in AcademicBackground.objects.filter(
+                        personal_account__identity=service.identity,
+                        visibility=AcademicBackground.Visibility.PUBLIC,
+                        is_active=True,
+                    ).order_by(
+                        "display_order",
+                        "-end_year",
+                        "-start_year",
+                    )
+                ],
+                "designation": service.designation,
+                "department": service.department,
+                "employment_type": service.employment_type,
+                "joining_date": service.joining_date,
+                "retirement_date": service.retirement_date,
+                "leaving_date": service.leaving_date,
+                "passing_date": service.passing_date,
+                "status": service.status,
+                "bio": service.bio,
+                "subjects": [
+                    {
+                        "id": subject.id,
+                        "name": subject.name,
+                        "code": subject.code,
+                    }
+                    for subject in service.subjects.filter(
+                        is_active=True
+                    ).order_by("name")
+                ],
+            }
+            for service in services
+        ]
+
+        return Response({
+            "count": len(results),
+            "results": results,
+        })
+
+    data = request.data
+
+    try:
+        identity_id = int(data.get("identity_id"))
+    except (TypeError, ValueError):
+        return Response(
+            {"detail": "A valid identity_id is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        identity = UserIdentity.objects.get(
+            id=identity_id,
+            is_active=True,
+        )
+    except UserIdentity.DoesNotExist:
+        return Response(
+            {"detail": "Deepafy Identity not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    designation = str(
+        data.get("designation") or ""
+    ).strip()
+
+    joining_date = data.get("joining_date")
+
+    if not designation or not joining_date:
+        return Response(
+            {
+                "detail": (
+                    "Designation and joining_date are required."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    staff_status = data.get(
+        "status",
+        InstitutionStaffService.STATUS_RUNNING,
+    )
+
+    valid_statuses = {
+        choice[0]
+        for choice in InstitutionStaffService.STATUS_CHOICES
+    }
+
+    if staff_status not in valid_statuses:
+        return Response(
+            {"detail": "Invalid staff status."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    leaving_date = data.get("leaving_date") or None
+    retirement_date = data.get("retirement_date") or None
+    passing_date = data.get("passing_date") or None
+
+    if (
+        staff_status == InstitutionStaffService.STATUS_FORMER
+        and not leaving_date
+    ):
+        return Response(
+            {"detail": "Leaving date is required for Former Staff."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if (
+        staff_status == InstitutionStaffService.STATUS_RETIRED
+        and not retirement_date
+    ):
+        return Response(
+            {
+                "detail": (
+                    "Retirement date is required for Retired Alumni."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if (
+        staff_status == InstitutionStaffService.STATUS_IN_MEMORY
+        and not passing_date
+    ):
+        return Response(
+            {
+                "detail": (
+                    "Passing date is required for In Memory."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    raw_subject_ids = data.get("subject_ids", [])
+
+    if raw_subject_ids in (None, ""):
+        raw_subject_ids = []
+
+    if not isinstance(raw_subject_ids, list):
+        return Response(
+            {"detail": "subject_ids must be a list."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        subject_ids = list({
+            int(subject_id)
+            for subject_id in raw_subject_ids
+        })
+    except (TypeError, ValueError):
+        return Response(
+            {"detail": "subject_ids must contain valid IDs."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    subjects = Subject.objects.filter(
+        id__in=subject_ids,
+        is_active=True,
+    )
+
+    if subjects.count() != len(subject_ids):
+        return Response(
+            {"detail": "One or more selected subjects are invalid."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if InstitutionStaffService.objects.filter(
+        institution=profile,
+        identity=identity,
+    ).exists():
+        return Response(
+            {
+                "detail": (
+                    "This Deepafy person is already "
+                    "connected to this institution."
+                )
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    service = InstitutionStaffService.objects.create(
+        institution=profile,
+        identity=identity,
+        designation=designation,
+        department=str(
+            data.get("department") or ""
+        ).strip(),
+        employment_type=str(
+            data.get("employment_type") or ""
+        ).strip(),
+        joining_date=joining_date,
+        retirement_date=retirement_date,
+        leaving_date=leaving_date,
+        passing_date=passing_date,
+        status=staff_status,
+        bio=str(
+            data.get("bio") or ""
+        ).strip(),
+    )
+
+    service.subjects.set(subjects)
+
+    return Response(
+        {
+            "id": service.id,
+            "identity_id": service.identity_id,
+            "username": identity.username,
+            "first_name": identity.first_name,
+            "last_name": identity.last_name,
+            "designation": service.designation,
+            "department": service.department,
+            "employment_type": service.employment_type,
+            "joining_date": service.joining_date,
+            "retirement_date": service.retirement_date,
+            "leaving_date": service.leaving_date,
+            "passing_date": service.passing_date,
+            "status": service.status,
+            "bio": service.bio,
+            "subjects": [
+                {
+                    "id": subject.id,
+                    "name": subject.name,
+                    "code": subject.code,
+                }
+                for subject in service.subjects.filter(
+                    is_active=True
+                ).order_by("name")
+            ],
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_unclaimed_staff(request):
+    """
+    List or create manual institution staff records.
+
+    These records are for people who are not yet connected to a
+    Deepafy Identity. Cover photo and Deepafy identity are not used.
+    """
+
+    try:
+        profile = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "GET":
+        people = (
+            UnclaimedPerson.objects
+            .filter(
+                institution=profile,
+                is_active=True,
+            )
+            .order_by("-joining_date", "full_name")
+        )
+
+        results = [
+            {
+                "id": person.id,
+                "full_name": person.full_name,
+                "profile_photo": (
+                    person.profile_photo.url
+                    if person.profile_photo
+                    else None
+                ),
+                "designation": person.designation,
+                "department": person.department,
+                "employment_type": person.employment_type,
+                "joining_date": person.joining_date,
+                "retirement_date": person.retirement_date,
+                "leaving_date": person.leaving_date,
+                "passing_date": person.passing_date,
+                "status": person.status,
+                "bio": person.bio,
+                "educational_qualifications": [
+                    {
+                        "education_level": qualification.education_level,
+                        "degree_certificate": qualification.degree_certificate,
+                        "field_of_study": qualification.field_of_study,
+                        "specialization": qualification.specialization,
+                        "start_year": qualification.start_year,
+                        "end_year": qualification.end_year,
+                    }
+                    for qualification in person.educational_qualifications.all()
+                ],
+            }
+            for person in people
+        ]
+
+        return Response({
+            "count": len(results),
+            "results": results,
+        })
+
+    data = request.data
+
+    full_name = str(data.get("full_name") or "").strip()
+    designation = str(data.get("designation") or "").strip()
+    joining_date = data.get("joining_date")
+
+    if not full_name or not designation or not joining_date:
+        return Response(
+            {
+                "detail": (
+                    "Full name, designation and joining_date are required."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    staff_status = data.get(
+        "status",
+        UnclaimedPerson.STATUS_RUNNING,
+    )
+
+    valid_statuses = {
+        choice[0]
+        for choice in UnclaimedPerson.STATUS_CHOICES
+    }
+
+    if staff_status not in valid_statuses:
+        return Response(
+            {"detail": "Invalid staff status."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    leaving_date = data.get("leaving_date") or None
+    retirement_date = data.get("retirement_date") or None
+    passing_date = data.get("passing_date") or None
+
+    if (
+        staff_status == UnclaimedPerson.STATUS_FORMER
+        and not leaving_date
+    ):
+        return Response(
+            {"detail": "Leaving date is required for Former Staff."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if (
+        staff_status == UnclaimedPerson.STATUS_RETIRED
+        and not retirement_date
+    ):
+        return Response(
+            {
+                "detail": (
+                    "Retirement date is required for Retired Alumni."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if (
+        staff_status == UnclaimedPerson.STATUS_IN_MEMORY
+        and not passing_date
+    ):
+        return Response(
+            {
+                "detail": "Passing date is required for In Memory."
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    profile_photo = request.FILES.get("profile_photo")
+
+    person = UnclaimedPerson.objects.create(
+        institution=profile,
+        full_name=full_name,
+        profile_photo=profile_photo,
+        designation=designation,
+        department=str(data.get("department") or "").strip(),
+        employment_type=str(
+            data.get("employment_type") or ""
+        ).strip(),
+        joining_date=joining_date,
+        retirement_date=retirement_date,
+        leaving_date=leaving_date,
+        passing_date=passing_date,
+        status=staff_status,
+        bio=str(data.get("bio") or "").strip(),
+    )
+
+    # Save educational qualifications for manually added staff.
+    educational_qualifications = data.get(
+        "educational_qualifications",
+        []
+    )
+
+    if isinstance(educational_qualifications, str):
+        try:
+            educational_qualifications = json.loads(
+                educational_qualifications
+            )
+        except (TypeError, ValueError):
+            educational_qualifications = []
+
+    if isinstance(educational_qualifications, list):
+        for qualification in educational_qualifications:
+            if not isinstance(qualification, dict):
+                continue
+
+            education_level = str(
+                qualification.get("education_level") or ""
+            ).strip()
+
+            degree_certificate = str(
+                qualification.get("degree_certificate") or ""
+            ).strip()
+
+            if not education_level or not degree_certificate:
+                continue
+
+            start_year = qualification.get("start_year") or None
+            end_year = qualification.get("end_year") or None
+
+            UnclaimedPersonQualification.objects.create(
+                person=person,
+                education_level=education_level,
+                degree_certificate=degree_certificate,
+                field_of_study=str(
+                    qualification.get("field_of_study") or ""
+                ).strip(),
+                specialization=str(
+                    qualification.get("specialization") or ""
+                ).strip(),
+                start_year=start_year,
+                end_year=end_year,
+            )
+
+    return Response(
+        {
+            "id": person.id,
+            "full_name": person.full_name,
+            "profile_photo": (
+                person.profile_photo.url
+                if person.profile_photo
+                else None
+            ),
+            "designation": person.designation,
+            "department": person.department,
+            "employment_type": person.employment_type,
+            "joining_date": person.joining_date,
+            "retirement_date": person.retirement_date,
+            "leaving_date": person.leaving_date,
+            "passing_date": person.passing_date,
+            "status": person.status,
+            "bio": person.bio,
+            "educational_qualifications": [
+                {
+                    "education_level": qualification.education_level,
+                    "degree_certificate": qualification.degree_certificate,
+                    "field_of_study": qualification.field_of_study,
+                    "specialization": qualification.specialization,
+                    "start_year": qualification.start_year,
+                    "end_year": qualification.end_year,
+                }
+                for qualification in person.educational_qualifications.all()
+            ],
+        },
+        status=status.HTTP_201_CREATED,
+    )
 
 
 def extract_map_coordinates(map_url):
@@ -781,6 +1422,42 @@ def institution_academic_levels(request):
     )
 
 
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def institution_academic_levels_public(request, username):
+    """
+    Public read-only academic levels for an institution homepage.
+    """
+
+    try:
+        profile = InstitutionProfile.objects.get(
+            username=username,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    levels = InstitutionAcademicLevel.objects.filter(
+        institution=profile
+    )
+
+    return Response(
+        [
+            {
+                "id": level.id,
+                "type": level.level_type,
+                "name": level.name,
+                "parent": level.parent or None,
+            }
+            for level in levels
+        ],
+        status=status.HTTP_200_OK,
+    )
+
+
 @api_view(["DELETE"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -816,10 +1493,145 @@ def institution_academic_level_delete(request, level_id):
         status=status.HTTP_204_NO_CONTENT,
     )
 
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def institution_academic_summary(request, username):
+    """
+    Public academic summary for the institution homepage.
+    Returns the latest saved Students academic record.
+    """
+
+    try:
+        profile = InstitutionProfile.objects.get(
+            identity__username=username,
+            identity__is_active=True,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    latest = (
+        InstitutionAcademicData.objects
+        .filter(
+            institution=profile,
+            category="Students",
+        )
+        .order_by("-date", "-updated_at")
+        .first()
+    )
+
+    if latest is None:
+        return Response(
+            {
+                "total": 0,
+                "male": 0,
+                "female": 0,
+                "present": 0,
+                "leave": 0,
+                "absent": 0,
+                "attendance_rate": 0,
+                "date": None,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    attendance_rate = (
+        round((latest.present / latest.total) * 100, 1)
+        if latest.total > 0
+        else 0
+    )
+
+    return Response(
+        {
+            "total": latest.total,
+            "male": latest.male,
+            "female": latest.female,
+            "present": latest.present,
+            "leave": latest.leave,
+            "absent": latest.absent,
+            "attendance_rate": attendance_rate,
+            "date": latest.date.isoformat(),
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def institution_academic_overview(request, username):
+    """
+    Public academic overview for the institution homepage.
+
+    Returns the latest saved academic record for:
+    - Students
+    - Teachers
+    - Staff
+    """
+
+    try:
+        profile = InstitutionProfile.objects.get(
+            identity__username=username,
+            identity__is_active=True,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    categories = ["Students", "Teachers", "Staff"]
+
+    latest_records = {}
+
+    for category in categories:
+        record = (
+            InstitutionAcademicData.objects
+            .filter(
+                institution=profile,
+                category=category,
+            )
+            .order_by("-date", "-updated_at")
+            .first()
+        )
+
+        if record is None:
+            latest_records[category] = None
+            continue
+
+        attendance_rate = (
+            round((record.present / record.total) * 100, 1)
+            if record.total > 0
+            else 0
+        )
+
+        latest_records[category] = {
+            "total": record.total,
+            "male": record.male,
+            "female": record.female,
+            "present": record.present,
+            "leave": record.leave,
+            "absent": record.absent,
+            "attendance_rate": attendance_rate,
+            "date": record.date.isoformat(),
+        }
+
+    return Response(
+        {
+            "students": latest_records["Students"],
+            "teachers": latest_records["Teachers"],
+            "staff": latest_records["Staff"],
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
 @api_view(["GET", "POST", "PUT"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
-
 def institution_academic_data(request):
     """
     GET:
@@ -879,6 +1691,18 @@ def institution_academic_data(request):
 
     date = data.get("date")
     category = data.get("category")
+
+    if date:
+        from datetime import date as date_type
+
+        if isinstance(date, str):
+            try:
+                date = date_type.fromisoformat(date)
+            except ValueError:
+                return Response(
+                    {"detail": "Invalid date format. Use YYYY-MM-DD."},
+                    status=400,
+                )
 
     if not date:
         return Response(
