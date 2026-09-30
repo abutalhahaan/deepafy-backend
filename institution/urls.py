@@ -7,8 +7,14 @@ from .views import (
     institution_appearance_update,
     institution_profile_update,
     institution_academic_data,
+    institution_academic_summary,
+    institution_academic_overview,
+    institution_academic_levels_public,
     institution_academic_levels,
     institution_academic_level_delete,
+    institution_staff_services,
+    institution_unclaimed_staff,
+    institution_subjects,
 )
 
 
@@ -44,6 +50,11 @@ urlpatterns = [
         name="institution-academic-levels",
     ),
     path(
+        "profile/username/<str:username>/academic-levels/",
+        institution_academic_levels_public,
+        name="institution-academic-levels-public",
+    ),
+    path(
         "academic/levels/<int:level_id>/",
         institution_academic_level_delete,
         name="institution-academic-level-delete",
@@ -52,5 +63,30 @@ urlpatterns = [
         "academic/",
         institution_academic_data,
         name="institution-academic-data",
+    ),
+    path(
+        "subjects/",
+        institution_subjects,
+        name="institution-subjects",
+    ),
+    path(
+        "staff/",
+        institution_staff_services,
+        name="institution-staff-services",
+    ),
+    path(
+        "staff/manual/",
+        institution_unclaimed_staff,
+        name="institution-unclaimed-staff",
+    ),
+    path(
+        "profile/username/<str:username>/academic-summary/",
+        institution_academic_summary,
+        name="institution-academic-summary",
+    ),
+    path(
+        "profile/username/<str:username>/academic-overview/",
+        institution_academic_overview,
+        name="institution-academic-overview",
     ),
 ]
