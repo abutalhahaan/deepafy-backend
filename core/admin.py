@@ -7,7 +7,7 @@ from django.http import HttpResponseRedirect
 
 # Register your models here.
 
-from .models import FeatureAccessControl, PersonalFontStyle, ColleagueSetting, CentralPopupSetting, CentralPopupRegistry
+from .models import FeatureAccessControl, PersonalFontStyle, ColleagueSetting, CentralPopupSetting, CentralPopupRegistry, Calendar, CalendarCountry, UserCalendarFavorite
 
 @admin.register(FeatureAccessControl)
 class FeatureAccessControlAdmin(admin.ModelAdmin):
@@ -1270,4 +1270,105 @@ class CentralPopupRegistryAdmin(admin.ModelAdmin):
     readonly_fields = (
         "created_at",
         "updated_at",
+    )
+
+
+# ============================================================
+# Calendar Management
+# ============================================================
+
+@admin.register(Calendar)
+class CalendarAdmin(admin.ModelAdmin):
+    list_display = (
+        "display_order",
+        "name",
+        "native_name",
+        "conversion_method",
+        "is_enabled",
+        "is_default",
+        "allow_favorite",
+    )
+
+    list_filter = (
+        "is_enabled",
+        "is_default",
+        "allow_favorite",
+        "conversion_method",
+    )
+
+    list_display_links = (
+        "name",
+    )
+
+    search_fields = (
+        "code",
+        "name",
+        "native_name",
+    )
+
+    list_editable = (
+        "display_order",
+        "is_enabled",
+        "is_default",
+        "allow_favorite",
+    )
+
+    ordering = (
+        "display_order",
+        "name",
+    )
+
+
+@admin.register(CalendarCountry)
+class CalendarCountryAdmin(admin.ModelAdmin):
+    list_display = (
+        "calendar",
+        "country",
+        "is_enabled",
+    )
+
+    list_filter = (
+        "is_enabled",
+        "country",
+        "calendar",
+    )
+
+    search_fields = (
+        "calendar__name",
+        "calendar__code",
+        "country__name",
+        "country__code",
+    )
+
+    list_editable = (
+        "is_enabled",
+    )
+
+    ordering = (
+        "country__name",
+        "calendar__display_order",
+    )
+
+
+@admin.register(UserCalendarFavorite)
+class UserCalendarFavoriteAdmin(admin.ModelAdmin):
+    list_display = (
+        "user",
+        "calendar",
+        "created_at",
+    )
+
+    list_filter = (
+        "calendar",
+    )
+
+    search_fields = (
+        "user__username",
+        "user__email",
+        "calendar__name",
+    )
+
+    ordering = (
+        "created_at",
+        "id",
     )

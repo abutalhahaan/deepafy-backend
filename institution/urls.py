@@ -15,6 +15,9 @@ from .views import (
     institution_staff_services,
     institution_unclaimed_staff,
     institution_subjects,
+    institution_subject_detail,
+    institution_academic_sessions,
+    institution_academic_session_detail,
 )
 
 
@@ -65,9 +68,24 @@ urlpatterns = [
         name="institution-academic-data",
     ),
     path(
+        "sessions/",
+        institution_academic_sessions,
+        name="institution-academic-sessions",
+    ),
+    path(
+        "sessions/<int:session_id>/",
+        institution_academic_session_detail,
+        name="institution-academic-session-detail",
+    ),
+    path(
         "subjects/",
         institution_subjects,
         name="institution-subjects",
+    ),
+    path(
+        "subjects/<int:subject_id>/",
+        institution_subject_detail,
+        name="institution-subject-detail",
     ),
     path(
         "staff/",

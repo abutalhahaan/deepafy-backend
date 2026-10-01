@@ -9,18 +9,295 @@ import re
 import json
 
 from core.services.feature_access import get_feature_access
+from core.views import IsDeepafyAdmin
 from .models import (
     InstitutionTypeGroup,
     InstitutionProfile,
     InstitutionAuthority,
     InstitutionAcademicData,
     InstitutionAcademicLevel,
+    InstitutionAcademicSession,
     InstitutionStaffService,
     UnclaimedPerson,
     UnclaimedPersonQualification,
     Subject,
 )
 from identity.models import UserIdentity, AcademicBackground
+
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_academic_sessions(request):
+    """
+    List or create academic sessions for the authenticated institution.
+    """
+
+    try:
+        profile = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "GET":
+        sessions = InstitutionAcademicSession.objects.filter(
+            institution=profile,
+            is_active=True,
+        )
+
+        return Response({
+            "count": sessions.count(),
+            "results": [
+                {
+                    "id": session.id,
+                    "name": session.name,
+                    "start_date": session.start_date.isoformat(),
+                    "end_date": session.end_date.isoformat(),
+                    "status": session.status,
+                    "is_current": session.is_current,
+                    "is_active": session.is_active,
+                }
+                for session in sessions
+            ],
+        })
+
+    data = request.data
+
+    name = str(data.get("name") or "").strip()
+    start_date = data.get("start_date")
+    end_date = data.get("end_date")
+    session_status = str(
+        data.get("status")
+        or InstitutionAcademicSession.STATUS_UPCOMING
+    ).strip().upper()
+
+    if not name:
+        return Response(
+            {"detail": "Session name is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not start_date or not end_date:
+        return Response(
+            {"detail": "Start date and end date are required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    valid_statuses = {
+        choice[0]
+        for choice in InstitutionAcademicSession.STATUS_CHOICES
+    }
+
+    if session_status not in valid_statuses:
+        return Response(
+            {"detail": "Invalid session status."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if InstitutionAcademicSession.objects.filter(
+        institution=profile,
+        name=name,
+    ).exists():
+        return Response(
+            {"detail": "This session already exists for this institution."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        from datetime import date
+
+        parsed_start = date.fromisoformat(str(start_date))
+        parsed_end = date.fromisoformat(str(end_date))
+    except ValueError:
+        return Response(
+            {"detail": "Invalid date format. Use YYYY-MM-DD."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if parsed_end < parsed_start:
+        return Response(
+            {"detail": "End date cannot be before start date."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    is_current = bool(data.get("is_current", False))
+
+    if is_current:
+        InstitutionAcademicSession.objects.filter(
+            institution=profile,
+            is_current=True,
+        ).update(is_current=False)
+
+    session = InstitutionAcademicSession.objects.create(
+        institution=profile,
+        name=name,
+        start_date=parsed_start,
+        end_date=parsed_end,
+        status=session_status,
+        is_current=is_current,
+    )
+
+    return Response(
+        {
+            "id": session.id,
+            "name": session.name,
+            "start_date": session.start_date.isoformat(),
+            "end_date": session.end_date.isoformat(),
+            "status": session.status,
+            "is_current": session.is_current,
+            "is_active": session.is_active,
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(["PATCH"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_academic_session_detail(request, session_id):
+    """
+    Update an academic session owned by the authenticated institution.
+    """
+
+    try:
+        profile = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        session = InstitutionAcademicSession.objects.get(
+            id=session_id,
+            institution=profile,
+            is_active=True,
+        )
+    except InstitutionAcademicSession.DoesNotExist:
+        return Response(
+            {"detail": "Academic session not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    data = request.data
+
+    # Archived sessions are historical records and are locked.
+    if session.status == InstitutionAcademicSession.STATUS_ARCHIVED:
+        return Response(
+            {"detail": "Archived sessions cannot be edited."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Closed sessions keep their historical identity.
+    if session.status == InstitutionAcademicSession.STATUS_CLOSED:
+        if "name" in data:
+            return Response(
+                {"detail": "Closed session name cannot be changed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    name = str(data.get("name", session.name)).strip()
+    start_date = data.get(
+        "start_date",
+        session.start_date.isoformat(),
+    )
+    end_date = data.get(
+        "end_date",
+        session.end_date.isoformat(),
+    )
+    session_status = str(
+        data.get("status", session.status)
+    ).strip().upper()
+
+    if not name:
+        return Response(
+            {"detail": "Session name is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    valid_statuses = {
+        choice[0]
+        for choice in InstitutionAcademicSession.STATUS_CHOICES
+    }
+
+    if session_status not in valid_statuses:
+        return Response(
+            {"detail": "Invalid session status."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if InstitutionAcademicSession.objects.filter(
+        institution=profile,
+        name=name,
+    ).exclude(id=session.id).exists():
+        return Response(
+            {"detail": "This session already exists for this institution."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        from datetime import date
+
+        parsed_start = date.fromisoformat(str(start_date))
+        parsed_end = date.fromisoformat(str(end_date))
+    except ValueError:
+        return Response(
+            {"detail": "Invalid date format. Use YYYY-MM-DD."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if parsed_end < parsed_start:
+        return Response(
+            {"detail": "End date cannot be before start date."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    is_current = bool(
+        data.get("is_current", session.is_current)
+    )
+
+    if is_current:
+        InstitutionAcademicSession.objects.filter(
+            institution=profile,
+            is_current=True,
+        ).exclude(id=session.id).update(
+            is_current=False
+        )
+
+    session.name = name
+    session.start_date = parsed_start
+    session.end_date = parsed_end
+    session.status = session_status
+    session.is_current = is_current
+    session.save(
+        update_fields=[
+            "name",
+            "start_date",
+            "end_date",
+            "status",
+            "is_current",
+            "updated_at",
+        ]
+    )
+
+    return Response({
+        "id": session.id,
+        "name": session.name,
+        "start_date": session.start_date.isoformat(),
+        "end_date": session.end_date.isoformat(),
+        "status": session.status,
+        "is_current": session.is_current,
+        "is_active": session.is_active,
+    })
 
 
 @api_view(["GET", "POST"])
@@ -60,21 +337,10 @@ def institution_subjects(request):
             ],
         })
 
-    if not request.user or not request.user.is_authenticated:
+    if not IsDeepafyAdmin().has_permission(request, None):
         return Response(
-            {"detail": "Authentication credentials are required."},
-            status=status.HTTP_401_UNAUTHORIZED,
-        )
-
-    try:
-        profile = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
-        return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
+            {"detail": "Only Deepafy Admin can create subjects."},
+            status=status.HTTP_403_FORBIDDEN,
         )
 
     data = request.data
@@ -108,7 +374,6 @@ def institution_subjects(request):
     subject = Subject.objects.create(
         name=name,
         code=code,
-        created_by_institution=profile,
     )
 
     return Response(
@@ -119,6 +384,59 @@ def institution_subjects(request):
         },
         status=status.HTTP_201_CREATED,
     )
+
+
+@api_view(["PATCH"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsDeepafyAdmin])
+def institution_subject_detail(request, subject_id):
+    try:
+        subject = Subject.objects.get(id=subject_id)
+    except Subject.DoesNotExist:
+        return Response(
+            {"detail": "Subject not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    data = request.data
+
+    if "name" in data:
+        name = str(data.get("name") or "").strip()
+
+        if not name:
+            return Response(
+                {"detail": "Subject name is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        duplicate = Subject.objects.filter(
+            name__iexact=name,
+        ).exclude(
+            id=subject.id,
+        ).exists()
+
+        if duplicate:
+            return Response(
+                {"detail": "This subject already exists."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        subject.name = name
+
+    if "code" in data:
+        subject.code = str(data.get("code") or "").strip()
+
+    if "is_active" in data:
+        subject.is_active = bool(data.get("is_active"))
+
+    subject.save()
+
+    return Response({
+        "id": subject.id,
+        "name": subject.name,
+        "code": subject.code,
+        "is_active": subject.is_active,
+    })
 
 
 @api_view(["GET", "POST"])
