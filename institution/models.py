@@ -1,4 +1,5 @@
 from django.db import models
+from django.core.validators import RegexValidator
 
 
 class Subject(models.Model):
@@ -335,6 +336,19 @@ class InstitutionProfile(models.Model):
         blank=True,
     )
 
+    global_identity_code = models.CharField(
+        max_length=8,
+        unique=True,
+        blank=True,
+        null=True,
+        validators=[
+            RegexValidator(
+                regex=r"^[A-Za-z0-9]{3,8}$",
+                message="Global Identity Code must be 3 to 8 English letters or numbers.",
+            )
+        ],
+    )
+
     eiin = models.CharField(
         max_length=50,
         blank=True,
@@ -444,6 +458,11 @@ class InstitutionProfile(models.Model):
     updated_at = models.DateTimeField(
         auto_now=True,
     )
+
+    def save(self, *args, **kwargs):
+        if self.global_identity_code:
+            self.global_identity_code = self.global_identity_code.strip().upper()
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return (

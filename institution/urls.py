@@ -5,6 +5,7 @@ from .views import (
     institution_authority_list,
     institution_profile_by_username,
     institution_appearance_update,
+    institution_global_identity_check,
     institution_profile_update,
     institution_academic_data,
     institution_academic_summary,
@@ -33,6 +34,11 @@ urlpatterns = [
         "profile/appearance/",
         institution_appearance_update,
         name="institution-appearance-update",
+    ),
+    path(
+        "global-identity/check/",
+        institution_global_identity_check,
+        name="institution-global-identity-check",
     ),
     path(
         "profile/update/",
