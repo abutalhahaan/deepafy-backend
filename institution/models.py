@@ -20,14 +20,6 @@ class Subject(models.Model):
         blank=True,
     )
 
-    created_by_institution = models.ForeignKey(
-        "InstitutionProfile",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="created_subjects",
-    )
-
     is_active = models.BooleanField(
         default=True,
     )
@@ -459,6 +451,68 @@ class InstitutionProfile(models.Model):
             or f"Institution - {self.identity.user_id}"
         )
 
+
+
+class InstitutionAcademicSession(models.Model):
+    STATUS_UPCOMING = "UPCOMING"
+    STATUS_ACTIVE = "ACTIVE"
+    STATUS_CLOSED = "CLOSED"
+    STATUS_ARCHIVED = "ARCHIVED"
+
+    STATUS_CHOICES = [
+        (STATUS_UPCOMING, "Upcoming"),
+        (STATUS_ACTIVE, "Active"),
+        (STATUS_CLOSED, "Closed"),
+        (STATUS_ARCHIVED, "Archived"),
+    ]
+
+    institution = models.ForeignKey(
+        InstitutionProfile,
+        on_delete=models.CASCADE,
+        related_name="academic_sessions",
+    )
+
+    name = models.CharField(max_length=100)
+
+    start_date = models.DateField()
+
+    end_date = models.DateField()
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_UPCOMING,
+    )
+
+    is_current = models.BooleanField(default=False)
+
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-start_date", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["institution", "name"],
+                name="unique_institution_academic_session",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["institution", "status"],
+                name="acad_sess_inst_status_idx",
+            ),
+            models.Index(
+                fields=["institution", "is_current"],
+                name="acad_sess_inst_current_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.institution.institution_name} - {self.name}"
 
 class UnclaimedPerson(models.Model):
     STATUS_RUNNING = "RUNNING"

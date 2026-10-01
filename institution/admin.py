@@ -5,6 +5,7 @@ from .models import (
     InstitutionTypeGroup,
     InstitutionProfile,
     InstitutionAuthority,
+    Subject,
 )
 
 
@@ -63,6 +64,33 @@ class InstitutionProfileAdmin(admin.ModelAdmin):
     search_fields = (
         "institution_name",
     )
+
+
+@admin.register(Subject)
+class SubjectAdmin(admin.ModelAdmin):
+    list_display = (
+        "name",
+        "code",
+        "is_active",
+        "created_at",
+        "updated_at",
+    )
+
+    list_filter = (
+        "is_active",
+    )
+
+    search_fields = (
+        "name",
+        "code",
+    )
+
+    ordering = (
+        "name",
+    )
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 admin.site.register(InstitutionType)

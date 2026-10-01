@@ -7,7 +7,22 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from .models import FeatureAccessControl, UserFeatureTrial, UserPremiumSubscription, PremiumPackage, PersonalFontStyle, UserFontFavorite, MessagingAppearance, Dmail, DmailMailbox, MessageConversation, Message
+from .models import (
+    FeatureAccessControl,
+    UserFeatureTrial,
+    UserPremiumSubscription,
+    PremiumPackage,
+    PersonalFontStyle,
+    UserFontFavorite,
+    MessagingAppearance,
+    Dmail,
+    DmailMailbox,
+    MessageConversation,
+    Message,
+    Calendar,
+    CalendarCountry,
+    UserCalendarFavorite,
+)
 from core.services.feature_access import get_current_feature, get_feature_access, start_feature_trial_for_user
 from core.services.image_processor import process_image
 from identity.permissions import get_authenticated_identity, get_current_account_type
@@ -104,6 +119,160 @@ def personal_font_favorites(request, personal_account_id):
     ).delete()
 
     return Response({"success": True, "removed": deleted > 0})
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def calendar_list(request):
+    country_code = request.query_params.get("country")
+
+    calendars = Calendar.objects.filter(
+        is_enabled=True
+    ).order_by("display_order", "name")
+
+    if country_code:
+        calendars = calendars.filter(
+            country_settings__country__code=country_code,
+            country_settings__is_enabled=True,
+        ).distinct()
+
+    return Response({
+        "success": True,
+        "calendars": [
+            {
+                "id": calendar.id,
+                "code": calendar.code,
+                "name": calendar.name,
+                "native_name": calendar.native_name,
+                "icon": calendar.icon,
+                "description": calendar.description,
+                "conversion_method": calendar.conversion_method,
+                "is_default": calendar.is_default,
+                "allow_favorite": calendar.allow_favorite,
+                "display_order": calendar.display_order,
+            }
+            for calendar in calendars
+        ],
+    })
+
+
+@api_view(["GET", "POST", "DELETE"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def calendar_favorites(request):
+    user = request.user
+
+    if request.method == "GET":
+        favorites = (
+            UserCalendarFavorite.objects
+            .filter(
+                user=user,
+                calendar__is_enabled=True,
+            )
+            .select_related("calendar")
+            .order_by("created_at", "id")
+        )
+
+        return Response({
+            "success": True,
+            "max_favorites": 5,
+            "calendars": [
+                {
+                    "id": favorite.calendar.id,
+                    "code": favorite.calendar.code,
+                    "name": favorite.calendar.name,
+                    "native_name": favorite.calendar.native_name,
+                    "icon": favorite.calendar.icon,
+                    "display_order": index,
+                }
+                for index, favorite in enumerate(favorites, start=1)
+            ],
+        })
+
+    calendar_code = request.data.get("calendar_code")
+
+    if not calendar_code:
+        return Response(
+            {
+                "success": False,
+                "detail": "calendar_code is required.",
+            },
+            status=400,
+        )
+
+    try:
+        calendar = Calendar.objects.get(
+            code=calendar_code,
+            is_enabled=True,
+        )
+    except Calendar.DoesNotExist:
+        return Response(
+            {
+                "success": False,
+                "detail": "Calendar not found or disabled.",
+            },
+            status=404,
+        )
+
+    if request.method == "POST":
+        if not calendar.allow_favorite:
+            return Response(
+                {
+                    "success": False,
+                    "detail": "This calendar cannot be favorited.",
+                },
+                status=400,
+            )
+
+        existing = UserCalendarFavorite.objects.filter(
+            user=user,
+            calendar=calendar,
+        ).exists()
+
+        if existing:
+            return Response({
+                "success": True,
+                "already_favorite": True,
+            })
+
+        favorite_count = UserCalendarFavorite.objects.filter(
+            user=user,
+            calendar__is_enabled=True,
+        ).count()
+
+        if favorite_count >= 5:
+            return Response(
+                {
+                    "success": False,
+                    "detail": "You can favorite up to 5 calendars.",
+                    "max_favorites": 5,
+                },
+                status=400,
+            )
+
+        UserCalendarFavorite.objects.create(
+            user=user,
+            calendar=calendar,
+        )
+
+        return Response(
+            {
+                "success": True,
+                "favorite": True,
+                "max_favorites": 5,
+            },
+            status=201,
+        )
+
+    deleted, _ = UserCalendarFavorite.objects.filter(
+        user=user,
+        calendar=calendar,
+    ).delete()
+
+    return Response({
+        "success": True,
+        "removed": deleted > 0,
+    })
 
 
 @api_view(["GET"])

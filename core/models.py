@@ -1120,3 +1120,89 @@ class DmailMailbox(TimeStampedModel):
     def __str__(self):
         return f"{self.user_id} - {self.dmail_id} - {self.folder}"
 
+
+class Calendar(TimeStampedModel):
+    class ConversionMethod(models.TextChoices):
+        GREGORIAN = "gregorian", "Gregorian"
+        CALCULATED = "calculated", "Calculated"
+        MOON_SIGHTING = "moon_sighting", "Local Moon Sighting"
+        UMM_AL_QURA = "umm_al_qura", "Umm al-Qura"
+        REGIONAL = "regional", "Regional"
+
+    code = models.CharField(max_length=50, unique=True)
+    name = models.CharField(max_length=150)
+    native_name = models.CharField(max_length=150, blank=True)
+    icon = models.CharField(max_length=50, blank=True)
+    description = models.TextField(blank=True)
+
+    conversion_method = models.CharField(
+        max_length=30,
+        choices=ConversionMethod.choices,
+        default=ConversionMethod.CALCULATED,
+    )
+
+    is_enabled = models.BooleanField(default=True)
+    is_default = models.BooleanField(default=False)
+    allow_favorite = models.BooleanField(default=True)
+    display_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["display_order", "name"]
+
+    def __str__(self):
+        return self.name
+
+
+class CalendarCountry(TimeStampedModel):
+    calendar = models.ForeignKey(
+        Calendar,
+        on_delete=models.CASCADE,
+        related_name="country_settings",
+    )
+
+    country = models.ForeignKey(
+        "organization.Country",
+        on_delete=models.PROTECT,
+        related_name="calendar_settings",
+    )
+
+    is_enabled = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["country__name", "calendar__display_order"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["calendar", "country"],
+                name="unique_calendar_country",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.calendar.name} - {self.country.name}"
+
+
+class UserCalendarFavorite(TimeStampedModel):
+    user = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.CASCADE,
+        related_name="calendar_favorites",
+    )
+
+    calendar = models.ForeignKey(
+        Calendar,
+        on_delete=models.CASCADE,
+        related_name="user_favorites",
+    )
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "calendar"],
+                name="unique_user_calendar_favorite",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.user} - {self.calendar.name}"
+
