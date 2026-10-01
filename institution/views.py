@@ -1,3 +1,4 @@
+from institution.models import Department
 from rest_framework import status
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import AllowAny
@@ -299,6 +300,143 @@ def institution_academic_session_detail(request, session_id):
         "is_active": session.is_active,
     })
 
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([AllowAny])
+def institution_departments(request):
+    """
+    List active global departments or create a department.
+
+    Department creation is restricted to Deepafy Admin.
+    """
+
+    if request.method == "GET":
+        query = str(request.query_params.get("q") or "").strip()
+
+        departments = Department.objects.filter(is_active=True)
+
+        if query:
+            departments = departments.filter(name__icontains=query)
+
+        departments = departments.order_by("name")[:100]
+
+        return Response({
+            "count": departments.count(),
+            "results": [
+                {
+                    "id": department.id,
+                    "name": department.name,
+                    "code": department.code,
+                    "is_active": department.is_active,
+                }
+                for department in departments
+            ],
+        })
+
+    if not IsDeepafyAdmin().has_permission(request, None):
+        return Response(
+            {"detail": "Only Deepafy Admin can create departments."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    data = request.data
+
+    name = str(data.get("name") or "").strip()
+    code = str(data.get("code") or "").strip()
+
+    if not name:
+        return Response(
+            {"detail": "Department name is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    existing = Department.objects.filter(name__iexact=name).first()
+
+    if existing:
+        return Response(
+            {
+                "detail": "This department already exists.",
+                "department": {
+                    "id": existing.id,
+                    "name": existing.name,
+                    "code": existing.code,
+                    "is_active": existing.is_active,
+                },
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    department = Department.objects.create(
+        name=name,
+        code=code,
+        is_active=True,
+    )
+
+    return Response(
+        {
+            "id": department.id,
+            "name": department.name,
+            "code": department.code,
+            "is_active": department.is_active,
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(["PATCH"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsDeepafyAdmin])
+def institution_department_detail(request, department_id):
+    try:
+        department = Department.objects.get(id=department_id)
+    except Department.DoesNotExist:
+        return Response(
+            {"detail": "Department not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    data = request.data
+
+    if "name" in data:
+        name = str(data.get("name") or "").strip()
+
+        if not name:
+            return Response(
+                {"detail": "Department name is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        duplicate = (
+            Department.objects
+            .filter(name__iexact=name)
+            .exclude(id=department.id)
+            .exists()
+        )
+
+        if duplicate:
+            return Response(
+                {"detail": "This department already exists."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        department.name = name
+
+    if "code" in data:
+        department.code = str(data.get("code") or "").strip()
+
+    if "is_active" in data:
+        department.is_active = bool(data.get("is_active"))
+
+    department.save()
+
+    return Response({
+        "id": department.id,
+        "name": department.name,
+        "code": department.code,
+        "is_active": department.is_active,
+    })
 
 @api_view(["GET", "POST"])
 @authentication_classes([JWTAuthentication])

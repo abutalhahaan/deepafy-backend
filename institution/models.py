@@ -743,3 +743,16 @@ class InstitutionStaffService(models.Model):
             f"{self.designation} - "
             f"{self.institution.institution_name}"
         )
+
+class Department(models.Model):
+    name = models.CharField(max_length=255, unique=True)
+    code = models.CharField(max_length=100, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
