@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from urllib.parse import urlparse, parse_qs
+from django.db import IntegrityError
 import re
 import json
 
@@ -1387,6 +1388,54 @@ def institution_profile_by_username(request, username):
     )
 
 
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_global_identity_check(request):
+    code = str(request.query_params.get("code", "")).strip().upper()
+
+    if not code:
+        return Response(
+            {
+                "available": False,
+                "detail": "Global Identity Code is required.",
+            },
+            status=400,
+        )
+
+    if not re.fullmatch(r"[A-Z0-9]{3,8}", code):
+        return Response(
+            {
+                "available": False,
+                "detail": "Global Identity Code must be 3 to 8 English letters or numbers.",
+            },
+            status=400,
+        )
+
+    existing = InstitutionProfile.objects.filter(
+        global_identity_code=code,
+        is_active=True,
+    ).first()
+
+    if existing is None:
+        return Response({
+            "available": True,
+            "code": code,
+        })
+
+    if existing.identity_id == request.user.id:
+        return Response({
+            "available": True,
+            "code": code,
+            "current": True,
+        })
+
+    return Response({
+        "available": False,
+        "code": code,
+    })
+
+
 @api_view(["GET", "PUT"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -1500,6 +1549,23 @@ def institution_profile_update(request):
             {"detail": "Institution profile not found."},
             status=404,
         )
+
+    if "global_identity_code" in request.data:
+        requested_code = request.data.get("global_identity_code")
+
+        if requested_code:
+            requested_code = str(requested_code).strip().upper()
+
+        if profile.global_identity_code:
+            if requested_code and requested_code != profile.global_identity_code:
+                return Response(
+                    {
+                        "detail": "Global Identity Code cannot be changed after it has been set."
+                    },
+                    status=400,
+                )
+        elif requested_code:
+            profile.global_identity_code = requested_code
 
     fields = [
         "institution_name",
@@ -1746,7 +1812,17 @@ def institution_profile_update(request):
         # New Authority/Affiliation system is now the source of truth.
         profile.affiliation_board = ""
 
-    profile.save()
+    try:
+        profile.save()
+    except IntegrityError as exc:
+        if "global_identity_code" in str(exc):
+            return Response(
+                {
+                    "detail": "This Global Institution Identity Code is already in use."
+                },
+                status=400,
+            )
+        raise
 
     return Response({
         "institution_name": profile.institution_name,
@@ -1775,6 +1851,7 @@ def institution_profile_update(request):
         "management_type": profile.management_type,
         "mpo_status": profile.mpo_status,
         "institution_code": profile.institution_code,
+        "global_identity_code": profile.global_identity_code,
         "eiin": profile.eiin,
         "affiliation_board": profile.affiliation_board,
         "affiliations": [
