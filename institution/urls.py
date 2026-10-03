@@ -7,6 +7,7 @@ from .views import (
     institution_appearance_update,
     institution_global_identity_check,
     institution_profile_update,
+    institution_student_create,
     institution_academic_data,
     institution_academic_summary,
     institution_academic_overview,
@@ -44,6 +45,11 @@ urlpatterns = [
         "profile/update/",
         institution_profile_update,
         name="institution-profile-update",
+    ),
+    path(
+        "students/",
+        institution_student_create,
+        name="institution-student-create",
     ),
     path(
         "types/",

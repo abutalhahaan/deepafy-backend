@@ -763,6 +763,309 @@ class InstitutionStaffService(models.Model):
             f"{self.institution.institution_name}"
         )
 
+class StudentIdSequence(models.Model):
+    """
+    Permanent per-institution sequence for Global Student IDs.
+
+    Example:
+        DUDHB-000001
+        DUDHB-000002
+        DUDHB-000003
+    """
+
+    institution = models.OneToOneField(
+        InstitutionProfile,
+        on_delete=models.PROTECT,
+        related_name="student_id_sequence",
+    )
+
+    next_number = models.PositiveBigIntegerField(
+        default=1,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    def __str__(self):
+        return (
+            f"{self.institution.institution_name} - "
+            f"Next Student Number: {self.next_number}"
+        )
+
+
+class Student(models.Model):
+    """
+    Global student identity.
+
+    A student has one permanent Deepafy Student record.
+    Institution-specific academic information belongs to StudentEnrollment.
+    """
+
+    STATUS_ACTIVE = "ACTIVE"
+    STATUS_INACTIVE = "INACTIVE"
+    STATUS_DECEASED = "DECEASED"
+
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, "Active"),
+        (STATUS_INACTIVE, "Inactive"),
+        (STATUS_DECEASED, "Deceased"),
+    ]
+
+    global_student_id = models.CharField(
+        max_length=30,
+        unique=True,
+        editable=False,
+    )
+
+    name = models.CharField(max_length=255)
+
+    father_name = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    mother_name = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    gender = models.CharField(
+        max_length=20,
+        blank=True,
+    )
+
+    date_of_birth = models.DateField(
+        null=True,
+        blank=True,
+    )
+
+    blood_group = models.CharField(
+        max_length=10,
+        blank=True,
+    )
+
+    mobile = models.CharField(
+        max_length=30,
+        blank=True,
+    )
+
+    email = models.EmailField(
+        blank=True,
+    )
+
+    present_location = models.ForeignKey(
+        "organization.AdministrativeLocation",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="students_present",
+    )
+
+    present_address = models.TextField(
+        blank=True,
+    )
+
+    permanent_location = models.ForeignKey(
+        "organization.AdministrativeLocation",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="students_permanent",
+    )
+
+    permanent_address = models.TextField(
+        blank=True,
+    )
+
+    guardian_name = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    guardian_relationship = models.CharField(
+        max_length=100,
+        blank=True,
+    )
+
+    guardian_mobile = models.CharField(
+        max_length=30,
+        blank=True,
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_ACTIVE,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    def __str__(self):
+        return f"{self.global_student_id} - {self.name}"
+
+
+class StudentProfilePhoto(models.Model):
+    """
+    Historical student profile photos.
+
+    A photo can be associated with an academic year/session without
+    overwriting previous photos.
+    """
+
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.CASCADE,
+        related_name="profile_photos",
+    )
+
+    academic_year = models.PositiveSmallIntegerField()
+
+    photo = models.ImageField(
+        upload_to="student_profile_photos/",
+    )
+
+    is_current = models.BooleanField(
+        default=False,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        ordering = ["-academic_year", "-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "academic_year"],
+                name="unique_student_photo_academic_year",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.student.global_student_id} - {self.academic_year}"
+
+
+class StudentEnrollment(models.Model):
+    """
+    Institution-specific academic enrollment.
+
+    A student can have multiple enrollments across institutions and
+    academic sessions while keeping the same Global Student ID.
+    """
+
+    STATUS_RUNNING = "RUNNING"
+    STATUS_GRADUATED = "GRADUATED"
+    STATUS_TRANSFERRED = "TRANSFERRED"
+    STATUS_DROPPED = "DROPPED"
+
+    STATUS_CHOICES = [
+        (STATUS_RUNNING, "Running"),
+        (STATUS_GRADUATED, "Graduated"),
+        (STATUS_TRANSFERRED, "Transferred"),
+        (STATUS_DROPPED, "Dropped"),
+    ]
+
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.PROTECT,
+        related_name="enrollments",
+    )
+
+    institution = models.ForeignKey(
+        InstitutionProfile,
+        on_delete=models.PROTECT,
+        related_name="student_enrollments",
+    )
+
+    academic_session = models.ForeignKey(
+        "InstitutionAcademicSession",
+        on_delete=models.PROTECT,
+        related_name="student_enrollments",
+    )
+
+    class_name = models.CharField(
+        max_length=255,
+    )
+
+    department = models.ForeignKey(
+        "Department",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="student_enrollments",
+    )
+
+    section = models.CharField(
+        max_length=100,
+        blank=True,
+    )
+
+    roll = models.CharField(
+        max_length=100,
+        blank=True,
+    )
+
+    admission_date = models.DateField(
+        null=True,
+        blank=True,
+    )
+
+    previous_institution = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    admission_type = models.CharField(
+        max_length=100,
+        blank=True,
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_RUNNING,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "student",
+                    "institution",
+                    "academic_session",
+                ],
+                name="unique_student_institution_session",
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.student.global_student_id} - "
+            f"{self.institution.institution_name} - "
+            f"{self.academic_session.name}"
+        )
+
+
 class Department(models.Model):
     name = models.CharField(max_length=255, unique=True)
     code = models.CharField(max_length=100, blank=True)
