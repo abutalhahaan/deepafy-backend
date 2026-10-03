@@ -32,6 +32,52 @@ def country_list(request):
     )
 
 
+@require_http_methods(["GET"])
+def location_level_list(request):
+    country_code = request.GET.get("country")
+
+    if not country_code:
+        return JsonResponse(
+            {"detail": "country is required."},
+            status=400,
+        )
+
+    try:
+        country = Country.objects.get(
+            code=country_code,
+            is_active=True,
+        )
+    except Country.DoesNotExist:
+        return JsonResponse(
+            {"detail": "Country not found."},
+            status=404,
+        )
+
+    levels = (
+        LocationLevel.objects
+        .filter(
+            country=country,
+            is_active=True,
+        )
+        .order_by("level")
+    )
+
+    return JsonResponse(
+        {
+            "country": country.code,
+            "results": [
+                {
+                    "id": level.id,
+                    "code": level.code,
+                    "name": level.name,
+                    "level": level.level,
+                }
+                for level in levels
+            ],
+        }
+    )
+
+
 def administrative_location_list(request):
     country_code = request.GET.get("country")
     level_code = request.GET.get("level")
@@ -79,8 +125,22 @@ def administrative_location_list(request):
     )
 
     if parent_id:
+        try:
+            parent_location = AdministrativeLocation.objects.get(
+                location_id=parent_id,
+                country=country,
+                is_active=True,
+            )
+        except AdministrativeLocation.DoesNotExist:
+            return JsonResponse(
+                {
+                    "detail": "Parent location not found."
+                },
+                status=404,
+            )
+
         locations = locations.filter(
-            parent_id=parent_id,
+            parent_id=parent_location.id,
         )
     elif level.level > 1:
         locations = locations.filter(

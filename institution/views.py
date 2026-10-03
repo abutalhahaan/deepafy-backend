@@ -11,6 +11,7 @@ import re
 import json
 
 from core.services.feature_access import get_feature_access
+from institution.services import generate_global_student_id
 from core.views import IsDeepafyAdmin
 from .models import (
     InstitutionTypeGroup,
@@ -23,6 +24,8 @@ from .models import (
     UnclaimedPerson,
     UnclaimedPersonQualification,
     Subject,
+    Student,
+    StudentEnrollment,
 )
 from identity.models import UserIdentity, AcademicBackground
 
@@ -1874,6 +1877,151 @@ def institution_profile_update(request):
         "email": profile.email,
         "phone": profile.phone,
     })
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_student_create(request):
+    """
+    Create a student Basic Profile.
+
+    Academic enrollment is intentionally NOT created here.
+    Enrollment will be added later from the Student Profile.
+    """
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=404,
+        )
+
+    if not institution.global_identity_code:
+        return Response(
+            {
+                "detail": (
+                    "Global Institution Identity must be configured "
+                    "before adding students."
+                )
+            },
+            status=400,
+        )
+
+    name = str(request.data.get("name", "")).strip()
+
+    if not name:
+        return Response(
+            {
+                "detail": "Student name is required.",
+                "fields": ["name"],
+            },
+            status=400,
+        )
+
+    from django.db import transaction
+
+    try:
+        from companies.models import AdministrativeLocation
+
+        present_location_id = request.data.get("present_location_id") or None
+        permanent_location_id = request.data.get("permanent_location_id") or None
+
+        present_location = None
+        permanent_location = None
+
+        if present_location_id:
+            try:
+                present_location = AdministrativeLocation.objects.get(
+                    location_id=present_location_id,
+                    is_active=True,
+                )
+            except AdministrativeLocation.DoesNotExist:
+                return Response(
+                    {"detail": "Invalid present address location."},
+                    status=400,
+                )
+
+        if permanent_location_id:
+            try:
+                permanent_location = AdministrativeLocation.objects.get(
+                    location_id=permanent_location_id,
+                    is_active=True,
+                )
+            except AdministrativeLocation.DoesNotExist:
+                return Response(
+                    {"detail": "Invalid permanent address location."},
+                    status=400,
+                )
+
+        with transaction.atomic():
+            global_student_id = generate_global_student_id(institution)
+
+            student = Student.objects.create(
+                global_student_id=global_student_id,
+                name=name,
+                father_name=str(
+                    request.data.get("father_name", "")
+                ).strip(),
+                mother_name=str(
+                    request.data.get("mother_name", "")
+                ).strip(),
+                gender=str(
+                    request.data.get("gender", "")
+                ).strip(),
+                date_of_birth=(
+                    request.data.get("date_of_birth") or None
+                ),
+                blood_group=str(
+                    request.data.get("blood_group", "")
+                ).strip(),
+                mobile=str(
+                    request.data.get("mobile", "")
+                ).strip(),
+                email=str(
+                    request.data.get("email", "")
+                ).strip(),
+                present_location=present_location,
+                present_address=str(
+                    request.data.get("present_address", "")
+                ).strip(),
+                permanent_location=permanent_location,
+                permanent_address=str(
+                    request.data.get("permanent_address", "")
+                ).strip(),
+                guardian_name=str(
+                    request.data.get("guardian_name", "")
+                ).strip(),
+                guardian_relationship=str(
+                    request.data.get("guardian_relationship", "")
+                ).strip(),
+                guardian_mobile=str(
+                    request.data.get("guardian_mobile", "")
+                ).strip(),
+            )
+
+    except Exception as exc:
+        return Response(
+            {
+                "detail": "Student profile creation failed.",
+                "error": str(exc),
+            },
+            status=400,
+        )
+
+    return Response(
+        {
+            "detail": "Student profile created successfully.",
+            "student": {
+                "id": student.id,
+                "global_student_id": student.global_student_id,
+                "name": student.name,
+            },
+        },
+        status=201,
+    )
 
 
 @api_view(["GET", "POST"])
