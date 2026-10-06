@@ -8,6 +8,9 @@ from .views import (
     institution_global_identity_check,
     institution_profile_update,
     institution_student_create,
+    institution_student_enrollment,
+    institution_attendance_monthly,
+    institution_student_photo_update,
     institution_academic_data,
     institution_academic_summary,
     institution_academic_overview,
@@ -50,6 +53,21 @@ urlpatterns = [
         "students/",
         institution_student_create,
         name="institution-student-create",
+    ),
+    path(
+        "attendance/monthly/",
+        institution_attendance_monthly,
+        name="institution-attendance-monthly",
+    ),
+    path(
+        "students/enrollment/",
+        institution_student_enrollment,
+        name="institution-student-enrollment",
+    ),
+    path(
+        "students/<int:student_id>/photo/",
+        institution_student_photo_update,
+        name="institution-student-photo-update",
     ),
     path(
         "types/",
