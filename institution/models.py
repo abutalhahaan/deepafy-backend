@@ -915,6 +915,192 @@ class Student(models.Model):
         return f"{self.global_student_id} - {self.name}"
 
 
+class StudentInstitutionIdentity(models.Model):
+    """
+    Institution-specific identity for a student.
+
+    A student keeps a separate Student ID in each institution.
+    Previous institution IDs remain preserved as historical identities.
+    """
+
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.PROTECT,
+        related_name="institution_identities",
+    )
+
+    institution = models.ForeignKey(
+        InstitutionProfile,
+        on_delete=models.PROTECT,
+        related_name="student_identities",
+    )
+
+    global_student_id = models.CharField(
+        max_length=30,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        ordering = ["created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["institution", "global_student_id"],
+                name="unique_student_id_per_institution",
+            ),
+            models.UniqueConstraint(
+                fields=["student", "institution"],
+                name="unique_student_institution_identity",
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.global_student_id} - "
+            f"{self.institution.institution_name}"
+        )
+
+
+class InstitutionAttendanceSettings(models.Model):
+    """
+    Institution-level attendance configuration.
+
+    Weekly holidays are controlled by the institution.
+    Weekday values follow Python's convention:
+    Monday=0 ... Sunday=6.
+    """
+
+    institution = models.OneToOneField(
+        InstitutionProfile,
+        on_delete=models.CASCADE,
+        related_name="attendance_settings",
+    )
+
+    weekly_holidays = models.JSONField(
+        default=list,
+        blank=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    def __str__(self):
+        return f"Attendance Settings - {self.institution}"
+
+
+class InstitutionHoliday(models.Model):
+    """
+    Institution-specific holiday on a particular date.
+    """
+
+    institution = models.ForeignKey(
+        InstitutionProfile,
+        on_delete=models.CASCADE,
+        related_name="attendance_holidays",
+    )
+
+    date = models.DateField()
+
+    name = models.CharField(
+        max_length=255,
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        ordering = ["date"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["institution", "date"],
+                name="unique_institution_holiday_date",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.institution} - {self.date} - {self.name}"
+
+
+class StudentAttendance(models.Model):
+    """
+    Daily attendance linked to the student's institution enrollment.
+
+    The enrollment remains the source of the student's academic identity.
+    """
+
+    STATUS_PRESENT = "P"
+    STATUS_ABSENT = "A"
+    STATUS_LEAVE = "L"
+
+    STATUS_CHOICES = [
+        (STATUS_PRESENT, "Present"),
+        (STATUS_ABSENT, "Absent"),
+        (STATUS_LEAVE, "Leave"),
+    ]
+
+    enrollment = models.ForeignKey(
+        "StudentEnrollment",
+        on_delete=models.PROTECT,
+        related_name="attendance_records",
+    )
+
+    date = models.DateField()
+
+    status = models.CharField(
+        max_length=1,
+        choices=STATUS_CHOICES,
+        default=STATUS_PRESENT,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        ordering = ["date"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["enrollment", "date"],
+                name="unique_enrollment_attendance_date",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["enrollment", "date"],
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.enrollment.student.global_student_id} - "
+            f"{self.date} - {self.status}"
+        )
+
+
 class StudentProfilePhoto(models.Model):
     """
     Historical student profile photos.
@@ -1063,6 +1249,57 @@ class StudentEnrollment(models.Model):
             f"{self.student.global_student_id} - "
             f"{self.institution.institution_name} - "
             f"{self.academic_session.name}"
+        )
+
+
+class StudentEnrollmentAcademicValue(models.Model):
+    """
+    Dynamic academic value for an institution-specific student enrollment.
+
+    The academic level definition comes from InstitutionAcademicLevel.
+    This allows different institution types to use different academic
+    structures without forcing Department/Class/Section fields everywhere.
+    """
+
+    enrollment = models.ForeignKey(
+        StudentEnrollment,
+        on_delete=models.CASCADE,
+        related_name="academic_values",
+    )
+
+    academic_level = models.ForeignKey(
+        InstitutionAcademicLevel,
+        on_delete=models.PROTECT,
+        related_name="student_values",
+    )
+
+    value = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["academic_level__created_at", "academic_level__name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["enrollment", "academic_level"],
+                name="unique_enrollment_academic_level_value",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["enrollment", "academic_level"],
+                name="enrollment_academic_level_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.enrollment.student.global_student_id} - "
+            f"{self.academic_level.name}: {self.value}"
         )
 
 

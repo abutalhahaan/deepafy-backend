@@ -26,6 +26,12 @@ from .models import (
     Subject,
     Student,
     StudentEnrollment,
+    StudentEnrollmentAcademicValue,
+    StudentInstitutionIdentity,
+    StudentProfilePhoto,
+    InstitutionAttendanceSettings,
+    InstitutionHoliday,
+    StudentAttendance,
 )
 from identity.models import UserIdentity, AcademicBackground
 
@@ -1333,6 +1339,7 @@ def institution_profile_by_username(request, username):
             "management_type": profile.management_type,
             "mpo_status": profile.mpo_status,
             "institution_code": profile.institution_code,
+            "global_identity_code": profile.global_identity_code,
             "eiin": profile.eiin,
             "affiliation_board": profile.affiliation_board,
             "affiliations": [
@@ -1570,6 +1577,23 @@ def institution_profile_update(request):
         elif requested_code:
             profile.global_identity_code = requested_code
 
+    if "institution_code" in request.data:
+        requested_code = request.data.get("institution_code")
+
+        if requested_code is not None:
+            requested_code = str(requested_code).strip()
+
+        if profile.institution_code:
+            if requested_code and requested_code != profile.institution_code:
+                return Response(
+                    {
+                        "detail": "Institution Code cannot be changed after it has been set."
+                    },
+                    status=400,
+                )
+        elif requested_code:
+            profile.institution_code = requested_code
+
     fields = [
         "institution_name",
         "established_year",
@@ -1582,7 +1606,6 @@ def institution_profile_update(request):
         "total_staff",
         "management_type",
         "mpo_status",
-        "institution_code",
         "eiin",
         "affiliation_board",
         "full_address",
@@ -1651,58 +1674,25 @@ def institution_profile_update(request):
 
     if "administrative_location" in request.data:
         value = request.data.get("administrative_location")
-        profile.administrative_location_id = (
-            int(value) if value not in [None, ""] else None
-        )
 
-    if "affiliation_ids" in request.data:
-        values = request.data.get("affiliation_ids")
-
-        if isinstance(values, str):
+        if value in [None, ""]:
+            profile.administrative_location_id = None
+        else:
             try:
-                values = json.loads(values)
-            except json.JSONDecodeError:
+                from companies.models import AdministrativeLocation
+
+                location = AdministrativeLocation.objects.get(
+                    location_id=str(value),
+                    country_id=profile.country_id,
+                    is_active=True,
+                )
+            except AdministrativeLocation.DoesNotExist:
                 return Response(
-                    {"detail": "Invalid affiliation IDs format."},
+                    {"detail": "Invalid administrative location."},
                     status=400,
                 )
 
-        if not isinstance(values, list):
-            return Response(
-                {"detail": "Affiliation IDs must be a list."},
-                status=400,
-            )
-
-        try:
-            affiliation_ids = [
-                int(value)
-                for value in values
-                if value not in [None, ""]
-            ]
-        except (TypeError, ValueError):
-            return Response(
-                {"detail": "Invalid affiliation ID."},
-                status=400,
-            )
-
-        authorities = InstitutionAuthority.objects.filter(
-            id__in=affiliation_ids,
-            country_id=profile.country_id,
-            is_active=True,
-        )
-
-        if len(affiliation_ids) != authorities.count():
-            return Response(
-                {
-                    "detail": (
-                        "One or more selected affiliations are invalid "
-                        "for this institution's country."
-                    )
-                },
-                status=400,
-            )
-
-        profile.affiliations.set(authorities)
+            profile.administrative_location_id = location.id
 
     if "featured_image" in request.FILES:
         profile.featured_image = request.FILES["featured_image"]
@@ -1739,7 +1729,6 @@ def institution_profile_update(request):
 
     # Admin-controlled Authority / Affiliation
     if "affiliation_ids" in request.data:
-        from institution.models import InstitutionAuthority
 
         raw_affiliation_ids = request.data.get("affiliation_ids")
 
@@ -1878,7 +1867,7 @@ def institution_profile_update(request):
         "phone": profile.phone,
     })
 
-@api_view(["POST"])
+@api_view(["GET", "POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def institution_student_create(request):
@@ -1897,6 +1886,245 @@ def institution_student_create(request):
         return Response(
             {"detail": "Institution profile not found."},
             status=404,
+        )
+
+    if request.method == "GET":
+        global_student_id = str(
+            request.query_params.get("global_student_id", "")
+        ).strip()
+
+        # List all students belonging to the current institution.
+        # A specific student is returned below when global_student_id is provided.
+        if not global_student_id:
+            identities = list(
+                institution.student_identities
+                .select_related("student")
+                .order_by("-id")
+            )
+
+            student_ids = [identity.student.id for identity in identities]
+
+            enrollments = (
+                StudentEnrollment.objects
+                .filter(
+                    institution=institution,
+                    student_id__in=student_ids,
+                )
+                .select_related(
+                    "academic_session",
+                    "department",
+                )
+                .prefetch_related(
+                    "academic_values__academic_level",
+                )
+                .order_by("-id")
+            )
+
+            enrollment_by_student = {}
+
+            for enrollment in enrollments:
+                existing = enrollment_by_student.get(enrollment.student_id)
+
+                if existing is None:
+                    enrollment_by_student[enrollment.student_id] = enrollment
+                    continue
+
+                if (
+                    enrollment.academic_session.is_current
+                    and not existing.academic_session.is_current
+                ):
+                    enrollment_by_student[enrollment.student_id] = enrollment
+
+            return Response(
+                {
+                    "found": True,
+                    "students": [
+                        {
+                            "id": identity.student.id,
+                            "global_student_id": identity.global_student_id,
+                            "name": identity.student.name,
+                            "father_name": identity.student.father_name,
+                            "mother_name": identity.student.mother_name,
+                            "gender": identity.student.gender,
+                            "date_of_birth": identity.student.date_of_birth,
+                            "blood_group": identity.student.blood_group,
+                            "mobile": identity.student.mobile,
+                            "email": identity.student.email,
+                            "present_address": identity.student.present_address,
+                            "permanent_address": identity.student.permanent_address,
+                            "guardian_name": identity.student.guardian_name,
+                            "guardian_relationship": identity.student.guardian_relationship,
+                            "guardian_mobile": identity.student.guardian_mobile,
+                            "enrollment": (
+                                {
+                                    "id": enrollment.id,
+                                    "academic_session": {
+                                        "id": enrollment.academic_session.id,
+                                        "name": enrollment.academic_session.name,
+                                        "is_current": enrollment.academic_session.is_current,
+                                    },
+                                    "class_name": enrollment.class_name,
+                                    "department": (
+                                        {
+                                            "id": enrollment.department.id,
+                                            "name": enrollment.department.name,
+                                            "code": enrollment.department.code,
+                                        }
+                                        if enrollment.department
+                                        else None
+                                    ),
+                                    "section": enrollment.section,
+                                    "roll": enrollment.roll,
+                                    "admission_date": enrollment.admission_date,
+                                    "status": enrollment.status,
+                                    "academic_values": [
+                                        {
+                                            "id": academic_value.id,
+                                            "academic_level_id": academic_value.academic_level.id,
+                                            "type": academic_value.academic_level.level_type,
+                                            "name": academic_value.academic_level.name,
+                                            "parent": academic_value.academic_level.parent or None,
+                                            "value": academic_value.value,
+                                        }
+                                        for academic_value in enrollment.academic_values.all()
+                                    ],
+                                }
+                                if (enrollment := enrollment_by_student.get(identity.student.id))
+                                else None
+                            ),
+                        }
+                        for identity in identities
+                    ],
+                },
+                status=200,
+            )
+
+        try:
+            student = (
+                Student.objects
+                .prefetch_related(
+                    "institution_identities__institution",
+                )
+                .get(global_student_id=global_student_id)
+            )
+        except Student.DoesNotExist:
+            return Response(
+                {
+                    "found": False,
+                    "detail": "No Deepafy student profile found.",
+                },
+                status=404,
+            )
+
+        identities = list(
+            student.institution_identities.all()
+        )
+
+        current_identity = next(
+            (
+                identity
+                for identity in identities
+                if identity.institution_id == institution.id
+            ),
+            None,
+        )
+
+        def build_student_location(location):
+            if not location:
+                return None
+
+            hierarchy = []
+            current_location = location
+
+            while current_location:
+                hierarchy.append({
+                    "id": str(current_location.location_id),
+                    "name": current_location.name,
+                    "level": current_location.level.level,
+                    "level_name": current_location.level.name,
+                })
+                current_location = current_location.parent
+
+            hierarchy.reverse()
+
+            return {
+                "country": (
+                    {
+                        "id": location.country.id,
+                        "name": location.country.name,
+                        "code": location.country.code,
+                    }
+                    if location.country
+                    else None
+                ),
+                "location": {
+                    "id": str(location.location_id),
+                    "name": location.name,
+                    "level": location.level.level,
+                    "level_name": location.level.name,
+                },
+                "hierarchy": hierarchy,
+            }
+
+        present_location_data = build_student_location(
+            student.present_location
+        )
+        permanent_location_data = build_student_location(
+            student.permanent_location
+        )
+
+        current_student_photo = (
+            StudentProfilePhoto.objects
+            .filter(student=student, is_current=True)
+            .order_by('-academic_year', '-created_at')
+            .first()
+        )
+
+        return Response(
+            {
+                "found": True,
+                "can_import": current_identity is None,
+                "same_institution": current_identity is not None,
+                "student": {
+                    "id": student.id,
+                    "global_student_id": (
+                        current_identity.global_student_id
+                        if current_identity
+                        else None
+                    ),
+                    "name": student.name,
+                    "photo": (
+                        current_student_photo.photo.url
+                        if current_student_photo and current_student_photo.photo
+                        else None
+                    ),
+                    "father_name": student.father_name,
+                    "mother_name": student.mother_name,
+                    "gender": student.gender,
+                    "date_of_birth": student.date_of_birth,
+                    "blood_group": student.blood_group,
+                    "mobile": student.mobile,
+                    "email": student.email,
+                    "present_address": student.present_address,
+                    "present_location": present_location_data,
+                    "permanent_address": student.permanent_address,
+                    "permanent_location": permanent_location_data,
+                    "guardian_name": student.guardian_name,
+                    "guardian_relationship": student.guardian_relationship,
+                    "guardian_mobile": student.guardian_mobile,
+                },
+                "institution_identities": [
+                    {
+                        "institution_id": identity.institution_id,
+                        "institution_name": (
+                            identity.institution.institution_name
+                        ),
+                        "global_student_id": identity.global_student_id,
+                    }
+                    for identity in identities
+                ],
+            },
+            status=200,
         )
 
     if not institution.global_identity_code:
@@ -2002,6 +2230,23 @@ def institution_student_create(request):
                 ).strip(),
             )
 
+            StudentInstitutionIdentity.objects.create(
+                student=student,
+                institution=institution,
+                global_student_id=global_student_id,
+            )
+
+            student_photo = request.FILES.get("photo")
+            if student_photo:
+                from django.utils import timezone
+
+                StudentProfilePhoto.objects.create(
+                    student=student,
+                    academic_year=timezone.now().year,
+                    photo=student_photo,
+                    is_current=True,
+                )
+
     except Exception as exc:
         return Response(
             {
@@ -2021,6 +2266,424 @@ def institution_student_create(request):
             },
         },
         status=201,
+    )
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_student_photo_update(request, student_id):
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=404,
+        )
+
+    try:
+        student = Student.objects.get(id=student_id)
+    except Student.DoesNotExist:
+        return Response(
+            {"detail": "Student not found."},
+            status=404,
+        )
+
+    if not StudentInstitutionIdentity.objects.filter(
+        student=student,
+        institution=institution,
+    ).exists():
+        return Response(
+            {"detail": "Student does not belong to this institution."},
+            status=403,
+        )
+
+    photo = request.FILES.get("photo")
+    if not photo:
+        return Response(
+            {"detail": "Profile photo is required."},
+            status=400,
+        )
+
+    from django.utils import timezone
+
+    current_year = timezone.now().year
+
+    StudentProfilePhoto.objects.filter(
+        student=student,
+        is_current=True,
+    ).update(is_current=False)
+
+    current_photo = StudentProfilePhoto.objects.filter(
+        student=student,
+        academic_year=current_year,
+    ).first()
+
+    if current_photo:
+        current_photo.photo = photo
+        current_photo.is_current = True
+        current_photo.save(update_fields=["photo", "is_current"])
+    else:
+        current_photo = StudentProfilePhoto.objects.create(
+            student=student,
+            academic_year=current_year,
+            photo=photo,
+            is_current=True,
+        )
+
+    return Response(
+        {
+            "detail": "Student profile photo updated successfully.",
+            "photo": current_photo.photo.url if current_photo.photo else None,
+        },
+        status=200,
+    )
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_student_enrollment(request):
+    """
+    List or save institution-specific academic enrollment for a student.
+
+    Enrollment is linked through the student's Global Student ID.
+    """
+
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    global_student_id = str(
+        request.query_params.get("global_student_id")
+        if request.method == "GET"
+        else request.data.get("global_student_id", "")
+    ).strip()
+
+    if not global_student_id:
+        return Response(
+            {"detail": "Global Student ID is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        student = Student.objects.get(
+            global_student_id=global_student_id,
+        )
+    except Student.DoesNotExist:
+        return Response(
+            {"detail": "Student not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if not StudentInstitutionIdentity.objects.filter(
+        student=student,
+        institution=institution,
+    ).exists():
+        return Response(
+            {"detail": "Student does not belong to this institution."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    if request.method == "GET":
+        enrollments = (
+            StudentEnrollment.objects
+            .filter(
+                student=student,
+                institution=institution,
+            )
+            .select_related("academic_session", "department")
+            .prefetch_related(
+                "academic_values__academic_level"
+            )
+        )
+
+        return Response(
+            {
+                "found": True,
+                "global_student_id": global_student_id,
+                "enrollments": [
+                    {
+                        "id": enrollment.id,
+                        "academic_session": {
+                            "id": enrollment.academic_session.id,
+                            "name": enrollment.academic_session.name,
+                            "start_date": enrollment.academic_session.start_date,
+                            "end_date": enrollment.academic_session.end_date,
+                            "status": enrollment.academic_session.status,
+                            "is_current": enrollment.academic_session.is_current,
+                        },
+                        "class_name": enrollment.class_name,
+                        "academic_values": [
+                            {
+                                "id": academic_value.id,
+                                "academic_level_id": academic_value.academic_level.id,
+                                "type": academic_value.academic_level.level_type,
+                                "name": academic_value.academic_level.name,
+                                "parent": academic_value.academic_level.parent or None,
+                                "value": academic_value.value,
+                            }
+                            for academic_value in enrollment.academic_values.all()
+                        ],
+                        "department": (
+                            {
+                                "id": enrollment.department.id,
+                                "name": enrollment.department.name,
+                                "code": enrollment.department.code,
+                            }
+                            if enrollment.department
+                            else None
+                        ),
+                        "section": enrollment.section,
+                        "roll": enrollment.roll,
+                        "admission_date": enrollment.admission_date,
+                        "previous_institution": enrollment.previous_institution,
+                        "admission_type": enrollment.admission_type,
+                        "status": enrollment.status,
+                    }
+                    for enrollment in enrollments
+                ],
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    try:
+        academic_session_id = int(
+            request.data.get("academic_session_id")
+        )
+    except (TypeError, ValueError):
+        return Response(
+            {"detail": "Valid academic_session_id is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        academic_session = InstitutionAcademicSession.objects.get(
+            id=academic_session_id,
+            institution=institution,
+        )
+    except InstitutionAcademicSession.DoesNotExist:
+        return Response(
+            {"detail": "Academic session not found for this institution."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    department = None
+    department_id = request.data.get("department_id")
+
+    if department_id not in (None, "", 0, "0"):
+        try:
+            department = Department.objects.get(
+                id=int(department_id),
+                is_active=True,
+            )
+        except (Department.DoesNotExist, TypeError, ValueError):
+            return Response(
+                {"detail": "Invalid department."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    class_name = str(
+        request.data.get("class_name", "")
+    ).strip()
+
+    academic_values_data = request.data.get("academic_values", [])
+
+    if academic_values_data in (None, ""):
+        academic_values_data = []
+
+    if not isinstance(academic_values_data, list):
+        return Response(
+            {"detail": "academic_values must be a list."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    validated_academic_values = []
+
+    for item in academic_values_data:
+        if not isinstance(item, dict):
+            return Response(
+                {"detail": "Each academic value must be an object."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            academic_level_id = int(item.get("academic_level_id"))
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Valid academic_level_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        academic_level = InstitutionAcademicLevel.objects.filter(
+            id=academic_level_id,
+            institution=institution,
+        ).first()
+
+        if academic_level is None:
+            return Response(
+                {
+                    "detail": (
+                        f"Academic level {academic_level_id} "
+                        "does not belong to this institution."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        value = str(item.get("value", "")).strip()
+
+        validated_academic_values.append(
+            (academic_level, value)
+        )
+
+    dynamic_class_name = ""
+    dynamic_section = ""
+
+    for academic_level, value in validated_academic_values:
+        if academic_level.level_type.strip().lower() == "class":
+            dynamic_class_name = value
+        elif academic_level.level_type.strip().lower() == "section":
+            dynamic_section = value
+
+    if dynamic_class_name:
+        class_name = dynamic_class_name
+
+    section = dynamic_section or str(
+        request.data.get("section", "")
+    ).strip()
+
+    status_value = str(
+        request.data.get(
+            "status",
+            StudentEnrollment.STATUS_RUNNING,
+        )
+    ).strip().upper()
+
+    valid_statuses = {
+        choice[0]
+        for choice in StudentEnrollment.STATUS_CHOICES
+    }
+
+    if status_value not in valid_statuses:
+        return Response(
+            {
+                "detail": "Invalid enrollment status.",
+                "allowed": sorted(valid_statuses),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    admission_date = request.data.get("admission_date") or None
+
+    if admission_date:
+        from django.utils.dateparse import parse_date
+
+        admission_date = parse_date(str(admission_date))
+
+        if admission_date is None:
+            return Response(
+                {"detail": "Invalid admission_date. Use YYYY-MM-DD."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    enrollment, created = StudentEnrollment.objects.update_or_create(
+        student=student,
+        institution=institution,
+        academic_session=academic_session,
+        defaults={
+            "class_name": class_name,
+            "department": department,
+            "section": section,
+            "roll": str(
+                request.data.get("roll", "")
+            ).strip(),
+            "admission_date": admission_date,
+            "previous_institution": str(
+                request.data.get("previous_institution", "")
+            ).strip(),
+            "admission_type": str(
+                request.data.get("admission_type", "")
+            ).strip(),
+            "status": status_value,
+        },
+    )
+
+    StudentEnrollmentAcademicValue.objects.filter(
+        enrollment=enrollment,
+    ).exclude(
+        academic_level__in=[
+            academic_level
+            for academic_level, _ in validated_academic_values
+        ]
+    ).delete()
+
+    for academic_level, value in validated_academic_values:
+        StudentEnrollmentAcademicValue.objects.update_or_create(
+            enrollment=enrollment,
+            academic_level=academic_level,
+            defaults={
+                "value": value,
+            },
+        )
+
+    return Response(
+        {
+            "detail": (
+                "Academic enrollment created successfully."
+                if created
+                else "Academic enrollment updated successfully."
+            ),
+            "created": created,
+            "enrollment": {
+                "id": enrollment.id,
+                "global_student_id": student.global_student_id,
+                "academic_session": {
+                    "id": academic_session.id,
+                    "name": academic_session.name,
+                },
+                "class_name": enrollment.class_name,
+                "academic_values": [
+                    {
+                        "id": academic_value.id,
+                        "academic_level_id": academic_value.academic_level.id,
+                        "type": academic_value.academic_level.level_type,
+                        "name": academic_value.academic_level.name,
+                        "parent": academic_value.academic_level.parent or None,
+                        "value": academic_value.value,
+                    }
+                    for academic_value in enrollment.academic_values.select_related(
+                        "academic_level"
+                    ).all()
+                ],
+                "department": (
+                    {
+                        "id": department.id,
+                        "name": department.name,
+                        "code": department.code,
+                    }
+                    if department
+                    else None
+                ),
+                "section": enrollment.section,
+                "roll": enrollment.roll,
+                "admission_date": enrollment.admission_date,
+                "previous_institution": enrollment.previous_institution,
+                "admission_type": enrollment.admission_type,
+                "status": enrollment.status,
+            },
+        },
+        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
     )
 
 
@@ -2516,4 +3179,287 @@ def institution_academic_data(request):
             "created": created,
         },
         status=201 if created else 200,
+    )
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_attendance_monthly(request):
+    """
+    Return monthly student attendance sheet for the authenticated institution.
+
+    H (Holiday) is derived from weekly holidays and specific institution holidays.
+    StudentAttendance stores only P/A/L.
+    """
+
+    from calendar import monthrange
+    from datetime import date
+
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        year = int(request.query_params.get("year"))
+        month = int(request.query_params.get("month"))
+    except (TypeError, ValueError):
+        today = date.today()
+        year = today.year
+        month = today.month
+
+    if month < 1 or month > 12:
+        return Response(
+            {"detail": "Invalid month."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if year < 2000 or year > 2100:
+        return Response(
+            {"detail": "Invalid year."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    session_id = request.query_params.get("academic_session")
+    academic_filters_raw = request.query_params.get("academic_filters")
+    academic_filters = {}
+
+    if academic_filters_raw:
+        try:
+            parsed_filters = json.loads(academic_filters_raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return Response(
+                {"detail": "Invalid academic filters."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not isinstance(parsed_filters, dict):
+            return Response(
+                {"detail": "Academic filters must be an object."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        academic_filters = parsed_filters
+
+    enrollments = (
+        StudentEnrollment.objects
+        .filter(
+            institution=institution,
+        )
+        .select_related(
+            "student",
+            "academic_session",
+            "department",
+        )
+        .prefetch_related(
+            "academic_values__academic_level",
+        )
+    )
+
+    if session_id:
+        try:
+            enrollments = enrollments.filter(
+                academic_session_id=int(session_id)
+            )
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Invalid academic session."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    if academic_filters:
+        for level_id, selected_value in academic_filters.items():
+            try:
+                level_id = int(level_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "Invalid academic level."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            selected_value = str(selected_value or "").strip()
+            if not selected_value or selected_value == "all":
+                continue
+
+            level_exists = InstitutionAcademicLevel.objects.filter(
+                id=level_id,
+                institution=institution,
+            ).exists()
+
+            if not level_exists:
+                return Response(
+                    {"detail": "Academic level not found."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            enrollments = enrollments.filter(
+                academic_values__academic_level_id=level_id,
+                academic_values__value=selected_value,
+            )
+
+    enrollments = enrollments.order_by(
+        "roll",
+        "student__name",
+        "id",
+    )
+
+    first_day = date(year, month, 1)
+    last_day_number = monthrange(year, month)[1]
+    last_day = date(year, month, last_day_number)
+
+    settings_obj = InstitutionAttendanceSettings.objects.filter(
+        institution=institution,
+    ).first()
+
+    weekly_holidays = set(
+        settings_obj.weekly_holidays
+        if settings_obj and isinstance(
+            settings_obj.weekly_holidays,
+            list,
+        )
+        else []
+    )
+
+    holidays = {
+        holiday.date: holiday.name
+        for holiday in InstitutionHoliday.objects.filter(
+            institution=institution,
+            date__range=(first_day, last_day),
+            is_active=True,
+        )
+    }
+
+    attendance_records = StudentAttendance.objects.filter(
+        enrollment__in=enrollments,
+        date__range=(first_day, last_day),
+    ).values(
+        "enrollment_id",
+        "date",
+        "status",
+    )
+
+    attendance_map = {
+        (
+            record["enrollment_id"],
+            record["date"],
+        ): record["status"]
+        for record in attendance_records
+    }
+
+    today = date.today()
+
+    dates = []
+
+    for day in range(1, last_day_number + 1):
+        current_date = date(year, month, day)
+
+        if current_date in holidays:
+            status_code = "H"
+            holiday_name = holidays[current_date]
+        elif current_date.weekday() in weekly_holidays:
+            status_code = "H"
+            holiday_name = "Weekly Holiday"
+        else:
+            status_code = None
+            holiday_name = None
+
+        dates.append(
+            {
+                "date": current_date.isoformat(),
+                "day": day,
+                "weekday": current_date.strftime("%A"),
+                "is_today": current_date == today,
+                "is_past": current_date < today,
+                "is_future": current_date > today,
+                "is_holiday": status_code == "H",
+                "holiday_name": holiday_name,
+                "default_status": (
+                    status_code
+                    if status_code == "H"
+                    else "P"
+                ),
+            }
+        )
+
+    students = []
+
+    for enrollment in enrollments:
+        daily = {}
+
+        for date_info in dates:
+            current_date = date.fromisoformat(
+                date_info["date"]
+            )
+
+            if date_info["is_holiday"]:
+                daily[str(date_info["day"])] = "H"
+                continue
+
+            saved_status = attendance_map.get(
+                (enrollment.id, current_date)
+            )
+
+            daily[str(date_info["day"])] = (
+                saved_status
+                if saved_status
+                else "P"
+            )
+
+        students.append(
+            {
+                "enrollment_id": enrollment.id,
+                "student_id": enrollment.student_id,
+                "global_student_id": (
+                    enrollment.student.global_student_id
+                ),
+                "student_name": enrollment.student.name,
+                "roll": enrollment.roll,
+                "class_name": enrollment.class_name,
+                "department": (
+                    {
+                        "id": enrollment.department_id,
+                        "name": enrollment.department.name,
+                    }
+                    if enrollment.department
+                    else None
+                ),
+                "section": enrollment.section,
+                "academic_values": [
+                    {
+                        "id": value.id,
+                        "academic_level_id": value.academic_level_id,
+                        "type": value.academic_level.level_type,
+                        "name": value.academic_level.name,
+                        "parent": value.academic_level.parent,
+                        "value": value.value,
+                    }
+                    for value in enrollment.academic_values.all()
+                ],
+                "academic_session": {
+                    "id": enrollment.academic_session_id,
+                    "name": enrollment.academic_session.name,
+                    "is_current": (
+                        enrollment.academic_session.is_current
+                    ),
+                },
+                "attendance": daily,
+            }
+        )
+
+    return Response(
+        {
+            "year": year,
+            "month": month,
+            "days_in_month": last_day_number,
+            "today": today.isoformat(),
+            "dates": dates,
+            "students": students,
+            "count": len(students),
+        }
     )
