@@ -10,6 +10,7 @@ from django.db import IntegrityError
 from django.db.models import Q
 import re
 import json
+from django.utils import timezone
 
 from core.services.feature_access import get_feature_access
 from institution.services import generate_global_student_id
@@ -23,6 +24,7 @@ from .models import (
     InstitutionAdmissionType,
     InstitutionAcademicSession,
     InstitutionStaffService,
+    InstitutionStaffAttendance,
     UnclaimedPerson,
     UnclaimedPersonQualification,
     Subject,
@@ -36,6 +38,42 @@ from .models import (
     StudentAttendance,
 )
 from identity.models import UserIdentity, AcademicBackground
+
+
+def sync_staff_retirement_status(institution):
+    """
+    Automatically move staff whose retirement date has arrived
+    from RUNNING to RETIRED.
+
+    Applies to both:
+    - Deepafy staff (InstitutionStaffService)
+    - Manual staff (UnclaimedPerson)
+
+    Records are preserved and remain active so they can appear
+    in the existing Retired Alumni section.
+    """
+
+    today = timezone.localdate()
+
+    InstitutionStaffService.objects.filter(
+        institution=institution,
+        is_active=True,
+        status=InstitutionStaffService.STATUS_RUNNING,
+        retirement_date__isnull=False,
+        retirement_date__lte=today,
+    ).update(
+        status=InstitutionStaffService.STATUS_RETIRED,
+    )
+
+    UnclaimedPerson.objects.filter(
+        institution=institution,
+        is_active=True,
+        status=UnclaimedPerson.STATUS_RUNNING,
+        retirement_date__isnull=False,
+        retirement_date__lte=today,
+    ).update(
+        status=UnclaimedPerson.STATUS_RETIRED,
+    )
 
 
 
@@ -611,6 +649,8 @@ def institution_staff_services(request):
         )
 
     if request.method == "GET":
+        sync_staff_retirement_status(profile)
+
         services = (
             InstitutionStaffService.objects
             .filter(
@@ -906,6 +946,8 @@ def institution_unclaimed_staff(request):
         )
 
     if request.method == "GET":
+        sync_staff_retirement_status(profile)
+
         people = (
             UnclaimedPerson.objects
             .filter(
@@ -4246,3 +4288,411 @@ def institution_attendance_monthly(request):
             "count": len(students),
         }
     )
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_staff_attendance_save(request):
+    """
+    Create or update one daily attendance record for an active running
+    teacher or staff member.
+
+    This endpoint is completely separate from student attendance.
+    """
+
+    from datetime import date
+
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    staff_service_id = request.data.get("staff_service_id")
+    attendance_date_raw = request.data.get("date")
+    attendance_status = str(
+        request.data.get("status") or ""
+    ).strip().upper()
+
+    if not staff_service_id:
+        return Response(
+            {"detail": "Staff service is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        staff_service_id = int(staff_service_id)
+    except (TypeError, ValueError):
+        return Response(
+            {"detail": "Invalid staff service."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        attendance_date = date.fromisoformat(
+            str(attendance_date_raw)
+        )
+    except (TypeError, ValueError):
+        return Response(
+            {"detail": "Invalid attendance date."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if attendance_status not in {
+        InstitutionStaffAttendance.STATUS_PRESENT,
+        InstitutionStaffAttendance.STATUS_ABSENT,
+        InstitutionStaffAttendance.STATUS_LEAVE,
+    }:
+        return Response(
+            {"detail": "Attendance status must be P, A, or L."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        staff_service = InstitutionStaffService.objects.get(
+            id=staff_service_id,
+            institution=institution,
+            status=InstitutionStaffService.STATUS_RUNNING,
+            is_active=True,
+        )
+    except InstitutionStaffService.DoesNotExist:
+        return Response(
+            {"detail": "Active running staff member not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    settings_obj = InstitutionAttendanceSettings.objects.filter(
+        institution=institution,
+    ).first()
+
+    weekly_holidays = set(
+        settings_obj.weekly_holidays
+        if settings_obj
+        and isinstance(settings_obj.weekly_holidays, list)
+        else []
+    )
+
+    if attendance_date.weekday() in weekly_holidays:
+        return Response(
+            {"detail": "Attendance cannot be recorded on a weekly holiday."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    holiday_exists = InstitutionHoliday.objects.filter(
+        institution=institution,
+        from_date__lte=attendance_date,
+        to_date__gte=attendance_date,
+        is_active=True,
+    ).exists()
+
+    if holiday_exists:
+        return Response(
+            {"detail": "Attendance cannot be recorded on an institution holiday."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    attendance, created = InstitutionStaffAttendance.objects.update_or_create(
+        staff_service=staff_service,
+        date=attendance_date,
+        defaults={
+            "status": attendance_status,
+        },
+    )
+
+    return Response(
+        {
+            "id": attendance.id,
+            "staff_service_id": attendance.staff_service_id,
+            "date": attendance.date.isoformat(),
+            "status": attendance.status,
+            "created": created,
+        },
+        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_staff_attendance_monthly(request):
+    """
+    Return monthly attendance for active running teachers and staff.
+
+    This is completely separate from student attendance.
+
+    Staff can come from two independent sources:
+    - Deepafy staff: InstitutionStaffService
+    - Manual staff: UnclaimedPerson
+
+    No academic session, class, section, or student enrollment data is used.
+    """
+
+    from calendar import monthrange
+    from datetime import date, timedelta
+
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    sync_staff_retirement_status(institution)
+
+    try:
+        year = int(request.query_params.get("year"))
+        month = int(request.query_params.get("month"))
+    except (TypeError, ValueError):
+        today = date.today()
+        year = today.year
+        month = today.month
+
+    if month < 1 or month > 12:
+        return Response(
+            {"detail": "Invalid month."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if year < 2000 or year > 2100:
+        return Response(
+            {"detail": "Invalid year."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    staff_services = list(
+        InstitutionStaffService.objects
+        .filter(
+            institution=institution,
+            status=InstitutionStaffService.STATUS_RUNNING,
+            is_active=True,
+        )
+        .select_related("identity")
+        .order_by(
+            "designation",
+            "identity__first_name",
+            "identity__last_name",
+            "identity_id",
+        )
+    )
+
+    manual_staff = list(
+        UnclaimedPerson.objects
+        .filter(
+            institution=institution,
+            status=UnclaimedPerson.STATUS_RUNNING,
+            is_active=True,
+        )
+        .order_by(
+            "designation",
+            "full_name",
+            "id",
+        )
+    )
+
+    first_day = date(year, month, 1)
+    last_day_number = monthrange(year, month)[1]
+    last_day = date(year, month, last_day_number)
+
+    settings_obj = InstitutionAttendanceSettings.objects.filter(
+        institution=institution,
+    ).first()
+
+    weekly_holidays = set(
+        settings_obj.weekly_holidays
+        if settings_obj
+        and isinstance(settings_obj.weekly_holidays, list)
+        else []
+    )
+
+    holiday_ranges = InstitutionHoliday.objects.filter(
+        institution=institution,
+        from_date__lte=last_day,
+        to_date__gte=first_day,
+        is_active=True,
+    )
+
+    holidays = {}
+
+    for holiday in holiday_ranges:
+        current_date = max(holiday.from_date, first_day)
+        holiday_end = min(holiday.to_date, last_day)
+
+        while current_date <= holiday_end:
+            holidays[current_date] = holiday.name
+            current_date += timedelta(days=1)
+
+    attendance_records = (
+        InstitutionStaffAttendance.objects
+        .filter(date__range=(first_day, last_day))
+        .filter(
+            Q(staff_service__in=staff_services)
+            | Q(unclaimed_person__in=manual_staff)
+        )
+        .values(
+            "staff_service_id",
+            "unclaimed_person_id",
+            "date",
+            "status",
+        )
+    )
+
+    attendance_map = {}
+
+    for record in attendance_records:
+        if record["staff_service_id"] is not None:
+            attendance_map[
+                (
+                    "deepafy",
+                    record["staff_service_id"],
+                    record["date"],
+                )
+            ] = record["status"]
+
+        if record["unclaimed_person_id"] is not None:
+            attendance_map[
+                (
+                    "manual",
+                    record["unclaimed_person_id"],
+                    record["date"],
+                )
+            ] = record["status"]
+
+    today = date.today()
+    dates = []
+
+    for day in range(1, last_day_number + 1):
+        current_date = date(year, month, day)
+
+        if current_date in holidays:
+            status_code = "H"
+            holiday_name = holidays[current_date]
+        elif current_date.weekday() in weekly_holidays:
+            status_code = "H"
+            holiday_name = "Weekly Holiday"
+        else:
+            status_code = None
+            holiday_name = None
+
+        dates.append(
+            {
+                "date": current_date.isoformat(),
+                "day": day,
+                "weekday": current_date.strftime("%A"),
+                "is_today": current_date == today,
+                "is_past": current_date < today,
+                "is_future": current_date > today,
+                "is_holiday": status_code == "H",
+                "holiday_name": holiday_name,
+                "default_status": (
+                    status_code
+                    if status_code == "H"
+                    else "P"
+                ),
+            }
+        )
+
+    teachers_staff = []
+
+    for service in staff_services:
+        daily = {}
+
+        for date_info in dates:
+            current_date = date.fromisoformat(
+                date_info["date"]
+            )
+
+            if date_info["is_holiday"]:
+                daily[str(date_info["day"])] = "H"
+                continue
+
+            saved_status = attendance_map.get(
+                ("deepafy", service.id, current_date)
+            )
+
+            daily[str(date_info["day"])] = (
+                saved_status
+                if saved_status
+                else "P"
+            )
+
+        teachers_staff.append(
+            {
+                "staff_source": "deepafy",
+                "staff_service_id": service.id,
+                "unclaimed_person_id": None,
+                "identity_id": service.identity_id,
+                "name": (
+                    f"{service.identity.first_name or ''} "
+                    f"{service.identity.last_name or ''}"
+                ).strip() or service.identity.username,
+                "username": service.identity.username,
+                "designation": service.designation,
+                "department": service.department,
+                "attendance": daily,
+            }
+        )
+
+    for person in manual_staff:
+        daily = {}
+
+        for date_info in dates:
+            current_date = date.fromisoformat(
+                date_info["date"]
+            )
+
+            if date_info["is_holiday"]:
+                daily[str(date_info["day"])] = "H"
+                continue
+
+            saved_status = attendance_map.get(
+                ("manual", person.id, current_date)
+            )
+
+            daily[str(date_info["day"])] = (
+                saved_status
+                if saved_status
+                else "P"
+            )
+
+        teachers_staff.append(
+            {
+                "staff_source": "manual",
+                "staff_service_id": None,
+                "unclaimed_person_id": person.id,
+                "identity_id": None,
+                "name": person.full_name,
+                "username": None,
+                "designation": person.designation,
+                "department": person.department,
+                "attendance": daily,
+            }
+        )
+
+    teachers_staff.sort(
+        key=lambda staff: (
+            (staff["designation"] or "").lower(),
+            (staff["name"] or "").lower(),
+        )
+    )
+
+    return Response(
+        {
+            "year": year,
+            "month": month,
+            "days_in_month": last_day_number,
+            "today": today.isoformat(),
+            "dates": dates,
+            "teachers_staff": teachers_staff,
+            "count": len(teachers_staff),
+        }
+    )
+

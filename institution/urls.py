@@ -10,6 +10,8 @@ from .views import (
     institution_student_create,
     institution_student_enrollment,
     institution_attendance_monthly,
+    institution_staff_attendance_monthly,
+    institution_staff_attendance_save,
     institution_attendance_holidays,
     institution_attendance_weekly_holidays,
     institution_attendance_holiday_detail,
@@ -63,6 +65,16 @@ urlpatterns = [
         "attendance/monthly/",
         institution_attendance_monthly,
         name="institution-attendance-monthly",
+    ),
+    path(
+        "attendance/staff-monthly/",
+        institution_staff_attendance_monthly,
+        name="institution-staff-attendance-monthly",
+    ),
+    path(
+        "attendance/staff/",
+        institution_staff_attendance_save,
+        name="institution-staff-attendance-save",
     ),
     path(
         "attendance/holidays/",

@@ -824,6 +824,80 @@ class InstitutionStaffService(models.Model):
             f"{self.institution.institution_name}"
         )
 
+
+class InstitutionStaffAttendance(models.Model):
+    """
+    Daily attendance record for an institution's active staff service.
+
+    This attendance system is completely separate from student attendance.
+    Historical attendance records are preserved even if a staff member later
+    becomes inactive, former, retired, or otherwise leaves the institution.
+    """
+
+    STATUS_PRESENT = "P"
+    STATUS_ABSENT = "A"
+    STATUS_LEAVE = "L"
+
+    STATUS_CHOICES = [
+        (STATUS_PRESENT, "Present"),
+        (STATUS_ABSENT, "Absent"),
+        (STATUS_LEAVE, "Leave"),
+    ]
+
+    staff_service = models.ForeignKey(
+        InstitutionStaffService,
+        on_delete=models.PROTECT,
+        related_name="attendance_records",
+        null=True,
+        blank=True,
+    )
+
+    unclaimed_person = models.ForeignKey(
+        UnclaimedPerson,
+        on_delete=models.PROTECT,
+        related_name="attendance_records",
+        null=True,
+        blank=True,
+    )
+
+    date = models.DateField()
+
+    status = models.CharField(
+        max_length=1,
+        choices=STATUS_CHOICES,
+        default=STATUS_PRESENT,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        ordering = ["date"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["staff_service", "date"],
+                name="unique_staff_attendance_date",
+            ),
+            models.UniqueConstraint(
+                fields=["unclaimed_person", "date"],
+                name="unique_manual_staff_attendance_date",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["staff_service", "date"],
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.staff_service} - {self.date} - {self.status}"
+
+
 class StudentIdSequence(models.Model):
     """
     Permanent per-institution sequence for Global Student IDs.
