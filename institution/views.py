@@ -7,6 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from urllib.parse import urlparse, parse_qs
 from django.db import IntegrityError
+from django.db.models import Q
 import re
 import json
 
@@ -19,6 +20,7 @@ from .models import (
     InstitutionAuthority,
     InstitutionAcademicData,
     InstitutionAcademicLevel,
+    InstitutionAdmissionType,
     InstitutionAcademicSession,
     InstitutionStaffService,
     UnclaimedPerson,
@@ -121,7 +123,7 @@ def institution_academic_sessions(request):
         )
 
     try:
-        from datetime import date
+        from datetime import date, timedelta, timedelta
 
         parsed_start = date.fromisoformat(str(start_date))
         parsed_end = date.fromisoformat(str(end_date))
@@ -256,7 +258,7 @@ def institution_academic_session_detail(request, session_id):
         )
 
     try:
-        from datetime import date
+        from datetime import date, timedelta
 
         parsed_start = date.fromisoformat(str(start_date))
         parsed_end = date.fromisoformat(str(end_date))
@@ -1401,6 +1403,79 @@ def institution_profile_by_username(request, username):
 @api_view(["GET"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
+def institution_previous_search(request):
+    """
+    Search active Deepafy institutions for previous-institution selection.
+
+    Searchable identifiers:
+    - Username
+    - EIIN
+    - Institution Code
+    - Global Institution Identity (GIID)
+
+    Internal InstitutionProfile ID is intentionally never exposed.
+    """
+
+    query = str(request.query_params.get("q", "")).strip()
+
+    if len(query) < 2:
+        return Response(
+            {
+                "count": 0,
+                "results": [],
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    profiles = (
+        InstitutionProfile.objects
+        .select_related(
+            "identity",
+            "institution_type",
+        )
+        .filter(
+            is_active=True,
+            identity__is_active=True,
+        )
+        .filter(
+            Q(identity__username__icontains=query)
+            | Q(eiin__icontains=query)
+            | Q(institution_code__icontains=query)
+            | Q(global_identity_code__icontains=query)
+        )
+        .order_by("institution_name")[:20]
+    )
+
+    results = []
+
+    for profile in profiles:
+        results.append(
+            {
+                "username": profile.identity.username,
+                "institution_name": profile.institution_name,
+                "eiin": profile.eiin or "",
+                "institution_code": profile.institution_code or "",
+                "global_identity_code": profile.global_identity_code or "",
+                "institution_type": (
+                    profile.institution_type.name
+                    if profile.institution_type
+                    else ""
+                ),
+            }
+        )
+
+    return Response(
+        {
+            "count": len(results),
+            "results": results,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
 def institution_global_identity_check(request):
     code = str(request.query_params.get("code", "")).strip().upper()
 
@@ -2402,7 +2477,7 @@ def institution_student_enrollment(request):
                 student=student,
                 institution=institution,
             )
-            .select_related("academic_session", "department")
+            .select_related("academic_session", "department", "previous_institution_profile", "admission_type_master")
             .prefetch_related(
                 "academic_values__academic_level"
             )
@@ -2447,7 +2522,30 @@ def institution_student_enrollment(request):
                         "section": enrollment.section,
                         "roll": enrollment.roll,
                         "admission_date": enrollment.admission_date,
+                        "previous_institution_type": enrollment.previous_institution_type,
+                        "previous_institution_profile": (
+                            {
+                                "username": enrollment.previous_institution_profile.identity.username,
+                                "institution_name": enrollment.previous_institution_profile.institution_name,
+                                "eiin": enrollment.previous_institution_profile.eiin or "",
+                                "institution_code": enrollment.previous_institution_profile.institution_code or "",
+                                "global_identity_code": enrollment.previous_institution_profile.global_identity_code or "",
+                            }
+                            if enrollment.previous_institution_profile
+                            else None
+                        ),
+                        "previous_institution_name": enrollment.previous_institution_name,
                         "previous_institution": enrollment.previous_institution,
+                        "admission_type_master": (
+                            {
+                                "id": enrollment.admission_type_master.id,
+                                "name": enrollment.admission_type_master.name,
+                                "code": enrollment.admission_type_master.code,
+                                "description": enrollment.admission_type_master.description,
+                            }
+                            if enrollment.admission_type_master
+                            else None
+                        ),
                         "admission_type": enrollment.admission_type,
                         "status": enrollment.status,
                     }
@@ -2563,6 +2661,142 @@ def institution_student_enrollment(request):
         request.data.get("section", "")
     ).strip()
 
+    raw_previous_type = request.data.get("previous_institution_type")
+    legacy_previous_institution = str(
+        request.data.get("previous_institution", "")
+    ).strip()
+
+    if raw_previous_type in (None, "") and legacy_previous_institution:
+        previous_institution_type = StudentEnrollment.PREVIOUS_INSTITUTION_MANUAL
+    else:
+        previous_institution_type = str(
+            raw_previous_type
+            or StudentEnrollment.PREVIOUS_INSTITUTION_NA
+        ).strip().upper()
+
+    valid_previous_types = {
+        choice[0]
+        for choice in StudentEnrollment.PREVIOUS_INSTITUTION_TYPE_CHOICES
+    }
+
+    if previous_institution_type not in valid_previous_types:
+        return Response(
+            {
+                "detail": "Invalid previous institution type.",
+                "allowed": sorted(valid_previous_types),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    previous_institution_profile = None
+    previous_institution_name = ""
+    previous_institution = ""
+
+    if previous_institution_type == StudentEnrollment.PREVIOUS_INSTITUTION_MANUAL:
+        previous_institution_name = str(
+            request.data.get("previous_institution_name")
+            or legacy_previous_institution
+            or ""
+        ).strip()
+
+        if not previous_institution_name:
+            return Response(
+                {
+                    "detail": (
+                        "Previous institution name is required "
+                        "for Manual selection."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        previous_institution = previous_institution_name
+
+    elif previous_institution_type == StudentEnrollment.PREVIOUS_INSTITUTION_DEEPAFY:
+        previous_institution_username = str(
+            request.data.get("previous_institution_username", "")
+        ).strip().lstrip("@")
+
+        if not previous_institution_username:
+            return Response(
+                {
+                    "detail": (
+                        "Previous institution username is required "
+                        "for Deepafy Institution."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        previous_institution_profile = (
+            InstitutionProfile.objects
+            .select_related("identity")
+            .filter(
+                identity__username__iexact=previous_institution_username,
+                identity__is_active=True,
+                is_active=True,
+            )
+            .first()
+        )
+
+        if previous_institution_profile is None:
+            return Response(
+                {
+                    "detail": "Deepafy institution not found."
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if previous_institution_profile.id == institution.id:
+            return Response(
+                {
+                    "detail": (
+                        "Current institution cannot be selected "
+                        "as the previous institution."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        previous_institution_name = (
+            previous_institution_profile.institution_name
+        )
+        previous_institution = previous_institution_name
+
+    raw_admission_type_master_id = request.data.get(
+        "admission_type_master_id"
+    )
+
+    admission_type_master = None
+    admission_type = str(
+        request.data.get("admission_type", "")
+    ).strip()
+
+    if raw_admission_type_master_id not in (None, "", 0, "0"):
+        try:
+            admission_type_master = (
+                InstitutionAdmissionType.objects.get(
+                    id=int(raw_admission_type_master_id),
+                    institution=institution,
+                    is_active=True,
+                )
+            )
+        except (
+            InstitutionAdmissionType.DoesNotExist,
+            TypeError,
+            ValueError,
+        ):
+            return Response(
+                {
+                    "detail": (
+                        "Invalid admission type for this institution."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        admission_type = admission_type_master.name
+
     status_value = str(
         request.data.get(
             "status",
@@ -2609,12 +2843,12 @@ def institution_student_enrollment(request):
                 request.data.get("roll", "")
             ).strip(),
             "admission_date": admission_date,
-            "previous_institution": str(
-                request.data.get("previous_institution", "")
-            ).strip(),
-            "admission_type": str(
-                request.data.get("admission_type", "")
-            ).strip(),
+            "previous_institution_type": previous_institution_type,
+            "previous_institution_profile": previous_institution_profile,
+            "previous_institution_name": previous_institution_name,
+            "previous_institution": previous_institution,
+            "admission_type_master": admission_type_master,
+            "admission_type": admission_type,
             "status": status_value,
         },
     )
@@ -2678,10 +2912,119 @@ def institution_student_enrollment(request):
                 "section": enrollment.section,
                 "roll": enrollment.roll,
                 "admission_date": enrollment.admission_date,
+                "previous_institution_type": enrollment.previous_institution_type,
+                "previous_institution_profile": (
+                    {
+                        "username": enrollment.previous_institution_profile.identity.username,
+                        "institution_name": enrollment.previous_institution_profile.institution_name,
+                        "eiin": enrollment.previous_institution_profile.eiin or "",
+                        "institution_code": enrollment.previous_institution_profile.institution_code or "",
+                        "global_identity_code": enrollment.previous_institution_profile.global_identity_code or "",
+                    }
+                    if enrollment.previous_institution_profile
+                    else None
+                ),
+                "previous_institution_name": enrollment.previous_institution_name,
                 "previous_institution": enrollment.previous_institution,
+                "admission_type_master": (
+                    {
+                        "id": enrollment.admission_type_master.id,
+                        "name": enrollment.admission_type_master.name,
+                        "code": enrollment.admission_type_master.code,
+                        "description": enrollment.admission_type_master.description,
+                    }
+                    if enrollment.admission_type_master
+                    else None
+                ),
                 "admission_type": enrollment.admission_type,
                 "status": enrollment.status,
             },
+        },
+        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_admission_types(request):
+    """
+    List or create admission types for the authenticated institution.
+    """
+
+    institution = getattr(
+        request.user,
+        "institution_profile",
+        None,
+    )
+
+    if institution is None:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "GET":
+        admission_types = InstitutionAdmissionType.objects.filter(
+            institution=institution,
+            is_active=True,
+        )
+
+        return Response(
+            [
+                {
+                    "id": admission_type.id,
+                    "name": admission_type.name,
+                    "code": admission_type.code,
+                    "description": admission_type.description,
+                }
+                for admission_type in admission_types
+            ],
+            status=status.HTTP_200_OK,
+        )
+
+    name = str(request.data.get("name", "")).strip()
+    code = str(request.data.get("code", "")).strip()
+    description = str(request.data.get("description", "")).strip()
+
+    if not name:
+        return Response(
+            {"detail": "Admission type name is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    admission_type, created = InstitutionAdmissionType.objects.get_or_create(
+        institution=institution,
+        name=name,
+        defaults={
+            "code": code,
+            "description": description,
+        },
+    )
+
+    if not created:
+        changed = False
+
+        if code and admission_type.code != code:
+            admission_type.code = code
+            changed = True
+
+        if description and admission_type.description != description:
+            admission_type.description = description
+            changed = True
+
+        if changed:
+            admission_type.save(
+                update_fields=["code", "description", "updated_at"]
+            )
+
+    return Response(
+        {
+            "id": admission_type.id,
+            "name": admission_type.name,
+            "code": admission_type.code,
+            "description": admission_type.description,
+            "created": created,
         },
         status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
     )
@@ -3181,6 +3524,428 @@ def institution_academic_data(request):
         status=201 if created else 200,
     )
 
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_attendance_weekly_holidays(request):
+    """
+    Get or update weekly holidays for the institution.
+    Weekday values follow Python convention:
+    Monday=0 ... Sunday=6.
+    """
+
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    settings_obj, _ = InstitutionAttendanceSettings.objects.get_or_create(
+        institution=institution,
+    )
+
+    if request.method == "GET":
+        weekly_holidays = settings_obj.weekly_holidays
+
+        if not isinstance(weekly_holidays, list):
+            weekly_holidays = []
+
+        return Response({
+            "weekly_holidays": weekly_holidays,
+        })
+
+    weekly_holidays = request.data.get("weekly_holidays")
+
+    if not isinstance(weekly_holidays, list):
+        return Response(
+            {"detail": "weekly_holidays must be a list."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        weekly_holidays = sorted(
+            set(int(day) for day in weekly_holidays)
+        )
+    except (TypeError, ValueError):
+        return Response(
+            {"detail": "Weekly holiday values must be integers."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if any(day < 0 or day > 6 for day in weekly_holidays):
+        return Response(
+            {"detail": "Weekly holiday values must be between 0 and 6."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    settings_obj.weekly_holidays = weekly_holidays
+    settings_obj.save(update_fields=["weekly_holidays", "updated_at"])
+
+    return Response({
+        "weekly_holidays": weekly_holidays,
+    })
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_attendance_holidays(request):
+    """
+    List or create institution holiday date ranges for an academic session.
+    """
+
+    from datetime import date, timedelta
+
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "GET":
+        session_id = request.query_params.get("academic_session")
+
+        holidays = InstitutionHoliday.objects.filter(
+            institution=institution,
+            is_active=True,
+        )
+
+        if session_id:
+            try:
+                holidays = holidays.filter(
+                    academic_session_id=int(session_id)
+                )
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "Invalid academic session."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        holidays = holidays.select_related(
+            "academic_session",
+        ).order_by("from_date", "id")
+
+        return Response({
+            "count": holidays.count(),
+            "results": [
+                {
+                    "id": holiday.id,
+                    "academic_session": (
+                        holiday.academic_session_id
+                    ),
+                    "academic_session_name": (
+                        holiday.academic_session.name
+                        if holiday.academic_session
+                        else None
+                    ),
+                    "from_date": holiday.from_date.isoformat(),
+                    "to_date": holiday.to_date.isoformat(),
+                    "total_days": holiday.total_days,
+                    "name": holiday.name,
+                    "is_active": holiday.is_active,
+                }
+                for holiday in holidays
+            ],
+        })
+
+    data = request.data
+
+    session_id = data.get("academic_session")
+    from_date_raw = data.get("from_date")
+    to_date_raw = data.get("to_date")
+    name = str(data.get("name") or "").strip()
+
+    if not session_id:
+        return Response(
+            {"detail": "Academic session is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        session = InstitutionAcademicSession.objects.get(
+            id=int(session_id),
+            institution=institution,
+            is_active=True,
+        )
+    except (
+        TypeError,
+        ValueError,
+        InstitutionAcademicSession.DoesNotExist,
+    ):
+        return Response(
+            {"detail": "Academic session not found."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not from_date_raw:
+        return Response(
+            {"detail": "From date is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        from_date = date.fromisoformat(str(from_date_raw))
+        to_date = (
+            date.fromisoformat(str(to_date_raw))
+            if to_date_raw
+            else from_date
+        )
+    except ValueError:
+        return Response(
+            {"detail": "Invalid holiday date."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if from_date > to_date:
+        return Response(
+            {"detail": "From date cannot be after to date."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not name:
+        return Response(
+            {"detail": "Holiday name is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if (
+        from_date < session.start_date
+        or to_date > session.end_date
+    ):
+        return Response(
+            {
+                "detail": (
+                    "Holiday dates must be within the academic session."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    existing_exact = InstitutionHoliday.objects.filter(
+        institution=institution,
+        academic_session=session,
+        from_date=from_date,
+        to_date=to_date,
+    ).first()
+
+    if existing_exact:
+        if existing_exact.is_active:
+            return Response(
+                {
+                    "detail": (
+                        "This holiday already exists for the selected dates."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        existing_exact.name = name
+        existing_exact.is_active = True
+        existing_exact.save(
+            update_fields=["name", "is_active", "updated_at"]
+        )
+        holiday = existing_exact
+    else:
+        overlapping = InstitutionHoliday.objects.filter(
+            institution=institution,
+            academic_session=session,
+            is_active=True,
+            from_date__lte=to_date,
+            to_date__gte=from_date,
+        ).exists()
+
+        if overlapping:
+            return Response(
+                {
+                    "detail": (
+                        "This holiday date range overlaps "
+                        "with an existing holiday."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        holiday = InstitutionHoliday.objects.create(
+            institution=institution,
+            academic_session=session,
+            from_date=from_date,
+            to_date=to_date,
+            name=name,
+            is_active=True,
+        )
+
+
+    return Response(
+        {
+            "id": holiday.id,
+            "academic_session": holiday.academic_session_id,
+            "academic_session_name": session.name,
+            "from_date": holiday.from_date.isoformat(),
+            "to_date": holiday.to_date.isoformat(),
+            "total_days": holiday.total_days,
+            "name": holiday.name,
+            "is_active": holiday.is_active,
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(["PATCH", "DELETE"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_attendance_holiday_detail(request, holiday_id):
+    """
+    Update or soft-delete one institution holiday.
+    """
+
+    from datetime import date
+
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        holiday = InstitutionHoliday.objects.get(
+            id=holiday_id,
+            institution=institution,
+            is_active=True,
+        )
+    except InstitutionHoliday.DoesNotExist:
+        return Response(
+            {"detail": "Holiday not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "DELETE":
+        holiday.is_active = False
+        holiday.save(update_fields=["is_active", "updated_at"])
+
+        return Response(
+            {"detail": "Holiday deleted successfully."},
+            status=status.HTTP_200_OK,
+        )
+
+    data = request.data
+
+    name = str(
+        data.get("name", holiday.name) or ""
+    ).strip()
+
+    from_date_raw = data.get(
+        "from_date",
+        holiday.from_date.isoformat(),
+    )
+    to_date_raw = data.get(
+        "to_date",
+        holiday.to_date.isoformat(),
+    )
+
+    if not name:
+        return Response(
+            {"detail": "Holiday name is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        from_date = date.fromisoformat(str(from_date_raw))
+        to_date = (
+            date.fromisoformat(str(to_date_raw))
+            if to_date_raw
+            else from_date
+        )
+    except ValueError:
+        return Response(
+            {"detail": "Invalid holiday date."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if from_date > to_date:
+        return Response(
+            {"detail": "From date cannot be after to date."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    session = holiday.academic_session
+
+    if session and (
+        from_date < session.start_date
+        or to_date > session.end_date
+    ):
+        return Response(
+            {
+                "detail": (
+                    "Holiday dates must be within the academic session."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    overlapping = (
+        InstitutionHoliday.objects.filter(
+            institution=institution,
+            academic_session=session,
+            is_active=True,
+            from_date__lte=to_date,
+            to_date__gte=from_date,
+        )
+        .exclude(id=holiday.id)
+        .exists()
+    )
+
+    if overlapping:
+        return Response(
+            {
+                "detail": (
+                    "This holiday date range overlaps "
+                    "with an existing holiday."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    holiday.name = name
+    holiday.from_date = from_date
+    holiday.to_date = to_date
+    holiday.save(
+        update_fields=[
+            "name",
+            "from_date",
+            "to_date",
+            "updated_at",
+        ],
+    )
+
+    return Response({
+        "id": holiday.id,
+        "academic_session": holiday.academic_session_id,
+        "academic_session_name": (
+            session.name if session else None
+        ),
+        "from_date": holiday.from_date.isoformat(),
+        "to_date": holiday.to_date.isoformat(),
+        "total_days": holiday.total_days,
+        "name": holiday.name,
+        "is_active": holiday.is_active,
+    })
+
+
 @api_view(["GET"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -3193,7 +3958,7 @@ def institution_attendance_monthly(request):
     """
 
     from calendar import monthrange
-    from datetime import date
+    from datetime import date, timedelta
 
     try:
         institution = InstitutionProfile.objects.get(
@@ -3273,6 +4038,15 @@ def institution_attendance_monthly(request):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+    global_student_id = str(
+        request.query_params.get("global_student_id", "")
+    ).strip()
+
+    if global_student_id:
+        enrollments = enrollments.filter(
+            student__global_student_id=global_student_id
+        )
+
     if academic_filters:
         for level_id, selected_value in academic_filters.items():
             try:
@@ -3326,14 +4100,23 @@ def institution_attendance_monthly(request):
         else []
     )
 
-    holidays = {
-        holiday.date: holiday.name
-        for holiday in InstitutionHoliday.objects.filter(
-            institution=institution,
-            date__range=(first_day, last_day),
-            is_active=True,
-        )
-    }
+    holiday_ranges = InstitutionHoliday.objects.filter(
+        institution=institution,
+        academic_session_id=int(session_id) if session_id else None,
+        from_date__lte=last_day,
+        to_date__gte=first_day,
+        is_active=True,
+    )
+
+    holidays = {}
+
+    for holiday in holiday_ranges:
+        current_date = max(holiday.from_date, first_day)
+        holiday_end = min(holiday.to_date, last_day)
+
+        while current_date <= holiday_end:
+            holidays[current_date] = holiday.name
+            current_date += timedelta(days=1)
 
     attendance_records = StudentAttendance.objects.filter(
         enrollment__in=enrollments,

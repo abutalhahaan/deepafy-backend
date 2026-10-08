@@ -191,6 +191,67 @@ class InstitutionAcademicLevel(models.Model):
         return f"{self.level_type}: {self.name}"
 
 
+class InstitutionAdmissionType(models.Model):
+    """
+    Institution-specific admission type master.
+
+    Admission types are managed independently from academic levels so
+    each institution can use the admission workflow that applies to it.
+    """
+
+    institution = models.ForeignKey(
+        "InstitutionProfile",
+        on_delete=models.CASCADE,
+        related_name="admission_types",
+    )
+
+    name = models.CharField(
+        max_length=100,
+    )
+
+    code = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+    )
+
+    description = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["institution", "name"],
+                name="unique_institution_admission_type",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["institution", "is_active"],
+                name="admission_type_inst_active_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class InstitutionAcademicData(models.Model):
     institution = models.ForeignKey(
         "InstitutionProfile",
@@ -1001,7 +1062,7 @@ class InstitutionAttendanceSettings(models.Model):
 
 class InstitutionHoliday(models.Model):
     """
-    Institution-specific holiday on a particular date.
+    Institution-specific holiday date range within an academic session.
     """
 
     institution = models.ForeignKey(
@@ -1010,7 +1071,17 @@ class InstitutionHoliday(models.Model):
         related_name="attendance_holidays",
     )
 
-    date = models.DateField()
+    academic_session = models.ForeignKey(
+        "InstitutionAcademicSession",
+        on_delete=models.CASCADE,
+        related_name="holidays",
+        null=True,
+        blank=True,
+    )
+
+    from_date = models.DateField()
+
+    to_date = models.DateField()
 
     name = models.CharField(
         max_length=255,
@@ -1028,17 +1099,26 @@ class InstitutionHoliday(models.Model):
         auto_now=True,
     )
 
+    @property
+    def total_days(self):
+        return (self.to_date - self.from_date).days + 1
+
     class Meta:
-        ordering = ["date"]
+        ordering = ["from_date"]
         constraints = [
             models.UniqueConstraint(
-                fields=["institution", "date"],
-                name="unique_institution_holiday_date",
+                fields=[
+                    "institution",
+                    "academic_session",
+                    "from_date",
+                    "to_date",
+                ],
+                name="unique_institution_holiday_range",
             ),
         ]
 
     def __str__(self):
-        return f"{self.institution} - {self.date} - {self.name}"
+        return f"{self.institution} - {self.from_date} to {self.to_date} - {self.name}"
 
 
 class StudentAttendance(models.Model):
@@ -1207,6 +1287,35 @@ class StudentEnrollment(models.Model):
         blank=True,
     )
 
+    PREVIOUS_INSTITUTION_NA = "N/A"
+    PREVIOUS_INSTITUTION_MANUAL = "MANUAL"
+    PREVIOUS_INSTITUTION_DEEPAFY = "DEEPAFY"
+
+    PREVIOUS_INSTITUTION_TYPE_CHOICES = [
+        (PREVIOUS_INSTITUTION_NA, "N/A"),
+        (PREVIOUS_INSTITUTION_MANUAL, "Manual"),
+        (PREVIOUS_INSTITUTION_DEEPAFY, "Deepafy Institution"),
+    ]
+
+    previous_institution_type = models.CharField(
+        max_length=20,
+        choices=PREVIOUS_INSTITUTION_TYPE_CHOICES,
+        default=PREVIOUS_INSTITUTION_NA,
+    )
+
+    previous_institution_profile = models.ForeignKey(
+        InstitutionProfile,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="previous_student_enrollments",
+    )
+
+    previous_institution_name = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
     previous_institution = models.CharField(
         max_length=255,
         blank=True,
@@ -1215,6 +1324,14 @@ class StudentEnrollment(models.Model):
     admission_type = models.CharField(
         max_length=100,
         blank=True,
+    )
+
+    admission_type_master = models.ForeignKey(
+        "InstitutionAdmissionType",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="student_enrollments",
     )
 
     status = models.CharField(
