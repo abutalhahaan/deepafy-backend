@@ -4313,24 +4313,68 @@ def institution_staff_attendance_save(request):
             status=status.HTTP_404_NOT_FOUND,
         )
 
+    from institution.models import UnclaimedPerson
+
     staff_service_id = request.data.get("staff_service_id")
+    unclaimed_person_id = request.data.get("unclaimed_person_id")
     attendance_date_raw = request.data.get("date")
     attendance_status = str(
         request.data.get("status") or ""
     ).strip().upper()
 
-    if not staff_service_id:
+    # Exactly one staff identifier must be supplied.
+    has_staff_service = (
+        staff_service_id is not None
+        and str(staff_service_id).strip() != ""
+    )
+    has_manual_staff = (
+        unclaimed_person_id is not None
+        and str(unclaimed_person_id).strip() != ""
+    )
+
+    if has_staff_service == has_manual_staff:
         return Response(
-            {"detail": "Staff service is required."},
+            {
+                "detail": (
+                    "Provide exactly one of staff_service_id "
+                    "or unclaimed_person_id."
+                )
+            },
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    staff_service = None
+    unclaimed_person = None
+
     try:
-        staff_service_id = int(staff_service_id)
+        if has_staff_service:
+            staff_service_id = int(staff_service_id)
+            staff_service = InstitutionStaffService.objects.get(
+                id=staff_service_id,
+                institution=institution,
+                status=InstitutionStaffService.STATUS_RUNNING,
+                is_active=True,
+            )
+        else:
+            unclaimed_person_id = int(unclaimed_person_id)
+            unclaimed_person = UnclaimedPerson.objects.get(
+                id=unclaimed_person_id,
+                institution=institution,
+                status=UnclaimedPerson.STATUS_RUNNING,
+                is_active=True,
+            )
     except (TypeError, ValueError):
         return Response(
-            {"detail": "Invalid staff service."},
+            {"detail": "Invalid staff identifier."},
             status=status.HTTP_400_BAD_REQUEST,
+        )
+    except (
+        InstitutionStaffService.DoesNotExist,
+        UnclaimedPerson.DoesNotExist,
+    ):
+        return Response(
+            {"detail": "Active running staff member not found."},
+            status=status.HTTP_404_NOT_FOUND,
         )
 
     try:
@@ -4351,19 +4395,6 @@ def institution_staff_attendance_save(request):
         return Response(
             {"detail": "Attendance status must be P, A, or L."},
             status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    try:
-        staff_service = InstitutionStaffService.objects.get(
-            id=staff_service_id,
-            institution=institution,
-            status=InstitutionStaffService.STATUS_RUNNING,
-            is_active=True,
-        )
-    except InstitutionStaffService.DoesNotExist:
-        return Response(
-            {"detail": "Active running staff member not found."},
-            status=status.HTTP_404_NOT_FOUND,
         )
 
     settings_obj = InstitutionAttendanceSettings.objects.filter(
@@ -4396,9 +4427,14 @@ def institution_staff_attendance_save(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    attendance_lookup = {
+        "staff_service": staff_service,
+        "unclaimed_person": unclaimed_person,
+        "date": attendance_date,
+    }
+
     attendance, created = InstitutionStaffAttendance.objects.update_or_create(
-        staff_service=staff_service,
-        date=attendance_date,
+        **attendance_lookup,
         defaults={
             "status": attendance_status,
         },
@@ -4408,6 +4444,7 @@ def institution_staff_attendance_save(request):
         {
             "id": attendance.id,
             "staff_service_id": attendance.staff_service_id,
+            "unclaimed_person_id": attendance.unclaimed_person_id,
             "date": attendance.date.isoformat(),
             "status": attendance.status,
             "created": created,
