@@ -1506,3 +1506,350 @@ class Department(models.Model):
 
     def __str__(self):
         return self.name
+
+class StudentSubject(models.Model):
+    """
+    Independent subject master for student academics.
+
+    A null institution means a global subject managed by Deepafy Admin.
+    A non-null institution means a subject owned by that institution.
+    """
+
+    name = models.CharField(max_length=255)
+    code = models.CharField(max_length=100, blank=True)
+    institution = models.ForeignKey(
+        InstitutionProfile,
+        on_delete=models.CASCADE,
+        related_name="student_subjects",
+        null=True,
+        blank=True,
+    )
+    created_by = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.SET_NULL,
+        related_name="created_student_subjects",
+        null=True,
+        blank=True,
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["institution", "name"],
+                name="unique_student_subject_inst_name",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class InstitutionClassSubject(models.Model):
+    """Subjects assigned to an institution's academic level."""
+
+    institution = models.ForeignKey(
+        InstitutionProfile,
+        on_delete=models.CASCADE,
+        related_name="class_subjects",
+    )
+    academic_level = models.ForeignKey(
+        InstitutionAcademicLevel,
+        on_delete=models.CASCADE,
+        related_name="class_subjects",
+    )
+    subject = models.ForeignKey(
+        Subject,
+        on_delete=models.PROTECT,
+        related_name="institution_class_assignments",
+    )
+    full_marks = models.PositiveIntegerField(default=100)
+    pass_mark = models.PositiveIntegerField(default=33)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["subject__name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["institution", "academic_level", "subject"],
+                name="unique_inst_level_subject",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.academic_level.name} - {self.subject.name}"
+
+
+class CentralExamType(models.Model):
+    """Reusable global master list of examination types."""
+
+    name = models.CharField(max_length=100, unique=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
+class InstitutionExamTypeSelection(models.Model):
+    """An institution's selection of a shared central exam type."""
+
+    institution = models.ForeignKey(
+        InstitutionProfile,
+        on_delete=models.CASCADE,
+        related_name="selected_exam_types",
+    )
+    exam_type = models.ForeignKey(
+        CentralExamType,
+        on_delete=models.PROTECT,
+        related_name="institution_selections",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["institution", "exam_type"],
+                name="unique_inst_exam_type_selection",
+            ),
+        ]
+        ordering = ["exam_type__name"]
+
+    def __str__(self):
+        return f"{self.institution} - {self.exam_type.name}"
+
+
+class InstitutionExam(models.Model):
+    """An institution-specific examination."""
+
+    CATEGORY_CHOICES = [
+        ("INTERNAL", "Internal / Institutional"),
+        ("BOARD", "Public / Board"),
+        ("HIGHER_EDUCATION", "Higher Education"),
+        ("ADMISSION", "Admission"),
+        ("SCHOLARSHIP", "Scholarship"),
+        ("TECHNICAL", "Technical / Vocational"),
+    ]
+
+    institution = models.ForeignKey(
+        InstitutionProfile,
+        on_delete=models.CASCADE,
+        related_name="exams",
+    )
+    academic_session = models.ForeignKey(
+        InstitutionAcademicSession,
+        on_delete=models.PROTECT,
+        related_name="exams",
+    )
+    academic_level = models.ForeignKey(
+        InstitutionAcademicLevel,
+        on_delete=models.PROTECT,
+        related_name="exams",
+    )
+    grade_scale = models.ForeignKey(
+        "InstitutionGradeScale",
+        on_delete=models.PROTECT,
+        related_name="exams",
+        null=True,
+        blank=True,
+    )
+    name = models.CharField(max_length=150)
+    category = models.CharField(
+        max_length=30,
+        choices=CATEGORY_CHOICES,
+        default="INTERNAL",
+    )
+    exam_type = models.CharField(max_length=100)
+    central_exam_type = models.ForeignKey(
+        "CentralExamType",
+        on_delete=models.PROTECT,
+        related_name="institution_exams",
+        null=True,
+        blank=True,
+    )
+    exam_date = models.DateField(null=True, blank=True)
+    full_marks = models.DecimalField(max_digits=8, decimal_places=2, default=100)
+    pass_mark = models.DecimalField(max_digits=8, decimal_places=2, default=33)
+    is_published = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-exam_date", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "institution",
+                    "academic_session",
+                    "academic_level",
+                    "name",
+                ],
+                name="unique_inst_exam_level_name",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["institution", "academic_session", "academic_level"],
+                name="inst_exam_session_level_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.name} - {self.academic_level.name}"
+
+
+class InstitutionExamSubject(models.Model):
+    """A subject and its marks configuration for an examination."""
+
+    exam = models.ForeignKey(
+        InstitutionExam,
+        on_delete=models.CASCADE,
+        related_name="exam_subjects",
+    )
+    subject = models.ForeignKey(
+        Subject,
+        on_delete=models.PROTECT,
+        related_name="exam_subjects",
+    )
+    full_marks = models.DecimalField(max_digits=8, decimal_places=2, default=100)
+    pass_mark = models.DecimalField(max_digits=8, decimal_places=2, default=33)
+
+    class Meta:
+        ordering = ["subject__name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["exam", "subject"],
+                name="unique_exam_subject",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.exam.name} - {self.subject.name}"
+
+
+class InstitutionExamMark(models.Model):
+    """Marks for one enrolled student in one examination subject."""
+
+    exam_subject = models.ForeignKey(
+        InstitutionExamSubject,
+        on_delete=models.CASCADE,
+        related_name="student_marks",
+    )
+    enrollment = models.ForeignKey(
+        StudentEnrollment,
+        on_delete=models.PROTECT,
+        related_name="exam_marks",
+    )
+    marks_obtained = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    is_absent = models.BooleanField(default=False)
+    remarks = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["exam_subject", "enrollment"],
+                name="unique_exam_subject_enrollment",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["exam_subject", "enrollment"],
+                name="exam_mark_subject_enroll_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.enrollment.student.global_student_id} - "
+            f"{self.exam_subject.subject.name}"
+        )
+
+
+class InstitutionGradeScale(models.Model):
+    """Institution-controlled grading configuration."""
+
+    institution = models.ForeignKey(
+        InstitutionProfile,
+        on_delete=models.CASCADE,
+        related_name="grade_scales",
+    )
+    name = models.CharField(max_length=100)
+    is_default = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["institution", "name"],
+                name="unique_inst_grade_scale_name",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.institution.institution_name} - {self.name}"
+
+
+class InstitutionGradeRange(models.Model):
+    """A user-configured percentage range and grade point."""
+
+    grade_scale = models.ForeignKey(
+        InstitutionGradeScale,
+        on_delete=models.CASCADE,
+        related_name="ranges",
+    )
+    grade_name = models.CharField(max_length=20)
+    min_percentage = models.DecimalField(max_digits=5, decimal_places=2)
+    max_percentage = models.DecimalField(max_digits=5, decimal_places=2)
+    grade_point = models.DecimalField(
+        max_digits=4,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-min_percentage", "grade_name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["grade_scale", "grade_name"],
+                name="unique_grade_name_per_scale",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(min_percentage__gte=0),
+                name="grade_range_min_gte_zero",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(max_percentage__lte=100),
+                name="grade_range_max_lte_100",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(max_percentage__gte=models.F("min_percentage")),
+                name="grade_range_max_gte_min",
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.grade_scale.name}: {self.grade_name} "
+            f"({self.min_percentage}-{self.max_percentage}%)"
+        )
