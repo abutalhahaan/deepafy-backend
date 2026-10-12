@@ -27,11 +27,23 @@ from .views import (
     institution_staff_services,
     institution_unclaimed_staff,
     institution_subjects,
+    institution_student_subjects,
+    institution_student_subject_detail,
     institution_subject_detail,
     institution_departments,
     institution_department_detail,
     institution_academic_sessions,
     institution_academic_session_detail,
+    institution_class_subjects,
+    institution_class_subject_detail,
+    institution_exam_types,
+    institution_exams,
+    institution_exam_subjects,
+    institution_exam_marks,
+    institution_exam_results,
+    institution_exam_publish,
+    institution_grade_scales,
+    institution_grade_ranges,
 )
 
 
@@ -152,9 +164,69 @@ urlpatterns = [
         name="institution-academic-session-detail",
     ),
     path(
+        "results/exam-subjects/<int:exam_subject_id>/marks/",
+        institution_exam_marks,
+        name="institution-exam-marks",
+    ),
+    path(
+        "results/exams/<int:exam_id>/publish/",
+        institution_exam_publish,
+        name="institution-exam-publish",
+    ),
+    path(
+        "results/exams/<int:exam_id>/results/",
+        institution_exam_results,
+        name="institution-exam-results",
+    ),
+    path(
+        "results/exams/<int:exam_id>/subjects/",
+        institution_exam_subjects,
+        name="institution-exam-subjects",
+    ),
+    path(
+        "results/grade-scales/",
+        institution_grade_scales,
+        name="institution-grade-scales",
+    ),
+    path(
+        "results/grade-scales/<int:scale_id>/ranges/",
+        institution_grade_ranges,
+        name="institution-grade-ranges",
+    ),
+    path(
+        "results/exam-types/",
+        institution_exam_types,
+        name="institution-exam-types",
+    ),
+    path(
+        "results/exams/",
+        institution_exams,
+        name="institution-exams",
+    ),
+    path(
+        "results/class-subjects/",
+        institution_class_subjects,
+        name="institution-class-subjects",
+    ),
+    path(
+        "results/class-subjects/<int:assignment_id>/",
+        institution_class_subject_detail,
+        name="institution-class-subject-detail",
+    ),
+    path(
         "subjects/",
         institution_subjects,
         name="institution-subjects",
+    ),
+    path(
+        "student-subjects/",
+        institution_student_subjects,
+        name="institution-student-subjects",
+    ),
+    path(
+        "student-subjects/<int:student_subject_id>/",
+        institution_student_subject_detail,
+        name="institution-student-subject-detail",
     ),
     path(
         "subjects/<int:subject_id>/",

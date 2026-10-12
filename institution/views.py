@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from urllib.parse import urlparse, parse_qs
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 import re
 import json
@@ -36,6 +36,15 @@ from .models import (
     InstitutionAttendanceSettings,
     InstitutionHoliday,
     StudentAttendance,
+    InstitutionClassSubject,
+    StudentSubject,
+    CentralExamType,
+    InstitutionExamTypeSelection,
+    InstitutionExam,
+    InstitutionExamSubject,
+    InstitutionExamMark,
+    InstitutionGradeScale,
+    InstitutionGradeRange,
 )
 from identity.models import UserIdentity, AcademicBackground
 
@@ -490,6 +499,196 @@ def institution_department_detail(request, department_id):
 
 @api_view(["GET", "POST"])
 @authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_student_subjects(request):
+    """List or create Student Subjects within the caller's allowed scope."""
+
+    is_admin = IsDeepafyAdmin().has_permission(request, None)
+    profile = None
+
+    if not is_admin:
+        try:
+            profile = InstitutionProfile.objects.get(
+                identity=request.user,
+                is_active=True,
+            )
+        except InstitutionProfile.DoesNotExist:
+            return Response(
+                {"detail": "Active institution profile not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+    if request.method == "GET":
+        query = str(request.query_params.get("q") or "").strip()
+        subjects = StudentSubject.objects.filter(is_active=True)
+
+        if is_admin:
+            # Admin can inspect global and institution-owned subjects.
+            scope = str(request.query_params.get("scope") or "all").strip().lower()
+            if scope == "global":
+                subjects = subjects.filter(institution__isnull=True)
+            elif scope == "institution":
+                subjects = subjects.filter(institution__isnull=False)
+            elif scope != "all":
+                return Response(
+                    {"detail": "scope must be global, institution, or all."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            # Institution owners can see global subjects and their own subjects.
+            subjects = subjects.filter(
+                Q(institution__isnull=True) | Q(institution=profile)
+            )
+
+        if query:
+            subjects = subjects.filter(
+                Q(name__icontains=query) | Q(code__icontains=query)
+            )
+
+        subjects = subjects.order_by("name", "id")[:100]
+        results = [
+            {
+                "id": subject.id,
+                "name": subject.name,
+                "code": subject.code,
+                "scope": "global" if subject.institution_id is None else "institution",
+                "institution_id": subject.institution_id,
+            }
+            for subject in subjects
+        ]
+        return Response({"count": len(results), "results": results})
+
+    data = request.data
+    name = str(data.get("name") or "").strip()
+    code = str(data.get("code") or "").strip()
+
+    if not name:
+        return Response(
+            {"detail": "Student Subject name is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Every Student Subject is global, regardless of who creates it.
+    duplicate_query = StudentSubject.objects.filter(name__iexact=name)
+
+    existing = duplicate_query.first()
+    if existing:
+        return Response(
+            {
+                "detail": "This Student Subject already exists in this scope.",
+                "subject": {
+                    "id": existing.id,
+                    "name": existing.name,
+                    "code": existing.code,
+                    "scope": "global" if existing.institution_id is None else "institution",
+                },
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    subject = StudentSubject.objects.create(
+        name=name,
+        code=code,
+        institution=None,
+        created_by=request.user,
+    )
+
+    return Response(
+        {
+            "id": subject.id,
+            "name": subject.name,
+            "code": subject.code,
+            "scope": "global" if subject.institution_id is None else "institution",
+            "institution_id": subject.institution_id,
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(["PATCH", "DELETE"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_student_subject_detail(request, student_subject_id):
+    """Update or deactivate a Student Subject within the caller's scope."""
+
+    is_admin = IsDeepafyAdmin().has_permission(request, None)
+
+    try:
+        if not is_admin:
+            return Response(
+                {"detail": "Only Deepafy Admin can modify global Student Subjects."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        subject = StudentSubject.objects.get(id=student_subject_id)
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Active institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    except StudentSubject.DoesNotExist:
+        return Response(
+            {"detail": "Student Subject not found in your permitted scope."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "DELETE":
+        if not is_admin:
+            return Response(
+                {"detail": "Only Deepafy Admin can delete global Student Subjects."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        subject.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    data = request.data
+
+    if "name" in data:
+        name = str(data.get("name") or "").strip()
+        if not name:
+            return Response(
+                {"detail": "Student Subject name is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        duplicates = StudentSubject.objects.filter(
+            name__iexact=name,
+        ).exclude(id=subject.id)
+
+        if duplicates.exists():
+            return Response(
+                {"detail": "This Student Subject already exists in this scope."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        subject.name = name
+
+    if "code" in data:
+        subject.code = str(data.get("code") or "").strip()
+
+    if "is_active" in data:
+        value = data.get("is_active")
+        if not isinstance(value, bool):
+            return Response(
+                {"detail": "is_active must be true or false."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        subject.is_active = value
+
+    subject.save()
+
+    return Response({
+        "id": subject.id,
+        "name": subject.name,
+        "code": subject.code,
+        "is_active": subject.is_active,
+        "scope": "global" if subject.institution_id is None else "institution",
+        "institution_id": subject.institution_id,
+    })
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
 @permission_classes([AllowAny])
 def institution_subjects(request):
     """
@@ -525,9 +724,25 @@ def institution_subjects(request):
             ],
         })
 
-    if not IsDeepafyAdmin().has_permission(request, None):
+    is_deepafy_admin = IsDeepafyAdmin().has_permission(request, None)
+
+    is_institution_owner = (
+        request.user
+        and request.user.is_authenticated
+        and InstitutionProfile.objects.filter(
+            identity=request.user,
+            is_active=True,
+        ).exists()
+    )
+
+    if not (is_deepafy_admin or is_institution_owner):
         return Response(
-            {"detail": "Only Deepafy Admin can create subjects."},
+            {
+                "detail": (
+                    "An active institution profile or Deepafy Admin "
+                    "permission is required to create subjects."
+                )
+            },
             status=status.HTTP_403_FORBIDDEN,
         )
 
@@ -4733,3 +4948,1697 @@ def institution_staff_attendance_monthly(request):
         }
     )
 
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_class_subjects(request):
+    """List or save subjects and marks for an institution's academic level."""
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "GET":
+        level_id = request.query_params.get("academic_level_id")
+        if not level_id:
+            return Response(
+                {"detail": "academic_level_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            level = InstitutionAcademicLevel.objects.get(
+                id=level_id,
+                institution=institution,
+            )
+        except (InstitutionAcademicLevel.DoesNotExist, ValueError, TypeError):
+            return Response(
+                {"detail": "Academic level not found for this institution."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        assignments = InstitutionClassSubject.objects.filter(
+            institution=institution,
+            academic_level=level,
+            is_active=True,
+            subject__is_active=True,
+        ).select_related("academic_level", "subject")
+
+        return Response({
+            "count": assignments.count(),
+            "results": [
+                {
+                    "id": item.id,
+                    "academic_level_id": item.academic_level_id,
+                    "academic_level": item.academic_level.name,
+                    "subject_id": item.subject_id,
+                    "subject": item.subject.name,
+                    "code": item.subject.code,
+                    "full_marks": item.full_marks,
+                    "pass_mark": item.pass_mark,
+                }
+                for item in assignments
+            ],
+        })
+
+    level_id = request.data.get("academic_level_id")
+    items = request.data.get("subjects")
+
+    # Batch mode: {"academic_level_id": 1, "subjects": [
+    #   {"subject_id": 2, "full_marks": 100, "pass_mark": 33}
+    # ]}
+    if items is not None:
+        if not level_id or not isinstance(items, list) or not items:
+            return Response(
+                {"detail": "academic_level_id and a non-empty subjects list are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            level = InstitutionAcademicLevel.objects.get(
+                id=level_id,
+                institution=institution,
+            )
+        except (InstitutionAcademicLevel.DoesNotExist, ValueError, TypeError):
+            return Response(
+                {"detail": "Academic level not found for this institution."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        seen_subject_ids = set()
+        validated_items = []
+
+        for item in items:
+            if not isinstance(item, dict):
+                return Response(
+                    {"detail": "Each subject entry must be an object."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            subject_id = item.get("subject_id")
+            try:
+                subject_id = int(subject_id)
+                full_marks = int(item.get("full_marks", 100))
+                pass_mark = int(item.get("pass_mark", 33))
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "Subject ID and marks must be valid integers."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if subject_id in seen_subject_ids:
+                return Response(
+                    {"detail": f"Duplicate subject ID: {subject_id}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            seen_subject_ids.add(subject_id)
+
+            if full_marks <= 0 or pass_mark < 0 or pass_mark > full_marks:
+                return Response(
+                    {"detail": "Full marks must be positive and pass mark must be between 0 and full marks."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            try:
+                subject = Subject.objects.get(id=subject_id, is_active=True)
+            except Subject.DoesNotExist:
+                return Response(
+                    {"detail": f"Active central subject {subject_id} not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            validated_items.append((subject, full_marks, pass_mark))
+
+        saved = []
+        with transaction.atomic():
+            for subject, full_marks, pass_mark in validated_items:
+                assignment, created = InstitutionClassSubject.objects.get_or_create(
+                    institution=institution,
+                    academic_level=level,
+                    subject=subject,
+                    defaults={
+                        "is_active": True,
+                        "full_marks": full_marks,
+                        "pass_mark": pass_mark,
+                    },
+                )
+
+                fields_to_update = []
+                if not assignment.is_active:
+                    assignment.is_active = True
+                    fields_to_update.append("is_active")
+                if assignment.full_marks != full_marks:
+                    assignment.full_marks = full_marks
+                    fields_to_update.append("full_marks")
+                if assignment.pass_mark != pass_mark:
+                    assignment.pass_mark = pass_mark
+                    fields_to_update.append("pass_mark")
+                if fields_to_update:
+                    assignment.save(update_fields=fields_to_update)
+
+                saved.append({
+                    "id": assignment.id,
+                    "academic_level_id": level.id,
+                    "academic_level": level.name,
+                    "subject_id": subject.id,
+                    "subject": subject.name,
+                    "code": subject.code,
+                    "full_marks": assignment.full_marks,
+                    "pass_mark": assignment.pass_mark,
+                    "created": created,
+                })
+
+        return Response(
+            {"count": len(saved), "results": saved},
+            status=status.HTTP_200_OK,
+        )
+
+    # Backward-compatible single-subject mode.
+    subject_id = request.data.get("subject_id")
+    if not level_id or not subject_id:
+        return Response(
+            {"detail": "academic_level_id and subject_id are required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        level = InstitutionAcademicLevel.objects.get(
+            id=level_id,
+            institution=institution,
+        )
+    except (InstitutionAcademicLevel.DoesNotExist, ValueError, TypeError):
+        return Response(
+            {"detail": "Academic level not found for this institution."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        subject = Subject.objects.get(id=subject_id, is_active=True)
+    except (Subject.DoesNotExist, ValueError, TypeError):
+        return Response(
+            {"detail": "Active central subject not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        full_marks = int(request.data.get("full_marks", 100))
+        pass_mark = int(request.data.get("pass_mark", 33))
+    except (TypeError, ValueError):
+        return Response(
+            {"detail": "Marks must be valid integers."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if full_marks <= 0 or pass_mark < 0 or pass_mark > full_marks:
+        return Response(
+            {"detail": "Full marks must be positive and pass mark must be between 0 and full marks."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    assignment, created = InstitutionClassSubject.objects.get_or_create(
+        institution=institution,
+        academic_level=level,
+        subject=subject,
+        defaults={
+            "is_active": True,
+            "full_marks": full_marks,
+            "pass_mark": pass_mark,
+        },
+    )
+
+    update_fields = []
+    if not assignment.is_active:
+        assignment.is_active = True
+        update_fields.append("is_active")
+    if assignment.full_marks != full_marks:
+        assignment.full_marks = full_marks
+        update_fields.append("full_marks")
+    if assignment.pass_mark != pass_mark:
+        assignment.pass_mark = pass_mark
+        update_fields.append("pass_mark")
+    if update_fields:
+        assignment.save(update_fields=update_fields)
+
+    return Response(
+        {
+            "id": assignment.id,
+            "academic_level_id": level.id,
+            "academic_level": level.name,
+            "subject_id": subject.id,
+            "subject": subject.name,
+            "code": subject.code,
+            "full_marks": assignment.full_marks,
+            "pass_mark": assignment.pass_mark,
+            "created": created,
+        },
+        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+    )
+
+
+@api_view(["DELETE"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_class_subject_detail(request, assignment_id):
+    """Deactivate a subject assignment owned by the authenticated institution."""
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        assignment = InstitutionClassSubject.objects.get(
+            id=assignment_id,
+            institution=institution,
+        )
+    except InstitutionClassSubject.DoesNotExist:
+        return Response(
+            {"detail": "Subject assignment not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    assignment.is_active = False
+    assignment.save(update_fields=["is_active"])
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+
+@api_view(["GET", "POST", "DELETE"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([AllowAny])
+def institution_exam_types(request):
+    """List central exam types and manage each institution's selections."""
+
+    user = getattr(request, "user", None)
+    institution = None
+
+    if user and user.is_authenticated:
+        institution = InstitutionProfile.objects.filter(
+            identity=user,
+            is_active=True,
+        ).first()
+
+    if request.method == "GET":
+        queryset = CentralExamType.objects.filter(is_active=True)
+        search = request.query_params.get("q", "").strip()
+        if search:
+            queryset = queryset.filter(name__icontains=search)
+
+        results = list(queryset.order_by("name").values("id", "name")[:50])
+        selected_ids = set()
+
+        if institution:
+            selected_ids = set(
+                InstitutionExamTypeSelection.objects.filter(
+                    institution=institution,
+                    exam_type_id__in=[item["id"] for item in results],
+                ).values_list("exam_type_id", flat=True)
+            )
+
+        for item in results:
+            item["selected"] = item["id"] in selected_ids
+
+        return Response({"count": len(results), "results": results})
+
+    is_deepafy_admin = IsDeepafyAdmin().has_permission(request, None)
+    if not (is_deepafy_admin or institution):
+        return Response(
+            {"detail": "Only an institution owner or Deepafy admin can manage exam types."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    if request.method == "DELETE":
+        if not institution:
+            return Response(
+                {"detail": "An active institution profile is required to remove a selection."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        exam_type_id = (
+            request.query_params.get("exam_type_id")
+            or request.query_params.get("id")
+        )
+        if not exam_type_id:
+            return Response(
+                {"detail": "exam_type_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        deleted, _ = InstitutionExamTypeSelection.objects.filter(
+            institution=institution,
+            exam_type_id=exam_type_id,
+        ).delete()
+
+        return Response({
+            "removed": bool(deleted),
+            "exam_type_id": exam_type_id,
+        })
+
+    # POST with exam_type_id selects an existing central type.
+    exam_type_id = request.data.get("exam_type_id") or request.data.get("id")
+    if exam_type_id:
+        if not institution:
+            return Response(
+                {"detail": "An active institution profile is required to save a selection."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        try:
+            exam_type = CentralExamType.objects.get(
+                pk=exam_type_id,
+                is_active=True,
+            )
+        except (CentralExamType.DoesNotExist, ValueError, TypeError):
+            return Response(
+                {"detail": "Exam type not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        selection, created = InstitutionExamTypeSelection.objects.get_or_create(
+            institution=institution,
+            exam_type=exam_type,
+        )
+        return Response(
+            {
+                "id": exam_type.id,
+                "name": exam_type.name,
+                "selected": True,
+            },
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    # Only an institution owner or Deepafy admin may create a shared exam type.
+    if not (is_deepafy_admin or institution):
+        return Response(
+            {"detail": "Only an institution owner or Deepafy admin can create exam types."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    # POST with name creates a shared central type, then selects it for this institution.
+    name = request.data.get("name", "")
+    if not isinstance(name, str):
+        return Response(
+            {"detail": "Exam type name must be text."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    name = name.strip()
+
+    if not name:
+        return Response(
+            {"detail": "Exam type name is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if len(name) > 100:
+        return Response(
+            {"detail": "Exam type name cannot exceed 100 characters."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        with transaction.atomic():
+            exam_type = CentralExamType.objects.filter(name__iexact=name).first()
+            created = False
+
+            if exam_type is None:
+                exam_type = CentralExamType.objects.create(name=name)
+                created = True
+
+            if institution:
+                InstitutionExamTypeSelection.objects.get_or_create(
+                    institution=institution,
+                    exam_type=exam_type,
+                )
+
+    except IntegrityError:
+        exam_type = CentralExamType.objects.filter(name__iexact=name).first()
+        if exam_type is None:
+            raise
+        if institution:
+            InstitutionExamTypeSelection.objects.get_or_create(
+                institution=institution,
+                exam_type=exam_type,
+            )
+
+    result = {
+        "id": exam_type.id,
+        "name": exam_type.name,
+        "selected": bool(institution),
+    }
+    if created:
+        return Response(result, status=status.HTTP_201_CREATED)
+    return Response(result, status=status.HTTP_200_OK)
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_exams(request):
+    """List or create examinations for the authenticated institution."""
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "GET":
+        exams = InstitutionExam.objects.filter(
+            institution=institution,
+        ).select_related(
+            "academic_session",
+            "academic_level",
+            "grade_scale",
+            "central_exam_type",
+        )
+
+        session_id = request.query_params.get("academic_session_id")
+        level_id = request.query_params.get("academic_level_id")
+
+        if session_id:
+            exams = exams.filter(academic_session_id=session_id)
+        if level_id:
+            exams = exams.filter(academic_level_id=level_id)
+
+        return Response({
+            "count": exams.count(),
+            "results": [
+                {
+                    "id": exam.id,
+                    "name": exam.name,
+                    "category": exam.category,
+                    "exam_type": (
+                        exam.central_exam_type.name
+                        if exam.central_exam_type_id
+                        else exam.exam_type
+                    ),
+                    "exam_type_id": exam.central_exam_type_id,
+                    "exam_date": (
+                        exam.exam_date.isoformat()
+                        if exam.exam_date else None
+                    ),
+                    "academic_session_id": exam.academic_session_id,
+                    "academic_session": exam.academic_session.name,
+                    "academic_level_id": exam.academic_level_id,
+                    "academic_level": exam.academic_level.name,
+                    "grade_scale_id": exam.grade_scale_id,
+                    "grade_scale": (
+                        exam.grade_scale.name if exam.grade_scale else None
+                    ),
+                    "full_marks": str(exam.full_marks),
+                    "pass_mark": str(exam.pass_mark),
+                    "is_published": exam.is_published,
+                }
+                for exam in exams
+            ],
+        })
+
+    data = request.data
+    name = str(data.get("name") or "").strip()
+    exam_type_id = data.get("exam_type_id")
+    exam_type = str(data.get("exam_type") or "").strip()
+    category = str(data.get("category") or "INTERNAL").strip()
+
+    central_exam_type = None
+    if exam_type_id not in (None, ""):
+        try:
+            central_exam_type = CentralExamType.objects.get(
+                id=exam_type_id,
+                is_active=True,
+            )
+        except (CentralExamType.DoesNotExist, ValueError, TypeError):
+            return Response(
+                {"detail": "exam_type_id must reference an active exam type."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        exam_type = central_exam_type.name
+
+    if not name or not exam_type:
+        return Response(
+            {"detail": "name and either exam_type_id or exam_type are required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    valid_categories = {
+        choice[0]
+        for choice in InstitutionExam.CATEGORY_CHOICES
+    }
+    if category not in valid_categories:
+        return Response(
+            {"detail": "Invalid exam category."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        session = InstitutionAcademicSession.objects.get(
+            id=data.get("academic_session_id"),
+            institution=institution,
+            is_active=True,
+        )
+        level = InstitutionAcademicLevel.objects.get(
+            id=data.get("academic_level_id"),
+            institution=institution,
+        )
+    except (
+        InstitutionAcademicSession.DoesNotExist,
+        InstitutionAcademicLevel.DoesNotExist,
+        ValueError,
+        TypeError,
+    ):
+        return Response(
+            {"detail": "Valid academic_session_id and academic_level_id are required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        from decimal import Decimal, InvalidOperation
+
+        full_marks = Decimal(str(data.get("full_marks", "100")))
+        pass_mark = Decimal(str(data.get("pass_mark", "33")))
+    except (InvalidOperation, TypeError, ValueError):
+        return Response(
+            {"detail": "full_marks and pass_mark must be valid numbers."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if (
+        not full_marks.is_finite()
+        or not pass_mark.is_finite()
+        or full_marks <= 0
+        or pass_mark < 0
+        or pass_mark > full_marks
+    ):
+        return Response(
+            {"detail": "Require full_marks > 0 and 0 <= pass_mark <= full_marks."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    grade_scale_id = data.get("grade_scale_id")
+    grade_scale = None
+
+    if grade_scale_id not in (None, ""):
+        try:
+            grade_scale = InstitutionGradeScale.objects.get(
+                id=grade_scale_id,
+                institution=institution,
+                is_active=True,
+            )
+        except (
+            InstitutionGradeScale.DoesNotExist,
+            ValueError,
+            TypeError,
+        ):
+            return Response(
+                {
+                    "detail": (
+                        "grade_scale_id must reference an active "
+                        "grade scale belonging to this institution."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    exam_date = data.get("exam_date") or None
+    if exam_date:
+        from datetime import date
+        try:
+            exam_date = date.fromisoformat(str(exam_date))
+        except ValueError:
+            return Response(
+                {"detail": "exam_date must use YYYY-MM-DD format."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    try:
+        exam = InstitutionExam.objects.create(
+            institution=institution,
+            academic_session=session,
+            academic_level=level,
+            grade_scale=grade_scale,
+            name=name,
+            category=category,
+            exam_type=exam_type,
+            central_exam_type=central_exam_type,
+            exam_date=exam_date,
+            full_marks=full_marks,
+            pass_mark=pass_mark,
+        )
+    except IntegrityError:
+        return Response(
+            {"detail": "An exam with this name already exists for this session and level."},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    return Response(
+        {
+            "id": exam.id,
+            "name": exam.name,
+            "category": exam.category,
+            "exam_type": (
+                exam.central_exam_type.name
+                if exam.central_exam_type_id
+                else exam.exam_type
+            ),
+            "exam_type_id": exam.central_exam_type_id,
+            "exam_date": exam.exam_date.isoformat() if exam.exam_date else None,
+            "academic_session_id": exam.academic_session_id,
+            "academic_level_id": exam.academic_level_id,
+            "grade_scale_id": exam.grade_scale_id,
+            "grade_scale": (
+                exam.grade_scale.name if exam.grade_scale else None
+            ),
+            "full_marks": str(exam.full_marks),
+            "pass_mark": str(exam.pass_mark),
+            "is_published": exam.is_published,
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_exam_subjects(request, exam_id):
+    """List or add subjects to an institution-owned examination."""
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        exam = InstitutionExam.objects.get(
+            id=exam_id,
+            institution=institution,
+            academic_session__institution=institution,
+            academic_level__institution=institution,
+        )
+    except InstitutionExam.DoesNotExist:
+        return Response(
+            {"detail": "Exam not found for this institution."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "GET":
+        items = exam.exam_subjects.filter(
+            subject__is_active=True,
+        ).select_related("subject")
+
+        return Response({
+            "count": items.count(),
+            "results": [
+                {
+                    "id": item.id,
+                    "subject_id": item.subject_id,
+                    "subject": item.subject.name,
+                    "code": item.subject.code,
+                    "full_marks": str(item.full_marks),
+                    "pass_mark": str(item.pass_mark),
+                }
+                for item in items
+            ],
+        })
+
+    if request.method == "POST" and exam.is_published:
+        return Response(
+            {
+                "detail": (
+                    "Cannot modify exam subjects after results are published. "
+                    "Unpublish the exam first."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    data = request.data
+    subject_id = data.get("subject_id")
+
+    try:
+        subject = Subject.objects.get(
+            id=subject_id,
+            is_active=True,
+        )
+    except (Subject.DoesNotExist, ValueError, TypeError):
+        return Response(
+            {"detail": "Valid active subject_id is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Only subjects assigned to this exam's academic level are allowed.
+    if not InstitutionClassSubject.objects.filter(
+        institution=institution,
+        academic_level=exam.academic_level,
+        subject=subject,
+        is_active=True,
+    ).exists():
+        return Response(
+            {
+                "detail": (
+                    "Assign this subject to the academic level "
+                    "before adding it to the exam."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    from decimal import Decimal, InvalidOperation
+
+    try:
+        full_marks = Decimal(str(data.get("full_marks", "100")))
+        pass_mark = Decimal(str(data.get("pass_mark", "33")))
+    except (InvalidOperation, TypeError, ValueError):
+        return Response(
+            {"detail": "full_marks and pass_mark must be valid numbers."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if (
+        not full_marks.is_finite()
+        or not pass_mark.is_finite()
+        or full_marks <= 0
+        or pass_mark < 0
+        or pass_mark > full_marks
+    ):
+        return Response(
+            {"detail": "Require full_marks > 0 and 0 <= pass_mark <= full_marks."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    item, created = InstitutionExamSubject.objects.get_or_create(
+        exam=exam,
+        subject=subject,
+        defaults={
+            "full_marks": full_marks,
+            "pass_mark": pass_mark,
+        },
+    )
+
+    if not created:
+        return Response(
+            {"detail": "This subject is already assigned to the exam."},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    return Response(
+        {
+            "id": item.id,
+            "subject_id": item.subject_id,
+            "subject": item.subject.name,
+            "full_marks": str(item.full_marks),
+            "pass_mark": str(item.pass_mark),
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_exam_marks(request, exam_subject_id):
+    """List or save student marks for an exam subject."""
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        exam_subject = InstitutionExamSubject.objects.select_related(
+            "exam",
+            "subject",
+            "exam__academic_session",
+            "exam__academic_level",
+        ).get(
+            id=exam_subject_id,
+            exam__institution=institution,
+            exam__academic_session__institution=institution,
+            exam__academic_level__institution=institution,
+        )
+    except InstitutionExamSubject.DoesNotExist:
+        return Response(
+            {"detail": "Exam subject not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "GET":
+        exam = exam_subject.exam
+        enrollments = StudentEnrollment.objects.filter(
+            institution=institution,
+            academic_session=exam.academic_session,
+            status=StudentEnrollment.STATUS_RUNNING,
+        ).select_related("student")
+
+        # Support dynamic academic-level values and legacy class_name values.
+        dynamic_enrollment_ids = StudentEnrollmentAcademicValue.objects.filter(
+            academic_level=exam.academic_level,
+            value__iexact=exam.academic_level.name,
+            enrollment__in=enrollments,
+        ).values_list("enrollment_id", flat=True)
+
+        enrollments = enrollments.filter(
+            Q(id__in=dynamic_enrollment_ids)
+            | Q(
+                class_name__iexact=exam.academic_level.name,
+            )
+        ).order_by("roll", "student__name", "id")
+
+        saved_marks = {
+            mark.enrollment_id: mark
+            for mark in InstitutionExamMark.objects.filter(
+                exam_subject=exam_subject,
+                enrollment__in=enrollments,
+            )
+        }
+
+        results = []
+        for enrollment in enrollments:
+            mark = saved_marks.get(enrollment.id)
+            results.append({
+                "id": mark.id if mark else None,
+                "enrollment_id": enrollment.id,
+                "student_name": enrollment.student.name,
+                "roll": enrollment.roll,
+                "class_name": enrollment.class_name,
+                "section": enrollment.section,
+                "marks_obtained": (
+                    str(mark.marks_obtained)
+                    if mark and mark.marks_obtained is not None
+                    else None
+                ),
+                "is_absent": mark.is_absent if mark else False,
+                "remarks": mark.remarks if mark else "",
+            })
+
+        return Response({
+            "exam_subject_id": exam_subject.id,
+            "subject": exam_subject.subject.name,
+            "full_marks": str(exam_subject.full_marks),
+            "pass_mark": str(exam_subject.pass_mark),
+            "count": len(results),
+            "results": results,
+        })
+
+    if request.method == "POST" and exam_subject.exam.is_published:
+        return Response(
+            {
+                "detail": (
+                    "Cannot modify marks after results are published. "
+                    "Unpublish the exam first."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    data = request.data
+    enrollment_id = data.get("enrollment_id")
+    is_absent = data.get("is_absent", False)
+
+    if not enrollment_id:
+        return Response(
+            {"detail": "enrollment_id is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not isinstance(is_absent, bool):
+        return Response(
+            {"detail": "is_absent must be true or false."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        enrollment = StudentEnrollment.objects.get(
+            id=enrollment_id,
+            institution=institution,
+            academic_session=exam_subject.exam.academic_session,
+            status=StudentEnrollment.STATUS_RUNNING,
+        )
+    except (
+        StudentEnrollment.DoesNotExist,
+        ValueError,
+        TypeError,
+    ):
+        return Response(
+            {"detail": "Student enrollment does not match this exam."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    exam_level = exam_subject.exam.academic_level
+    level_value = StudentEnrollmentAcademicValue.objects.filter(
+        enrollment=enrollment,
+        academic_level=exam_level,
+    ).values_list("value", flat=True).first()
+
+    # Use the dynamic academic value when available. Legacy enrollments
+    # without a value for this level fall back to class_name.
+    enrolled_level_name = (
+        level_value.strip()
+        if level_value is not None and level_value.strip()
+        else enrollment.class_name.strip()
+    )
+
+    if enrolled_level_name.casefold() != exam_level.name.strip().casefold():
+        return Response(
+            {"detail": "Student enrollment does not match this exam's academic level."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    from decimal import Decimal, InvalidOperation
+
+    raw_marks = data.get("marks_obtained")
+
+    if is_absent:
+        marks_obtained = None
+    else:
+        if raw_marks is None or raw_marks == "":
+            return Response(
+                {
+                    "detail": (
+                        "marks_obtained is required unless the student "
+                        "is marked absent."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            marks_obtained = Decimal(str(raw_marks))
+        except (InvalidOperation, TypeError, ValueError):
+            return Response(
+                {"detail": "marks_obtained must be a valid number."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if (
+            not marks_obtained.is_finite()
+            or marks_obtained < 0
+            or marks_obtained > exam_subject.full_marks
+        ):
+            return Response(
+                {
+                    "detail": (
+                        "marks_obtained must be between 0 and "
+                        f"{exam_subject.full_marks}."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    mark, created = InstitutionExamMark.objects.update_or_create(
+        exam_subject=exam_subject,
+        enrollment=enrollment,
+        defaults={
+            "marks_obtained": marks_obtained,
+            "is_absent": is_absent,
+            "remarks": str(data.get("remarks") or "").strip()[:255],
+        },
+    )
+
+    return Response(
+        {
+            "id": mark.id,
+            "exam_subject_id": exam_subject.id,
+            "enrollment_id": enrollment.id,
+            "marks_obtained": (
+                str(mark.marks_obtained)
+                if mark.marks_obtained is not None
+                else None
+            ),
+            "is_absent": mark.is_absent,
+            "remarks": mark.remarks,
+            "created": created,
+        },
+        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_grade_scales(request):
+    """List or create grading scales owned by the authenticated institution."""
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "GET":
+        scales = InstitutionGradeScale.objects.filter(
+            institution=institution,
+        ).prefetch_related("ranges")
+
+        return Response({
+            "count": scales.count(),
+            "results": [
+                {
+                    "id": scale.id,
+                    "name": scale.name,
+                    "is_default": scale.is_default,
+                    "is_active": scale.is_active,
+                    "ranges": [
+                        {
+                            "id": item.id,
+                            "grade_name": item.grade_name,
+                            "min_percentage": str(item.min_percentage),
+                            "max_percentage": str(item.max_percentage),
+                            "grade_point": (
+                                str(item.grade_point)
+                                if item.grade_point is not None
+                                else None
+                            ),
+                        }
+                        for item in scale.ranges.all()
+                    ],
+                }
+                for scale in scales
+            ],
+        })
+
+    name = str(request.data.get("name") or "").strip()
+    if not name:
+        return Response(
+            {"detail": "name is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        with transaction.atomic():
+            make_default = request.data.get("is_default", False) is True
+            if make_default:
+                InstitutionGradeScale.objects.filter(
+                    institution=institution,
+                    is_default=True,
+                ).update(is_default=False)
+
+            scale, created = InstitutionGradeScale.objects.get_or_create(
+                institution=institution,
+                name=name,
+                defaults={
+                    "is_default": make_default,
+                    "is_active": True,
+                },
+            )
+    except IntegrityError:
+        return Response(
+            {"detail": "Could not create this grading scale."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not created:
+        return Response(
+            {"detail": "A grading scale with this name already exists."},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    return Response(
+        {
+            "id": scale.id,
+            "name": scale.name,
+            "is_default": scale.is_default,
+            "is_active": scale.is_active,
+            "ranges": [],
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_grade_ranges(request, scale_id):
+    """List or add percentage ranges to an institution-owned grading scale."""
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        scale = InstitutionGradeScale.objects.get(
+            id=scale_id,
+            institution=institution,
+        )
+    except (InstitutionGradeScale.DoesNotExist, ValueError, TypeError):
+        return Response(
+            {"detail": "Grading scale not found for this institution."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "GET":
+        ranges = scale.ranges.all()
+        return Response({
+            "count": ranges.count(),
+            "results": [
+                {
+                    "id": item.id,
+                    "grade_name": item.grade_name,
+                    "min_percentage": str(item.min_percentage),
+                    "max_percentage": str(item.max_percentage),
+                    "grade_point": (
+                        str(item.grade_point)
+                        if item.grade_point is not None
+                        else None
+                    ),
+                }
+                for item in ranges
+            ],
+        })
+
+    if scale.exams.filter(is_published=True).exists():
+        return Response(
+            {"detail": "Cannot modify grading rules while this scale is used by a published exam. Unpublish the exam first."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    from decimal import Decimal, InvalidOperation
+
+    grade_name = str(request.data.get("grade_name") or "").strip()
+    if not grade_name:
+        return Response(
+            {"detail": "grade_name is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        minimum = Decimal(str(request.data.get("min_percentage")))
+        maximum = Decimal(str(request.data.get("max_percentage")))
+        raw_point = request.data.get("grade_point")
+        grade_point = (
+            Decimal(str(raw_point))
+            if raw_point not in (None, "")
+            else None
+        )
+    except (InvalidOperation, TypeError, ValueError):
+        return Response(
+            {"detail": "Percentage values and grade_point must be valid numbers."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    values = [minimum, maximum]
+    if grade_point is not None:
+        values.append(grade_point)
+
+    if (
+        any(not value.is_finite() for value in values)
+        or minimum < 0
+        or maximum > 100
+        or minimum > maximum
+        or (grade_point is not None and grade_point < 0)
+    ):
+        return Response(
+            {"detail": "Require 0 <= min_percentage <= max_percentage <= 100 and a non-negative grade_point."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if scale.ranges.filter(grade_name__iexact=grade_name).exists():
+        return Response(
+            {"detail": "This grade name already exists in the scale."},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    overlap = scale.ranges.filter(
+        min_percentage__lte=maximum,
+        max_percentage__gte=minimum,
+    ).exists()
+    if overlap:
+        return Response(
+            {"detail": "This percentage range overlaps an existing grade range."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    item = InstitutionGradeRange.objects.create(
+        grade_scale=scale,
+        grade_name=grade_name,
+        min_percentage=minimum,
+        max_percentage=maximum,
+        grade_point=grade_point,
+    )
+
+    return Response(
+        {
+            "id": item.id,
+            "grade_name": item.grade_name,
+            "min_percentage": str(item.min_percentage),
+            "max_percentage": str(item.max_percentage),
+            "grade_point": (
+                str(item.grade_point)
+                if item.grade_point is not None
+                else None
+            ),
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_exam_publish(request, exam_id):
+    """Publish or unpublish results for an institution-owned exam."""
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        exam = InstitutionExam.objects.get(
+            id=exam_id,
+            institution=institution,
+            academic_session__institution=institution,
+            academic_level__institution=institution,
+        )
+    except InstitutionExam.DoesNotExist:
+        return Response(
+            {"detail": "Exam not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    publish = request.data.get("is_published")
+    if not isinstance(publish, bool):
+        return Response(
+            {"detail": "is_published must be true or false."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if publish:
+        exam_subjects = list(
+            InstitutionExamSubject.objects.filter(exam=exam)
+        )
+        if not exam_subjects:
+            return Response(
+                {"detail": "Add at least one subject before publishing."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        enrollments = StudentEnrollment.objects.filter(
+            institution=institution,
+            academic_session=exam.academic_session,
+            status=StudentEnrollment.STATUS_RUNNING,
+        )
+
+        dynamic_enrollment_ids = StudentEnrollmentAcademicValue.objects.filter(
+            academic_level=exam.academic_level,
+            value__iexact=exam.academic_level.name,
+            enrollment__in=enrollments,
+        ).values_list("enrollment_id", flat=True)
+
+        eligible_enrollments = enrollments.filter(
+            Q(id__in=dynamic_enrollment_ids)
+            | Q(class_name__iexact=exam.academic_level.name)
+        )
+        enrollment_ids = list(
+            eligible_enrollments.values_list("id", flat=True)
+        )
+
+        if not enrollment_ids:
+            return Response(
+                {"detail": "No eligible students found for this exam."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        marks = InstitutionExamMark.objects.filter(
+            exam_subject__in=exam_subjects,
+            enrollment_id__in=enrollment_ids,
+        )
+        saved_marks = {
+            (mark.exam_subject_id, mark.enrollment_id): mark
+            for mark in marks
+        }
+
+        missing = []
+        for enrollment_id in enrollment_ids:
+            for exam_subject in exam_subjects:
+                mark = saved_marks.get((exam_subject.id, enrollment_id))
+                if mark is None or (
+                    not mark.is_absent and mark.marks_obtained is None
+                ):
+                    missing.append({
+                        "enrollment_id": enrollment_id,
+                        "exam_subject_id": exam_subject.id,
+                    })
+
+        if missing:
+            return Response(
+                {
+                    "detail": "Cannot publish: some student marks are incomplete.",
+                    "incomplete_entries": len(missing),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    exam.is_published = publish
+    exam.save(update_fields=["is_published", "updated_at"])
+
+    return Response({
+        "exam_id": exam.id,
+        "is_published": exam.is_published,
+        "detail": "Results published." if publish else "Results unpublished.",
+    })
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def institution_exam_results(request, exam_id):
+    """Calculate subject-wise and overall results for an institution exam."""
+    from decimal import Decimal
+
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        exam = InstitutionExam.objects.select_related(
+            "academic_session",
+            "academic_level",
+            "grade_scale",
+        ).get(
+            id=exam_id,
+            institution=institution,
+            academic_session__institution=institution,
+            academic_level__institution=institution,
+        )
+    except InstitutionExam.DoesNotExist:
+        return Response(
+            {"detail": "Exam not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    exam_subjects = list(
+        InstitutionExamSubject.objects.filter(
+            exam=exam,
+        ).select_related("subject").order_by("subject__name", "id")
+    )
+
+    if not exam_subjects:
+        return Response(
+            {
+                "exam_id": exam.id,
+                "exam_name": exam.name,
+                "status": "INCOMPLETE",
+                "detail": "Add at least one subject before calculating results.",
+                "count": 0,
+                "results": [],
+                "statistics": {
+                    "total_students": 0,
+                    "completed": 0,
+                    "incomplete": 0,
+                    "passed": 0,
+                    "failed": 0,
+                    "pass_rate": None,
+                },
+            }
+        )
+
+    enrollments = StudentEnrollment.objects.filter(
+        institution=institution,
+        academic_session=exam.academic_session,
+        status=StudentEnrollment.STATUS_RUNNING,
+    ).select_related("student")
+
+    dynamic_enrollment_ids = StudentEnrollmentAcademicValue.objects.filter(
+        academic_level=exam.academic_level,
+        value__iexact=exam.academic_level.name,
+        enrollment__in=enrollments,
+    ).values_list("enrollment_id", flat=True)
+
+    enrollments = list(
+        enrollments.filter(
+            Q(id__in=dynamic_enrollment_ids)
+            | Q(class_name__iexact=exam.academic_level.name)
+        ).order_by("roll", "student__name", "id")
+    )
+
+    enrollment_ids = [item.id for item in enrollments]
+    subject_ids = [item.id for item in exam_subjects]
+
+    saved_marks = {
+        (mark.exam_subject_id, mark.enrollment_id): mark
+        for mark in InstitutionExamMark.objects.filter(
+            exam_subject_id__in=subject_ids,
+            enrollment_id__in=enrollment_ids,
+        )
+    }
+
+    grade_ranges = []
+    if exam.grade_scale and exam.grade_scale.is_active:
+        grade_ranges = list(
+            exam.grade_scale.ranges.all().order_by("min_percentage")
+        )
+
+    def grade_for_percentage(percentage):
+        for grade_range in grade_ranges:
+            if (
+                grade_range.min_percentage
+                <= percentage
+                <= grade_range.max_percentage
+            ):
+                return {
+                    "grade": grade_range.grade_name,
+                    "grade_point": (
+                        str(grade_range.grade_point)
+                        if grade_range.grade_point is not None
+                        else None
+                    ),
+                }
+        return {"grade": None, "grade_point": None}
+
+    results = []
+    completed_count = 0
+    incomplete_count = 0
+    passed_count = 0
+    failed_count = 0
+
+    for enrollment in enrollments:
+        subject_results = []
+        total_obtained = Decimal("0")
+        total_full_marks = Decimal("0")
+        all_subjects_entered = True
+        all_subjects_passed = True
+        subject_grade_points = []
+        all_grade_points_available = bool(grade_ranges)
+
+        for exam_subject in exam_subjects:
+            mark = saved_marks.get((exam_subject.id, enrollment.id))
+            full_marks = exam_subject.full_marks
+            pass_mark = exam_subject.pass_mark
+            total_full_marks += full_marks
+
+            if mark is None:
+                all_subjects_entered = False
+                subject_results.append({
+                    "exam_subject_id": exam_subject.id,
+                    "subject_id": exam_subject.subject_id,
+                    "subject": exam_subject.subject.name,
+                    "marks_obtained": None,
+                    "full_marks": str(full_marks),
+                    "pass_mark": str(pass_mark),
+                    "percentage": None,
+                    "grade": None,
+                    "grade_point": None,
+                    "is_absent": False,
+                    "status": "INCOMPLETE",
+                })
+                continue
+
+            if mark.is_absent:
+                all_subjects_passed = False
+                subject_results.append({
+                    "exam_subject_id": exam_subject.id,
+                    "subject_id": exam_subject.subject_id,
+                    "subject": exam_subject.subject.name,
+                    "marks_obtained": None,
+                    "full_marks": str(full_marks),
+                    "pass_mark": str(pass_mark),
+                    "percentage": None,
+                    "grade": None,
+                    "grade_point": None,
+                    "is_absent": True,
+                    "status": "ABSENT",
+                })
+                continue
+
+            obtained = mark.marks_obtained
+            if obtained is None:
+                all_subjects_entered = False
+                subject_results.append({
+                    "exam_subject_id": exam_subject.id,
+                    "subject_id": exam_subject.subject_id,
+                    "subject": exam_subject.subject.name,
+                    "marks_obtained": None,
+                    "full_marks": str(full_marks),
+                    "pass_mark": str(pass_mark),
+                    "percentage": None,
+                    "grade": None,
+                    "grade_point": None,
+                    "is_absent": False,
+                    "status": "INCOMPLETE",
+                })
+                continue
+
+            total_obtained += obtained
+            percentage = (
+                obtained * Decimal("100") / full_marks
+                if full_marks > 0
+                else Decimal("0")
+            )
+            grade_data = grade_for_percentage(percentage)
+            subject_passed = obtained >= pass_mark
+
+            if not subject_passed:
+                all_subjects_passed = False
+
+            if grade_data["grade_point"] is None:
+                all_grade_points_available = False
+            else:
+                subject_grade_points.append(
+                    Decimal(grade_data["grade_point"])
+                )
+
+            subject_results.append({
+                "exam_subject_id": exam_subject.id,
+                "subject_id": exam_subject.subject_id,
+                "subject": exam_subject.subject.name,
+                "marks_obtained": str(obtained),
+                "full_marks": str(full_marks),
+                "pass_mark": str(pass_mark),
+                "percentage": str(percentage.quantize(Decimal("0.01"))),
+                "grade": grade_data["grade"],
+                "grade_point": grade_data["grade_point"],
+                "is_absent": False,
+                "status": "PASS" if subject_passed else "FAIL",
+            })
+
+        percentage = (
+            total_obtained * Decimal("100") / total_full_marks
+            if total_full_marks > 0
+            else Decimal("0")
+        )
+
+        if not all_subjects_entered:
+            overall_status = "INCOMPLETE"
+            overall_grade = None
+            gpa = None
+            incomplete_count += 1
+        else:
+            completed_count += 1
+            overall_status = "PASS" if all_subjects_passed else "FAIL"
+
+            if all_subjects_passed:
+                passed_count += 1
+            else:
+                failed_count += 1
+
+            overall_grade_data = grade_for_percentage(percentage)
+            overall_grade = overall_grade_data["grade"]
+
+            if (
+                all_subjects_passed
+                and all_grade_points_available
+                and len(subject_grade_points) == len(exam_subjects)
+            ):
+                gpa = str(
+                    (
+                        sum(subject_grade_points) / Decimal(len(subject_grade_points))
+                    ).quantize(Decimal("0.01"))
+                )
+            else:
+                gpa = None
+
+        results.append({
+            "enrollment_id": enrollment.id,
+            "student_name": enrollment.student.name,
+            "roll": enrollment.roll,
+            "class_name": enrollment.class_name,
+            "section": enrollment.section,
+            "total_obtained": str(total_obtained),
+            "total_full_marks": str(total_full_marks),
+            "percentage": (
+                str(percentage.quantize(Decimal("0.01")))
+                if all_subjects_entered
+                else None
+            ),
+            "grade": overall_grade,
+            "gpa": gpa,
+            "status": overall_status,
+            "subjects": subject_results,
+        })
+
+    pass_rate = (
+        str(
+            (
+                Decimal(passed_count) * Decimal("100")
+                / Decimal(completed_count)
+            ).quantize(Decimal("0.01"))
+        )
+        if completed_count
+        else None
+    )
+
+    return Response({
+        "exam_id": exam.id,
+        "exam_name": exam.name,
+        "category": exam.category,
+        "academic_session_id": exam.academic_session_id,
+        "academic_level_id": exam.academic_level_id,
+        "grade_scale_id": exam.grade_scale_id,
+        "grade_scale": exam.grade_scale.name if exam.grade_scale else None,
+        "status": "CALCULATED",
+        "count": len(results),
+        "results": results,
+        "statistics": {
+            "total_students": len(results),
+            "completed": completed_count,
+            "incomplete": incomplete_count,
+            "passed": passed_count,
+            "failed": failed_count,
+            "pass_rate": pass_rate,
+        },
+    })
