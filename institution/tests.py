@@ -749,6 +749,37 @@ class InstitutionResultsAPITests(APITestCase):
         self.assertEqual(defaults.count(), 1)
         self.assertEqual(defaults.get().id, second.data["id"])
 
+    def test_duplicate_default_scale_preserves_existing_default(self):
+        from institution.models import InstitutionGradeScale
+
+        first = self.client.post(
+            reverse("institution-grade-scales"),
+            {"name": "Existing Default", "is_default": True},
+            format="json",
+        )
+        self.assertEqual(first.status_code, 201, first.data)
+
+        second = self.client.post(
+            reverse("institution-grade-scales"),
+            {"name": "Another Default", "is_default": True},
+            format="json",
+        )
+        self.assertEqual(second.status_code, 201, second.data)
+
+        duplicate = self.client.post(
+            reverse("institution-grade-scales"),
+            {"name": "Existing Default", "is_default": True},
+            format="json",
+        )
+        self.assertEqual(duplicate.status_code, 409, duplicate.data)
+
+        defaults = InstitutionGradeScale.objects.filter(
+            institution=self.institution,
+            is_default=True,
+        )
+        self.assertEqual(defaults.count(), 1)
+        self.assertEqual(defaults.get().id, second.data["id"])
+
     def test_valid_grade_range_can_be_created(self):
         scale_response = self.client.post(
             reverse("institution-grade-scales"),
@@ -771,6 +802,102 @@ class InstitutionResultsAPITests(APITestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 201, response.data)
+
+    def test_decimal_grade_point_is_accepted_on_create_and_update(self):
+        from institution.models import InstitutionGradeRange, InstitutionGradeScale
+
+        scale = InstitutionGradeScale.objects.create(
+            institution=self.institution,
+            name="Decimal GPA Scale",
+            maximum_gpa="5.00",
+        )
+
+        create_response = self.client.post(
+            reverse("institution-grade-ranges", args=[scale.id]),
+            {
+                "grade_name": "A",
+                "min_percentage": "80",
+                "max_percentage": "100",
+                "grade_point": "4.5",
+            },
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        grade = InstitutionGradeRange.objects.get(
+            grade_scale=scale,
+            grade_name="A",
+        )
+        self.assertEqual(grade.grade_point, 4.5)
+
+        update_response = self.client.patch(
+            reverse(
+                "institution-grade-range-detail",
+                args=[scale.id, grade.id],
+            ),
+            {"grade_point": "3.75"},
+            format="json",
+        )
+        self.assertEqual(update_response.status_code, 200)
+
+        grade.refresh_from_db()
+        self.assertEqual(grade.grade_point, 3.75)
+
+    def test_grade_point_cannot_exceed_maximum_gpa(self):
+        from institution.models import InstitutionGradeScale, InstitutionGradeRange
+
+        scale = InstitutionGradeScale.objects.create(
+            institution=self.institution,
+            name="GPA Validation Scale",
+            maximum_gpa="5.00",
+        )
+
+        url = reverse(
+            "institution-grade-ranges",
+            args=[scale.id],
+        )
+
+        invalid_create = self.client.post(
+            url,
+            {
+                "grade_name": "A+",
+                "min_percentage": "80",
+                "max_percentage": "100",
+                "grade_point": "5.01",
+            },
+            format="json",
+        )
+        self.assertEqual(invalid_create.status_code, 400)
+
+        valid_create = self.client.post(
+            url,
+            {
+                "grade_name": "A",
+                "min_percentage": "80",
+                "max_percentage": "100",
+                "grade_point": "5.00",
+            },
+            format="json",
+        )
+        self.assertEqual(valid_create.status_code, 201, valid_create.data)
+
+        grade = InstitutionGradeRange.objects.get(
+            grade_scale=scale,
+            grade_name="A",
+        )
+
+        invalid_update = self.client.patch(
+            reverse(
+                "institution-grade-range-detail",
+                args=[scale.id, grade.id],
+            ),
+            {"grade_point": "5.01"},
+            format="json",
+        )
+        self.assertEqual(invalid_update.status_code, 400)
+
+        grade.refresh_from_db()
+        self.assertEqual(str(grade.grade_point), "5.00")
 
     def test_published_exam_rejects_grade_range_changes(self):
         from institution.models import InstitutionGradeScale, InstitutionExam
@@ -878,6 +1005,143 @@ class InstitutionResultsAPITests(APITestCase):
             )
         )
         self.assertEqual(response.status_code, 404, response.data)
+
+    def test_grade_range_can_be_updated(self):
+        from institution.models import InstitutionGradeScale, InstitutionGradeRange
+
+        scale = InstitutionGradeScale.objects.create(
+            institution=self.institution,
+            name="Editable Grade Scale",
+        )
+        grade = InstitutionGradeRange.objects.create(
+            grade_scale=scale,
+            grade_name="A",
+            min_percentage=80,
+            max_percentage=100,
+            grade_point=5,
+        )
+
+        response = self.client.patch(
+            reverse(
+                "institution-grade-range-detail",
+                args=[scale.id, grade.id],
+            ),
+            {
+                "grade_name": "A+",
+                "min_percentage": "85",
+                "max_percentage": "100",
+                "grade_point": "5.00",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        grade.refresh_from_db()
+        self.assertEqual(grade.grade_name, "A+")
+        self.assertEqual(str(grade.min_percentage), "85.00")
+
+    def test_grade_range_can_be_deleted(self):
+        from institution.models import InstitutionGradeScale, InstitutionGradeRange
+
+        scale = InstitutionGradeScale.objects.create(
+            institution=self.institution,
+            name="Deletable Grade Scale",
+        )
+        grade = InstitutionGradeRange.objects.create(
+            grade_scale=scale,
+            grade_name="F",
+            min_percentage=0,
+            max_percentage=39.99,
+            grade_point=0,
+        )
+
+        response = self.client.delete(
+            reverse(
+                "institution-grade-range-detail",
+                args=[scale.id, grade.id],
+            )
+        )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(InstitutionGradeRange.objects.filter(id=grade.id).exists())
+
+    def test_grade_range_from_another_institution_cannot_be_modified(self):
+        from institution.models import InstitutionGradeScale, InstitutionGradeRange
+
+        scale = InstitutionGradeScale.objects.create(
+            institution=self.other_institution,
+            name="Foreign Grade Scale",
+        )
+        grade = InstitutionGradeRange.objects.create(
+            grade_scale=scale,
+            grade_name="A",
+            min_percentage=80,
+            max_percentage=100,
+            grade_point=5,
+        )
+
+        url = reverse(
+            "institution-grade-range-detail",
+            args=[scale.id, grade.id],
+        )
+        update_response = self.client.patch(
+            url,
+            {"grade_name": "Changed"},
+            format="json",
+        )
+        delete_response = self.client.delete(url)
+
+        self.assertEqual(update_response.status_code, 404)
+        self.assertEqual(delete_response.status_code, 404)
+        grade.refresh_from_db()
+        self.assertEqual(grade.grade_name, "A")
+
+    def test_published_exam_prevents_grade_range_update_and_delete(self):
+        from institution.models import (
+            InstitutionGradeScale,
+            InstitutionGradeRange,
+            InstitutionExam,
+        )
+
+        scale = InstitutionGradeScale.objects.create(
+            institution=self.institution,
+            name="Protected Grade Scale",
+        )
+        grade = InstitutionGradeRange.objects.create(
+            grade_scale=scale,
+            grade_name="A",
+            min_percentage=80,
+            max_percentage=100,
+            grade_point=5,
+        )
+        InstitutionExam.objects.create(
+            institution=self.institution,
+            academic_session=self.session,
+            academic_level=self.level,
+            name="Published Protection Test",
+            category="INTERNAL",
+            exam_type="Class Test",
+            full_marks=100,
+            pass_mark=33,
+            grade_scale=scale,
+            is_published=True,
+        )
+
+        url = reverse(
+            "institution-grade-range-detail",
+            args=[scale.id, grade.id],
+        )
+        update_response = self.client.patch(
+            url,
+            {"grade_name": "Changed"},
+            format="json",
+        )
+        delete_response = self.client.delete(url)
+
+        self.assertEqual(update_response.status_code, 400)
+        self.assertEqual(delete_response.status_code, 400)
+        grade.refresh_from_db()
+        self.assertEqual(grade.grade_name, "A")
 
     def test_exam_can_use_own_grade_scale(self):
         from institution.models import InstitutionGradeScale
@@ -1012,8 +1276,60 @@ class InstitutionResultsAPITests(APITestCase):
 
         self.assertEqual(response.status_code, 404, response.data)
 
-    def test_exam_publish_rejects_incomplete_marks(self):
+    def test_exam_publish_rejects_grade_scale_with_percentage_gap(self):
+        from institution.models import (
+            InstitutionGradeScale,
+            InstitutionGradeRange,
+        )
+
         exam_subject, enrollment = self._create_exam_subject_and_enrollment()
+        exam = exam_subject.exam
+
+        scale = InstitutionGradeScale.objects.create(
+            institution=self.institution,
+            name="Incomplete Coverage Scale",
+        )
+        exam.grade_scale = scale
+        exam.save(update_fields=["grade_scale"])
+
+        InstitutionGradeRange.objects.create(
+            grade_scale=scale,
+            grade_name="A",
+            min_percentage="80.00",
+            max_percentage="100.00",
+            grade_point="5.00",
+        )
+
+        response = self.client.post(
+            reverse("institution-exam-publish", args=[exam.id]),
+            {"is_published": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("cover 0.00 to 100.00", response.data["detail"])
+
+        exam.refresh_from_db()
+        self.assertFalse(exam.is_published)
+
+    def test_exam_publish_rejects_incomplete_marks(self):
+        from institution.models import InstitutionGradeScale, InstitutionGradeRange
+
+        exam_subject, enrollment = self._create_exam_subject_and_enrollment()
+        scale = InstitutionGradeScale.objects.create(
+            institution=self.institution,
+            name="Complete Scale For Missing Marks",
+        )
+        InstitutionGradeRange.objects.create(
+            grade_scale=scale, grade_name="F",
+            min_percentage="0.00", max_percentage="39.99", grade_point="0",
+        )
+        InstitutionGradeRange.objects.create(
+            grade_scale=scale, grade_name="A",
+            min_percentage="40.00", max_percentage="100.00", grade_point="5",
+        )
+        exam_subject.exam.grade_scale = scale
+        exam_subject.exam.save(update_fields=["grade_scale"])
 
         response = self.client.post(
             reverse("institution-exam-publish", args=[exam_subject.exam_id]),
@@ -1028,9 +1344,29 @@ class InstitutionResultsAPITests(APITestCase):
         )
 
     def test_exam_publish_succeeds_when_all_marks_are_complete(self):
-        from institution.models import InstitutionExamMark, InstitutionExam
+        from institution.models import (
+            InstitutionExamMark,
+            InstitutionExam,
+            InstitutionGradeScale,
+            InstitutionGradeRange,
+        )
 
         exam_subject, enrollment = self._create_exam_subject_and_enrollment()
+        scale = InstitutionGradeScale.objects.create(
+            institution=self.institution,
+            name="Complete Scale For Successful Publish",
+        )
+        InstitutionGradeRange.objects.create(
+            grade_scale=scale, grade_name="F",
+            min_percentage="0.00", max_percentage="39.99", grade_point="0",
+        )
+        InstitutionGradeRange.objects.create(
+            grade_scale=scale, grade_name="A",
+            min_percentage="40.00", max_percentage="100.00", grade_point="5",
+        )
+        exam_subject.exam.grade_scale = scale
+        exam_subject.exam.save(update_fields=["grade_scale"])
+
         InstitutionExamMark.objects.create(
             exam_subject=exam_subject,
             enrollment=enrollment,
