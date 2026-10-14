@@ -1627,6 +1627,23 @@ class InstitutionExamTypeSelection(models.Model):
         return f"{self.institution} - {self.exam_type.name}"
 
 
+class InstitutionResultPeriodSettings(models.Model):
+    """Store enabled result years and semesters for each institution."""
+
+    institution = models.OneToOneField(
+        InstitutionProfile,
+        on_delete=models.CASCADE,
+        related_name="result_period_settings",
+    )
+    years = models.JSONField(default=list, blank=True)
+    semesters = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Result periods - {self.institution}"
+
+
 class InstitutionExam(models.Model):
     """An institution-specific examination."""
 
