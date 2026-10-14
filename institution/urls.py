@@ -44,6 +44,7 @@ from .views import (
     institution_exam_publish,
     institution_grade_scales,
     institution_grade_ranges,
+    institution_grade_range_detail,
 )
 
 
@@ -192,6 +193,11 @@ urlpatterns = [
         "results/grade-scales/<int:scale_id>/ranges/",
         institution_grade_ranges,
         name="institution-grade-ranges",
+    ),
+    path(
+        "results/grade-scales/<int:scale_id>/ranges/<int:range_id>/",
+        institution_grade_range_detail,
+        name="institution-grade-range-detail",
     ),
     path(
         "results/exam-types/",

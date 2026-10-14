@@ -1789,6 +1789,11 @@ class InstitutionGradeScale(models.Model):
         related_name="grade_scales",
     )
     name = models.CharField(max_length=100)
+    maximum_gpa = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=5.00,
+    )
     is_default = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
