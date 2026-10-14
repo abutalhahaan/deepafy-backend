@@ -5996,7 +5996,7 @@ def institution_exam_marks(request, exam_subject_id):
     )
 
 
-@api_view(["GET", "POST"])
+@api_view(["GET", "POST", "PATCH"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def institution_grade_scales(request):
@@ -6023,6 +6023,7 @@ def institution_grade_scales(request):
                 {
                     "id": scale.id,
                     "name": scale.name,
+                    "maximum_gpa": str(scale.maximum_gpa),
                     "is_default": scale.is_default,
                     "is_active": scale.is_active,
                     "ranges": [
@@ -6044,6 +6045,69 @@ def institution_grade_scales(request):
             ],
         })
 
+    if request.method == "PATCH":
+        from decimal import Decimal, InvalidOperation
+
+        try:
+            scale_id = int(request.data.get("id"))
+            scale = InstitutionGradeScale.objects.get(
+                id=scale_id,
+                institution=institution,
+            )
+        except (TypeError, ValueError, InstitutionGradeScale.DoesNotExist):
+            return Response(
+                {"detail": "Grading scale not found for this institution."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if scale.exams.filter(is_published=True).exists():
+            return Response(
+                {"detail": "Cannot modify a grading scale used by a published exam. Unpublish the exam first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        name = str(request.data.get("name", scale.name) or "").strip()
+        if not name:
+            return Response(
+                {"detail": "name is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            maximum_gpa = Decimal(str(request.data.get("maximum_gpa", scale.maximum_gpa)))
+        except (InvalidOperation, TypeError, ValueError):
+            return Response(
+                {"detail": "maximum_gpa must be a valid number."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not maximum_gpa.is_finite() or maximum_gpa <= 0 or maximum_gpa > Decimal("999.99"):
+            return Response(
+                {"detail": "Maximum GPA must be greater than 0 and at most 999.99."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if InstitutionGradeScale.objects.filter(
+            institution=institution,
+            name__iexact=name,
+        ).exclude(id=scale.id).exists():
+            return Response(
+                {"detail": "A grading scale with this name already exists."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        scale.name = name
+        scale.maximum_gpa = maximum_gpa
+        scale.save(update_fields=["name", "maximum_gpa"])
+
+        return Response({
+            "id": scale.id,
+            "name": scale.name,
+            "maximum_gpa": str(scale.maximum_gpa),
+            "is_default": scale.is_default,
+            "is_active": scale.is_active,
+        })
+
     name = str(request.data.get("name") or "").strip()
     if not name:
         return Response(
@@ -6051,32 +6115,51 @@ def institution_grade_scales(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    from decimal import Decimal, InvalidOperation
+
+    try:
+        maximum_gpa = Decimal(str(request.data.get("maximum_gpa", "5.00")))
+    except (InvalidOperation, TypeError, ValueError):
+        return Response(
+            {"detail": "maximum_gpa must be a valid number."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not maximum_gpa.is_finite() or maximum_gpa <= 0 or maximum_gpa > Decimal("999.99"):
+        return Response(
+            {"detail": "maximum_gpa must be greater than 0 and at most 999.99."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     try:
         with transaction.atomic():
+            if InstitutionGradeScale.objects.filter(
+                institution=institution,
+                name=name,
+            ).exists():
+                return Response(
+                    {"detail": "A grading scale with this name already exists."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
             make_default = request.data.get("is_default", False) is True
+
             if make_default:
                 InstitutionGradeScale.objects.filter(
                     institution=institution,
                     is_default=True,
                 ).update(is_default=False)
 
-            scale, created = InstitutionGradeScale.objects.get_or_create(
+            scale = InstitutionGradeScale.objects.create(
                 institution=institution,
                 name=name,
-                defaults={
-                    "is_default": make_default,
-                    "is_active": True,
-                },
+                maximum_gpa=maximum_gpa,
+                is_default=make_default,
+                is_active=True,
             )
     except IntegrityError:
         return Response(
-            {"detail": "Could not create this grading scale."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    if not created:
-        return Response(
-            {"detail": "A grading scale with this name already exists."},
+            {"detail": "A grading scale with this name already exists or could not be created."},
             status=status.HTTP_409_CONFLICT,
         )
 
@@ -6084,6 +6167,7 @@ def institution_grade_scales(request):
         {
             "id": scale.id,
             "name": scale.name,
+            "maximum_gpa": str(scale.maximum_gpa),
             "is_default": scale.is_default,
             "is_active": scale.is_active,
             "ranges": [],
@@ -6091,6 +6175,130 @@ def institution_grade_scales(request):
         status=status.HTTP_201_CREATED,
     )
 
+
+@api_view(["PUT", "PATCH", "DELETE"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_grade_range_detail(request, scale_id, range_id):
+    """Update or delete a grade range belonging to an institution-owned scale."""
+    from decimal import Decimal, InvalidOperation
+
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        scale = InstitutionGradeScale.objects.get(
+            id=scale_id,
+            institution=institution,
+        )
+        item = InstitutionGradeRange.objects.get(
+            id=range_id,
+            grade_scale=scale,
+        )
+    except (InstitutionGradeScale.DoesNotExist, InstitutionGradeRange.DoesNotExist, ValueError, TypeError):
+        return Response(
+            {"detail": "Grading scale or grade range not found for this institution."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if scale.exams.filter(is_published=True).exists():
+        return Response(
+            {"detail": "Cannot modify grading rules while this scale is used by a published exam. Unpublish the exam first."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if request.method == "DELETE":
+        item.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    data = request.data
+    grade_name = str(data.get("grade_name", item.grade_name) or "").strip()
+    if not grade_name:
+        return Response(
+            {"detail": "grade_name is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        minimum = Decimal(str(data.get("min_percentage", item.min_percentage)))
+        maximum = Decimal(str(data.get("max_percentage", item.max_percentage)))
+        raw_point = data.get("grade_point", item.grade_point)
+        grade_point = Decimal(str(raw_point)) if raw_point not in (None, "") else None
+    except (InvalidOperation, TypeError, ValueError):
+        return Response(
+            {"detail": "Percentage values and grade_point must be valid numbers."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    values = [minimum, maximum]
+    if grade_point is not None:
+        values.append(grade_point)
+
+    if (
+        any(not value.is_finite() for value in values)
+        or minimum < 0
+        or maximum > 100
+        or minimum > maximum
+        or (
+            grade_point is not None
+            and (
+                grade_point < 0
+                or grade_point > scale.maximum_gpa
+            )
+        )
+    ):
+        return Response(
+            {
+                "detail": (
+                    "Require 0 <= min_percentage <= max_percentage <= 100 "
+                    "and 0 <= grade_point <= maximum_gpa."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    duplicates = scale.ranges.exclude(id=item.id)
+    if duplicates.filter(grade_name__iexact=grade_name).exists():
+        return Response(
+            {"detail": "This grade name already exists in the scale."},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    if duplicates.filter(
+        min_percentage__lte=maximum,
+        max_percentage__gte=minimum,
+    ).exists():
+        return Response(
+            {"detail": "This percentage range overlaps an existing grade range."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    item.grade_name = grade_name
+    item.min_percentage = minimum
+    item.max_percentage = maximum
+    item.grade_point = grade_point
+    item.save(update_fields=[
+        "grade_name",
+        "min_percentage",
+        "max_percentage",
+        "grade_point",
+    ])
+
+    return Response({
+        "id": item.id,
+        "grade_name": item.grade_name,
+        "min_percentage": str(item.min_percentage),
+        "max_percentage": str(item.max_percentage),
+        "grade_point": str(item.grade_point) if item.grade_point is not None else None,
+    })
 
 @api_view(["GET", "POST"])
 @authentication_classes([JWTAuthentication])
@@ -6178,10 +6386,21 @@ def institution_grade_ranges(request, scale_id):
         or minimum < 0
         or maximum > 100
         or minimum > maximum
-        or (grade_point is not None and grade_point < 0)
+        or (
+            grade_point is not None
+            and (
+                grade_point < 0
+                or grade_point > scale.maximum_gpa
+            )
+        )
     ):
         return Response(
-            {"detail": "Require 0 <= min_percentage <= max_percentage <= 100 and a non-negative grade_point."},
+            {
+                "detail": (
+                    "Require 0 <= min_percentage <= max_percentage <= 100 "
+                    "and 0 <= grade_point <= maximum_gpa."
+                )
+            },
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -6262,6 +6481,54 @@ def institution_exam_publish(request, exam_id):
         )
 
     if publish:
+        if not exam.grade_scale_id:
+            return Response(
+                {
+                    "detail": (
+                        "Cannot publish: select a grade scale that covers "
+                        "0.00 to 100.00 without gaps or overlaps."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from decimal import Decimal
+
+        grade_ranges = list(
+            exam.grade_scale.ranges.all().order_by(
+                "min_percentage", "id"
+            )
+        )
+
+        valid_coverage = (
+            bool(grade_ranges)
+            and grade_ranges[0].min_percentage == Decimal("0.00")
+            and grade_ranges[-1].max_percentage == Decimal("100.00")
+        )
+
+        if valid_coverage:
+            for index in range(1, len(grade_ranges)):
+                previous = grade_ranges[index - 1]
+                current = grade_ranges[index]
+
+                if (
+                    current.min_percentage
+                    != previous.max_percentage + Decimal("0.01")
+                ):
+                    valid_coverage = False
+                    break
+
+        if not valid_coverage:
+            return Response(
+                {
+                    "detail": (
+                        "Cannot publish: the selected grade scale must "
+                        "cover 0.00 to 100.00 without gaps or overlaps."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         exam_subjects = list(
             InstitutionExamSubject.objects.filter(exam=exam)
         )
