@@ -23,6 +23,7 @@ from .models import (
     InstitutionAcademicLevel,
     InstitutionAdmissionType,
     InstitutionAcademicSession,
+    InstitutionResultPeriodSettings,
     InstitutionStaffService,
     InstitutionStaffAttendance,
     UnclaimedPerson,
@@ -84,6 +85,75 @@ def sync_staff_retirement_status(institution):
         status=UnclaimedPerson.STATUS_RETIRED,
     )
 
+
+
+@api_view(["GET", "PUT"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_result_period_settings(request):
+    """Read or save the authenticated institution's result period settings."""
+    try:
+        profile = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "GET":
+        settings = InstitutionResultPeriodSettings.objects.filter(
+            institution=profile
+        ).first()
+        return Response({
+            "years": settings.years if settings else [],
+            "semesters": settings.semesters if settings else [],
+        })
+
+    data = request.data
+    years = data.get("years")
+    semesters = data.get("semesters")
+
+    if not isinstance(years, list) or not isinstance(semesters, list):
+        return Response(
+            {"detail": "Years and semesters must both be lists."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    allowed_years = [
+        f"{n}{'st' if n == 1 else 'nd' if n == 2 else 'rd' if n == 3 else 'th'} Year"
+        for n in range(1, 5)
+    ]
+    allowed_semesters = [
+        f"{n}{'st' if n == 1 else 'nd' if n == 2 else 'rd' if n == 3 else 'th'} Semester"
+        for n in range(1, 21)
+    ]
+
+    if (
+        any(not isinstance(v, str) or v not in allowed_years for v in years)
+        or any(
+            not isinstance(v, str) or v not in allowed_semesters
+            for v in semesters
+        )
+    ):
+        return Response(
+            {"detail": "One or more Year or Semester options are invalid."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    settings, _ = InstitutionResultPeriodSettings.objects.get_or_create(
+        institution=profile,
+    )
+    settings.years = [v for v in allowed_years if v in years]
+    settings.semesters = [v for v in allowed_semesters if v in semesters]
+    settings.save(update_fields=["years", "semesters", "updated_at"])
+
+    return Response({
+        "years": settings.years,
+        "semesters": settings.semesters,
+    })
 
 
 @api_view(["GET", "POST"])

@@ -32,6 +32,7 @@ from .views import (
     institution_subject_detail,
     institution_departments,
     institution_department_detail,
+    institution_result_period_settings,
     institution_academic_sessions,
     institution_academic_session_detail,
     institution_class_subjects,
@@ -183,6 +184,11 @@ urlpatterns = [
         "results/exams/<int:exam_id>/subjects/",
         institution_exam_subjects,
         name="institution-exam-subjects",
+    ),
+    path(
+        "results/period-settings/",
+        institution_result_period_settings,
+        name="institution-result-period-settings",
     ),
     path(
         "results/grade-scales/",
