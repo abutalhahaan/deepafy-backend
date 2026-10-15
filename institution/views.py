@@ -5488,6 +5488,37 @@ def institution_exams(request):
         )
 
     if request.method == "GET":
+        session_id = request.query_params.get("academic_session_id")
+        level_id = request.query_params.get("academic_level_id")
+        academic_period = str(
+            request.query_params.get("academic_period") or ""
+        ).strip()
+
+        # Auto-create missing exams from saved exam types.
+        if session_id and level_id:
+            selected_types = CentralExamType.objects.filter(
+                is_active=True,
+                institution_selections__institution=institution,
+            ).distinct()
+
+            for exam_type in selected_types:
+                exam, created = InstitutionExam.objects.get_or_create(
+                    institution=institution,
+                    academic_session_id=session_id,
+                    academic_level_id=level_id,
+                    name=exam_type.name,
+                    defaults={
+                        "academic_period": academic_period,
+                        "category": "INTERNAL",
+                        "exam_type": exam_type.name,
+                        "central_exam_type": exam_type,
+                    },
+                )
+                if not created and exam.central_exam_type_id is None:
+                    exam.central_exam_type = exam_type
+                    exam.exam_type = exam_type.name
+                    exam.save(update_fields=["central_exam_type", "exam_type"])
+
         exams = InstitutionExam.objects.filter(
             institution=institution,
         ).select_related(
@@ -5497,13 +5528,26 @@ def institution_exams(request):
             "central_exam_type",
         )
 
+        selected_exam_type_ids = InstitutionExamTypeSelection.objects.filter(
+            institution=institution,
+        ).values_list("exam_type_id", flat=True)
+
+        exams = exams.filter(
+            central_exam_type_id__in=selected_exam_type_ids,
+        )
+
         session_id = request.query_params.get("academic_session_id")
         level_id = request.query_params.get("academic_level_id")
+        academic_period = str(
+            request.query_params.get("academic_period") or ""
+        ).strip()
 
         if session_id:
             exams = exams.filter(academic_session_id=session_id)
         if level_id:
             exams = exams.filter(academic_level_id=level_id)
+        if academic_period:
+            exams = exams.filter(academic_period=academic_period)
 
         return Response({
             "count": exams.count(),
@@ -5511,6 +5555,7 @@ def institution_exams(request):
                 {
                     "id": exam.id,
                     "name": exam.name,
+                    "academic_period": exam.academic_period,
                     "category": exam.category,
                     "exam_type": (
                         exam.central_exam_type.name
@@ -5543,6 +5588,7 @@ def institution_exams(request):
     exam_type_id = data.get("exam_type_id")
     exam_type = str(data.get("exam_type") or "").strip()
     category = str(data.get("category") or "INTERNAL").strip()
+    academic_period = str(data.get("academic_period") or "").strip()
 
     central_exam_type = None
     if exam_type_id not in (None, ""):
@@ -5557,6 +5603,19 @@ def institution_exams(request):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         exam_type = central_exam_type.name
+
+    if academic_period:
+        period_settings = InstitutionResultPeriodSettings.objects.filter(
+            institution=institution
+        ).first()
+        enabled_periods = set(
+            (period_settings.years or []) + (period_settings.semesters or [])
+        ) if period_settings else set()
+        if academic_period not in enabled_periods:
+            return Response(
+                {"detail": "academic_period must be enabled in Result Period Settings."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
     if not name or not exam_type:
         return Response(
@@ -5660,6 +5719,7 @@ def institution_exams(request):
             academic_session=session,
             academic_level=level,
             grade_scale=grade_scale,
+            academic_period=academic_period,
             name=name,
             category=category,
             exam_type=exam_type,
@@ -5678,6 +5738,7 @@ def institution_exams(request):
         {
             "id": exam.id,
             "name": exam.name,
+            "academic_period": exam.academic_period,
             "category": exam.category,
             "exam_type": (
                 exam.central_exam_type.name
