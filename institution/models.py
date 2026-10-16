@@ -1566,6 +1566,7 @@ class InstitutionClassSubject(models.Model):
         on_delete=models.PROTECT,
         related_name="institution_class_assignments",
     )
+    academic_period = models.CharField(max_length=50, blank=True, default="")
     full_marks = models.PositiveIntegerField(default=100)
     pass_mark = models.PositiveIntegerField(default=33)
     is_active = models.BooleanField(default=True)
@@ -1575,8 +1576,13 @@ class InstitutionClassSubject(models.Model):
         ordering = ["subject__name"]
         constraints = [
             models.UniqueConstraint(
-                fields=["institution", "academic_level", "subject"],
-                name="unique_inst_level_subject",
+                fields=[
+                    "institution",
+                    "academic_level",
+                    "academic_period",
+                    "subject",
+                ],
+                name="unique_inst_level_period_subject",
             ),
         ]
 
@@ -1678,6 +1684,7 @@ class InstitutionExam(models.Model):
         null=True,
         blank=True,
     )
+    academic_period = models.CharField(max_length=50, blank=True, default="")
     name = models.CharField(max_length=150)
     category = models.CharField(
         max_length=30,
@@ -1707,9 +1714,10 @@ class InstitutionExam(models.Model):
                     "institution",
                     "academic_session",
                     "academic_level",
+                    "academic_period",
                     "name",
                 ],
-                name="unique_inst_exam_level_name",
+                name="unique_inst_exam_period_name",
             ),
         ]
         indexes = [

@@ -780,7 +780,7 @@ def institution_subjects(request):
                 name__icontains=query,
             )
 
-        subjects = subjects.order_by("name")[:50]
+        subjects = subjects.order_by("name")
 
         return Response({
             "count": subjects.count(),
@@ -5020,6 +5020,82 @@ def institution_staff_attendance_monthly(request):
 
 
 
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_class_student_roster(request):
+    """List existing running students by academic session and level."""
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    session_id = request.query_params.get("academic_session_id")
+    level_id = request.query_params.get("academic_level_id")
+
+    if not session_id or not level_id:
+        return Response(
+            {"detail": "academic_session_id and academic_level_id are required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        session = InstitutionAcademicSession.objects.get(
+            id=session_id,
+            institution=institution,
+            is_active=True,
+        )
+        level = InstitutionAcademicLevel.objects.get(
+            id=level_id,
+            institution=institution,
+        )
+    except (
+        InstitutionAcademicSession.DoesNotExist,
+        InstitutionAcademicLevel.DoesNotExist,
+        ValueError,
+        TypeError,
+    ):
+        return Response(
+            {"detail": "Academic session or level not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    enrollments = StudentEnrollment.objects.filter(
+        institution=institution,
+        academic_session=session,
+        status=StudentEnrollment.STATUS_RUNNING,
+    ).select_related("student")
+
+    dynamic_ids = StudentEnrollmentAcademicValue.objects.filter(
+        academic_level=level,
+        value__iexact=level.name,
+        enrollment__in=enrollments,
+    ).values_list("enrollment_id", flat=True)
+
+    enrollments = enrollments.filter(
+        Q(id__in=dynamic_ids) | Q(class_name__iexact=level.name)
+    ).order_by("roll", "student__name", "id")
+
+    return Response({
+        "count": enrollments.count(),
+        "results": [
+            {
+                "enrollment_id": e.id,
+                "student_id": e.student_id,
+                "student_name": e.student.name,
+                "global_student_id": e.student.global_student_id,
+            }
+            for e in enrollments
+        ],
+    })
+
+
 @api_view(["GET", "POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -5055,9 +5131,11 @@ def institution_class_subjects(request):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        academic_period = request.query_params.get("academic_period", "")
         assignments = InstitutionClassSubject.objects.filter(
             institution=institution,
             academic_level=level,
+            academic_period=academic_period,
             is_active=True,
             subject__is_active=True,
         ).select_related("academic_level", "subject")
@@ -5069,6 +5147,7 @@ def institution_class_subjects(request):
                     "id": item.id,
                     "academic_level_id": item.academic_level_id,
                     "academic_level": item.academic_level.name,
+                    "academic_period": item.academic_period,
                     "subject_id": item.subject_id,
                     "subject": item.subject.name,
                     "code": item.subject.code,
@@ -5080,6 +5159,7 @@ def institution_class_subjects(request):
         })
 
     level_id = request.data.get("academic_level_id")
+    academic_period = str(request.data.get("academic_period") or "").strip()
     items = request.data.get("subjects")
 
     # Batch mode: {"academic_level_id": 1, "subjects": [
@@ -5153,6 +5233,7 @@ def institution_class_subjects(request):
                 assignment, created = InstitutionClassSubject.objects.get_or_create(
                     institution=institution,
                     academic_level=level,
+                    academic_period=academic_period,
                     subject=subject,
                     defaults={
                         "is_active": True,
@@ -5178,6 +5259,7 @@ def institution_class_subjects(request):
                     "id": assignment.id,
                     "academic_level_id": level.id,
                     "academic_level": level.name,
+                    "academic_period": assignment.academic_period,
                     "subject_id": subject.id,
                     "subject": subject.name,
                     "code": subject.code,
@@ -5236,6 +5318,7 @@ def institution_class_subjects(request):
     assignment, created = InstitutionClassSubject.objects.get_or_create(
         institution=institution,
         academic_level=level,
+        academic_period=academic_period,
         subject=subject,
         defaults={
             "is_active": True,
@@ -5262,6 +5345,7 @@ def institution_class_subjects(request):
             "id": assignment.id,
             "academic_level_id": level.id,
             "academic_level": level.name,
+            "academic_period": assignment.academic_period,
             "subject_id": subject.id,
             "subject": subject.name,
             "code": subject.code,
@@ -5506,9 +5590,9 @@ def institution_exams(request):
                     institution=institution,
                     academic_session_id=session_id,
                     academic_level_id=level_id,
+                    academic_period=academic_period,
                     name=exam_type.name,
                     defaults={
-                        "academic_period": academic_period,
                         "category": "INTERNAL",
                         "exam_type": exam_type.name,
                         "central_exam_type": exam_type,
@@ -5759,6 +5843,71 @@ def institution_exams(request):
         },
         status=status.HTTP_201_CREATED,
     )
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_exam_students(request, exam_id):
+    """List existing students for the exam's session and academic level."""
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        exam = InstitutionExam.objects.select_related(
+            "academic_session", "academic_level"
+        ).get(
+            id=exam_id,
+            institution=institution,
+            academic_session__institution=institution,
+            academic_level__institution=institution,
+        )
+    except InstitutionExam.DoesNotExist:
+        return Response(
+            {"detail": "Exam not found for this institution."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    enrollments = StudentEnrollment.objects.filter(
+        institution=institution,
+        academic_session=exam.academic_session,
+        status=StudentEnrollment.STATUS_RUNNING,
+    ).select_related("student")
+
+    dynamic_ids = StudentEnrollmentAcademicValue.objects.filter(
+        academic_level=exam.academic_level,
+        value__iexact=exam.academic_level.name,
+        enrollment__in=enrollments,
+    ).values_list("enrollment_id", flat=True)
+
+    enrollments = enrollments.filter(
+        Q(id__in=dynamic_ids)
+        | Q(class_name__iexact=exam.academic_level.name)
+    ).order_by("roll", "student__name", "id")
+
+    return Response({
+        "count": enrollments.count(),
+        "results": [
+            {
+                "enrollment_id": e.id,
+                "student_id": e.student_id,
+                "global_student_id": e.student.global_student_id,
+                "student_name": e.student.name,
+                "roll": e.roll,
+                "class_name": e.class_name,
+                "section": e.section,
+            }
+            for e in enrollments
+        ],
+    })
 
 
 @api_view(["GET", "POST"])
