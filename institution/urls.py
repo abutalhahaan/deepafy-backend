@@ -35,10 +35,12 @@ from .views import (
     institution_result_period_settings,
     institution_academic_sessions,
     institution_academic_session_detail,
+    institution_class_student_roster,
     institution_class_subjects,
     institution_class_subject_detail,
     institution_exam_types,
     institution_exams,
+    institution_exam_students,
     institution_exam_subjects,
     institution_exam_marks,
     institution_exam_results,
@@ -181,6 +183,11 @@ urlpatterns = [
         name="institution-exam-results",
     ),
     path(
+        "results/exams/<int:exam_id>/students/",
+        institution_exam_students,
+        name="institution-exam-students",
+    ),
+    path(
         "results/exams/<int:exam_id>/subjects/",
         institution_exam_subjects,
         name="institution-exam-subjects",
@@ -214,6 +221,11 @@ urlpatterns = [
         "results/exams/",
         institution_exams,
         name="institution-exams",
+    ),
+    path(
+        "results/class-students/",
+        institution_class_student_roster,
+        name="institution-class-students",
     ),
     path(
         "results/class-subjects/",
