@@ -31,6 +31,7 @@ from .views import (
     institution_student_subject_detail,
     institution_subject_detail,
     institution_departments,
+    institution_selected_departments,
     institution_department_detail,
     institution_result_period_settings,
     institution_academic_sessions,
@@ -261,6 +262,11 @@ urlpatterns = [
         "departments/",
         institution_departments,
         name="institution-departments",
+    ),
+    path(
+        "selected-departments/",
+        institution_selected_departments,
+        name="institution-selected-departments",
     ),
     path(
         "departments/<int:department_id>/",
