@@ -431,6 +431,63 @@ def institution_academic_session_detail(request, session_id):
 
 
 
+@api_view(["GET", "PUT"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_selected_departments(request):
+    """List or save the authenticated institution's selected global departments."""
+    try:
+        profile = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "PUT":
+        department_ids = request.data.get("department_ids")
+        if not isinstance(department_ids, list):
+            return Response(
+                {"detail": "department_ids must be a list."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            department_ids = list({int(value) for value in department_ids})
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Every department ID must be an integer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        departments = Department.objects.filter(
+            id__in=department_ids,
+            is_active=True,
+        )
+        if departments.count() != len(department_ids):
+            return Response(
+                {"detail": "One or more departments do not exist or are inactive."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        profile.departments.set(departments)
+
+    selected = profile.departments.filter(is_active=True).order_by("name")
+    return Response({
+        "results": [
+            {
+                "id": department.id,
+                "name": department.name,
+                "code": department.code,
+            }
+            for department in selected
+        ],
+    })
+
+
 @api_view(["GET", "POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([AllowAny])
@@ -5038,6 +5095,7 @@ def institution_class_student_roster(request):
 
     session_id = request.query_params.get("academic_session_id")
     level_id = request.query_params.get("academic_level_id")
+    department_id = request.query_params.get("department_id")
 
     if not session_id or not level_id:
         return Response(
@@ -5071,6 +5129,17 @@ def institution_class_student_roster(request):
         academic_session=session,
         status=StudentEnrollment.STATUS_RUNNING,
     ).select_related("student")
+
+    if department_id:
+        try:
+            department_id = int(department_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "department_id must be a valid integer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        enrollments = enrollments.filter(department_id=department_id)
 
     dynamic_ids = StudentEnrollmentAcademicValue.objects.filter(
         academic_level=level,

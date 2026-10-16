@@ -336,6 +336,12 @@ class InstitutionProfile(models.Model):
         blank=True,
     )
 
+    departments = models.ManyToManyField(
+        "Department",
+        related_name="institution_profiles",
+        blank=True,
+    )
+
     established_year = models.PositiveSmallIntegerField(
         null=True,
         blank=True,
