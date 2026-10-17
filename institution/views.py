@@ -7019,6 +7019,17 @@ def institution_exam_results(request, exam_id):
         status=StudentEnrollment.STATUS_RUNNING,
     ).select_related("student")
 
+    department_id = request.query_params.get("department_id")
+    if department_id:
+        try:
+            department_id = int(department_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Invalid department_id."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        enrollments = enrollments.filter(department_id=department_id)
+
     dynamic_enrollment_ids = StudentEnrollmentAcademicValue.objects.filter(
         academic_level=exam.academic_level,
         value__iexact=exam.academic_level.name,
