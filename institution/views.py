@@ -2883,6 +2883,7 @@ def institution_student_enrollment(request):
                             "is_current": enrollment.academic_session.is_current,
                         },
                         "class_name": enrollment.class_name,
+                        "academic_period": enrollment.academic_period,
                         "academic_values": [
                             {
                                 "id": academic_value.id,
@@ -3221,6 +3222,7 @@ def institution_student_enrollment(request):
         academic_session=academic_session,
         defaults={
             "class_name": class_name,
+            "academic_period": str(request.data.get("academic_period", "")).strip(),
             "department": department,
             "section": section,
             "roll": str(
@@ -3271,6 +3273,7 @@ def institution_student_enrollment(request):
                     "name": academic_session.name,
                 },
                 "class_name": enrollment.class_name,
+                "academic_period": enrollment.academic_period,
                 "academic_values": [
                     {
                         "id": academic_value.id,
@@ -5096,6 +5099,7 @@ def institution_class_student_roster(request):
     session_id = request.query_params.get("academic_session_id")
     level_id = request.query_params.get("academic_level_id")
     department_id = request.query_params.get("department_id")
+    academic_period = request.query_params.get("academic_period")
 
     if not session_id or not level_id:
         return Response(
@@ -5129,6 +5133,9 @@ def institution_class_student_roster(request):
         academic_session=session,
         status=StudentEnrollment.STATUS_RUNNING,
     ).select_related("student")
+
+    if academic_period:
+        enrollments = enrollments.filter(academic_period=academic_period)
 
     if department_id:
         try:

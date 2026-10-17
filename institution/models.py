@@ -1344,6 +1344,12 @@ class StudentEnrollment(models.Model):
         max_length=255,
     )
 
+    academic_period = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+    )
+
     department = models.ForeignKey(
         "Department",
         on_delete=models.PROTECT,
