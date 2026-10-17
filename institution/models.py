@@ -1567,6 +1567,13 @@ class InstitutionClassSubject(models.Model):
         on_delete=models.CASCADE,
         related_name="class_subjects",
     )
+    department = models.ForeignKey(
+        "Department",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="institution_class_subjects",
+    )
     subject = models.ForeignKey(
         Subject,
         on_delete=models.PROTECT,
@@ -1585,6 +1592,7 @@ class InstitutionClassSubject(models.Model):
                 fields=[
                     "institution",
                     "academic_level",
+                    "department",
                     "academic_period",
                     "subject",
                 ],

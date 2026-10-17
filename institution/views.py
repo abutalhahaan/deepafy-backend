@@ -5201,13 +5201,30 @@ def institution_class_subjects(request):
             )
 
         academic_period = request.query_params.get("academic_period", "")
+        department_id = request.query_params.get("department_id")
         assignments = InstitutionClassSubject.objects.filter(
             institution=institution,
             academic_level=level,
             academic_period=academic_period,
             is_active=True,
             subject__is_active=True,
-        ).select_related("academic_level", "subject")
+        )
+        if department_id:
+            try:
+                department_id = int(department_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "department_id must be a valid integer."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not institution.departments.filter(id=department_id, is_active=True).exists():
+                return Response(
+                    {"detail": "Select a department assigned to this institution."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            assignments = assignments.filter(department_id=department_id)
+
+        assignments = assignments.select_related("academic_level", "subject", "department")
 
         return Response({
             "count": assignments.count(),
@@ -5217,6 +5234,8 @@ def institution_class_subjects(request):
                     "academic_level_id": item.academic_level_id,
                     "academic_level": item.academic_level.name,
                     "academic_period": item.academic_period,
+                    "department_id": item.department_id,
+                    "department": item.department.name if item.department_id else None,
                     "subject_id": item.subject_id,
                     "subject": item.subject.name,
                     "code": item.subject.code,
@@ -5229,6 +5248,25 @@ def institution_class_subjects(request):
 
     level_id = request.data.get("academic_level_id")
     academic_period = str(request.data.get("academic_period") or "").strip()
+    department_id = request.data.get("department_id")
+    department = None
+    if department_id not in (None, ""):
+        try:
+            department_id = int(department_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "department_id must be a valid integer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        department = institution.departments.filter(
+            id=department_id,
+            is_active=True,
+        ).first()
+        if department is None:
+            return Response(
+                {"detail": "Select a department assigned to this institution."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
     items = request.data.get("subjects")
 
     # Batch mode: {"academic_level_id": 1, "subjects": [
@@ -5302,6 +5340,7 @@ def institution_class_subjects(request):
                 assignment, created = InstitutionClassSubject.objects.get_or_create(
                     institution=institution,
                     academic_level=level,
+                    department=department,
                     academic_period=academic_period,
                     subject=subject,
                     defaults={
@@ -5329,6 +5368,8 @@ def institution_class_subjects(request):
                     "academic_level_id": level.id,
                     "academic_level": level.name,
                     "academic_period": assignment.academic_period,
+                    "department_id": assignment.department_id,
+                    "department": assignment.department.name if assignment.department_id else None,
                     "subject_id": subject.id,
                     "subject": subject.name,
                     "code": subject.code,
@@ -5387,6 +5428,7 @@ def institution_class_subjects(request):
     assignment, created = InstitutionClassSubject.objects.get_or_create(
         institution=institution,
         academic_level=level,
+        department=department,
         academic_period=academic_period,
         subject=subject,
         defaults={
@@ -5415,6 +5457,8 @@ def institution_class_subjects(request):
             "academic_level_id": level.id,
             "academic_level": level.name,
             "academic_period": assignment.academic_period,
+            "department_id": assignment.department_id,
+            "department": assignment.department.name if assignment.department_id else None,
             "subject_id": subject.id,
             "subject": subject.name,
             "code": subject.code,
