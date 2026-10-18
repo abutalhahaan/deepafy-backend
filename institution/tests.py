@@ -917,6 +917,7 @@ class InstitutionResultsAPITests(APITestCase):
             pass_mark=33,
             grade_scale=scale,
             is_published=True,
+            has_been_published=True,
         )
 
         response = self.client.post(
@@ -1125,6 +1126,7 @@ class InstitutionResultsAPITests(APITestCase):
             pass_mark=33,
             grade_scale=scale,
             is_published=True,
+            has_been_published=True,
         )
 
         url = reverse(
@@ -1455,11 +1457,73 @@ class InstitutionResultsAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, 400, response.data)
-        self.assertIn("Unpublish the exam first.", response.data["detail"])
+        self.assertIn("already been published", response.data["detail"])
         self.assertEqual(
             InstitutionExamSubject.objects.filter(exam=exam).count(),
             1,
         )
+
+    def test_unpublished_exam_still_rejects_subject_changes_after_first_publish(self):
+        from institution.models import InstitutionExam, InstitutionExamSubject
+
+        exam_subject, _ = self._create_exam_subject_and_enrollment()
+        exam = exam_subject.exam
+
+        exam.is_published = True
+        exam.has_been_published = True
+        exam.save(update_fields=["is_published", "has_been_published"])
+
+        response = self.client.post(
+            reverse("institution-exam-publish", args=[exam.id]),
+            {"is_published": False},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+
+        response = self.client.post(
+            reverse("institution-exam-subjects", args=[exam.id]),
+            {
+                "subject_id": self.subject.id,
+                "full_marks": "100",
+                "pass_mark": "33",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("already been published", response.data["detail"])
+        self.assertEqual(InstitutionExamSubject.objects.filter(exam=exam).count(), 1)
+
+    def test_unpublished_exam_allows_marks_changes_after_first_publish(self):
+        from institution.models import InstitutionExamMark
+
+        exam_subject, enrollment = self._create_exam_subject_and_enrollment()
+        InstitutionExamMark.objects.create(
+            exam_subject=exam_subject,
+            enrollment=enrollment,
+            marks_obtained=75,
+        )
+        exam = exam_subject.exam
+        exam.is_published = True
+        exam.has_been_published = True
+        exam.save(update_fields=["is_published", "has_been_published"])
+
+        response = self.client.post(
+            reverse("institution-exam-publish", args=[exam.id]),
+            {"is_published": False},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+
+        response = self.client.post(
+            reverse("institution-exam-marks", args=[exam_subject.id]),
+            {
+                "enrollment_id": enrollment.id,
+                "marks_obtained": "82",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["marks_obtained"], "82")
 
     def test_unpublished_exam_allows_marks_changes(self):
         from institution.models import InstitutionExamMark
