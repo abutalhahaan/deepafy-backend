@@ -5698,6 +5698,18 @@ def institution_exams(request):
             request.query_params.get("academic_period") or ""
         ).strip()
 
+        default_grade_scale = InstitutionGradeScale.objects.filter(
+            institution=institution,
+            is_active=True,
+            is_default=True,
+        ).first()
+
+        if default_grade_scale is None:
+            default_grade_scale = InstitutionGradeScale.objects.filter(
+                institution=institution,
+                is_active=True,
+            ).order_by("id").first()
+
         # Auto-create missing exams from saved exam types.
         if session_id and level_id:
             selected_types = CentralExamType.objects.filter(
@@ -5716,8 +5728,13 @@ def institution_exams(request):
                         "category": "INTERNAL",
                         "exam_type": exam_type.name,
                         "central_exam_type": exam_type,
+                        "grade_scale": default_grade_scale,
                     },
                 )
+                if exam.grade_scale_id is None and default_grade_scale is not None:
+                    exam.grade_scale = default_grade_scale
+                    exam.save(update_fields=["grade_scale", "updated_at"])
+
                 if not created and exam.central_exam_type_id is None:
                     exam.central_exam_type = exam_type
                     exam.exam_type = exam_type.name
@@ -6079,12 +6096,11 @@ def institution_exam_subjects(request, exam_id):
             ],
         })
 
-    if request.method == "POST" and exam.is_published:
+    if request.method == "POST" and (exam.is_published or exam.has_been_published):
         return Response(
             {
                 "detail": (
-                    "Cannot modify exam subjects after results are published. "
-                    "Unpublish the exam first."
+                    "Cannot modify exam subjects because this exam has already been published."
                 )
             },
             status=status.HTTP_400_BAD_REQUEST,
@@ -6460,7 +6476,7 @@ def institution_grade_scales(request):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if scale.exams.filter(is_published=True).exists():
+        if scale.exams.filter(has_been_published=True).exists():
             return Response(
                 {"detail": "Cannot modify a grading scale used by a published exam. Unpublish the exam first."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -6609,7 +6625,7 @@ def institution_grade_range_detail(request, scale_id, range_id):
             status=status.HTTP_404_NOT_FOUND,
         )
 
-    if scale.exams.filter(is_published=True).exists():
+    if scale.exams.filter(has_been_published=True).exists():
         return Response(
             {"detail": "Cannot modify grading rules while this scale is used by a published exam. Unpublish the exam first."},
             status=status.HTTP_400_BAD_REQUEST,
@@ -6747,7 +6763,7 @@ def institution_grade_ranges(request, scale_id):
             ],
         })
 
-    if scale.exams.filter(is_published=True).exists():
+    if scale.exams.filter(has_been_published=True).exists():
         return Response(
             {"detail": "Cannot modify grading rules while this scale is used by a published exam. Unpublish the exam first."},
             status=status.HTTP_400_BAD_REQUEST,
@@ -6995,7 +7011,11 @@ def institution_exam_publish(request, exam_id):
             )
 
     exam.is_published = publish
-    exam.save(update_fields=["is_published", "updated_at"])
+    update_fields = ["is_published", "updated_at"]
+    if publish and not exam.has_been_published:
+        exam.has_been_published = True
+        update_fields.append("has_been_published")
+    exam.save(update_fields=update_fields)
 
     return Response({
         "exam_id": exam.id,
