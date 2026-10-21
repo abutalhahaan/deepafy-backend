@@ -1038,6 +1038,10 @@ class Student(models.Model):
         blank=True,
     )
 
+    guardian_email = models.EmailField(
+        blank=True,
+    )
+
     status = models.CharField(
         max_length=20,
         choices=STATUS_CHOICES,
@@ -1724,6 +1728,7 @@ class InstitutionExam(models.Model):
     pass_mark = models.DecimalField(max_digits=8, decimal_places=2, default=33)
     is_published = models.BooleanField(default=False)
     has_been_published = models.BooleanField(default=False, editable=False)
+    grading_snapshot = models.JSONField(null=True, blank=True, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1842,6 +1847,13 @@ class InstitutionGradeScale(models.Model):
     )
     is_default = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
+    active_version = models.ForeignKey(
+        "InstitutionGradeScaleVersion",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="active_for_scales",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1856,6 +1868,35 @@ class InstitutionGradeScale(models.Model):
 
     def __str__(self):
         return f"{self.institution.institution_name} - {self.name}"
+
+
+
+class InstitutionGradeScaleVersion(models.Model):
+    """Immutable version of an institution's grading configuration."""
+
+    grade_scale = models.ForeignKey(
+        InstitutionGradeScale,
+        on_delete=models.CASCADE,
+        related_name="versions",
+    )
+    version_number = models.PositiveIntegerField()
+    name = models.CharField(max_length=100)
+    maximum_gpa = models.DecimalField(max_digits=5, decimal_places=2)
+    ranges_snapshot = models.JSONField(default=list)
+    is_active = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-version_number"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["grade_scale", "version_number"],
+                name="unique_grade_scale_version_number",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.grade_scale.name} V{self.version_number}"
 
 
 class InstitutionGradeRange(models.Model):

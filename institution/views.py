@@ -11,6 +11,7 @@ from django.db.models import Q
 import re
 import json
 from django.utils import timezone
+from django.core.mail import send_mail
 
 from core.services.feature_access import get_feature_access
 from institution.services import generate_global_student_id
@@ -46,6 +47,7 @@ from .models import (
     InstitutionExamMark,
     InstitutionGradeScale,
     InstitutionGradeRange,
+    InstitutionGradeScaleVersion,
 )
 from identity.models import UserIdentity, AcademicBackground
 
@@ -2414,6 +2416,7 @@ def institution_student_create(request):
                             "guardian_name": identity.student.guardian_name,
                             "guardian_relationship": identity.student.guardian_relationship,
                             "guardian_mobile": identity.student.guardian_mobile,
+                            "guardian_email": identity.student.guardian_email,
                             "enrollment": (
                                 {
                                     "id": enrollment.id,
@@ -2571,6 +2574,7 @@ def institution_student_create(request):
                     "guardian_name": student.guardian_name,
                     "guardian_relationship": student.guardian_relationship,
                     "guardian_mobile": student.guardian_mobile,
+                    "guardian_email": student.guardian_email,
                 },
                 "institution_identities": [
                     {
@@ -2686,6 +2690,9 @@ def institution_student_create(request):
                 ).strip(),
                 guardian_mobile=str(
                     request.data.get("guardian_mobile", "")
+                ).strip(),
+                guardian_email=str(
+                    request.data.get("guardian_email", "")
                 ).strip(),
             )
 
@@ -5799,6 +5806,7 @@ def institution_exams(request):
                     "full_marks": str(exam.full_marks),
                     "pass_mark": str(exam.pass_mark),
                     "is_published": exam.is_published,
+                    "has_been_published": exam.has_been_published,
                 }
                 for exam in exams
             ],
@@ -6476,12 +6484,6 @@ def institution_grade_scales(request):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if scale.exams.filter(has_been_published=True).exists():
-            return Response(
-                {"detail": "Cannot modify a grading scale used by a published exam. Unpublish the exam first."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         name = str(request.data.get("name", scale.name) or "").strip()
         if not name:
             return Response(
@@ -6625,12 +6627,6 @@ def institution_grade_range_detail(request, scale_id, range_id):
             status=status.HTTP_404_NOT_FOUND,
         )
 
-    if scale.exams.filter(has_been_published=True).exists():
-        return Response(
-            {"detail": "Cannot modify grading rules while this scale is used by a published exam. Unpublish the exam first."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
     if request.method == "DELETE":
         item.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -6762,12 +6758,6 @@ def institution_grade_ranges(request, scale_id):
                 for item in ranges
             ],
         })
-
-    if scale.exams.filter(has_been_published=True).exists():
-        return Response(
-            {"detail": "Cannot modify grading rules while this scale is used by a published exam. Unpublish the exam first."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
 
     from decimal import Decimal, InvalidOperation
 
@@ -7012,9 +7002,38 @@ def institution_exam_publish(request, exam_id):
 
     exam.is_published = publish
     update_fields = ["is_published", "updated_at"]
+
     if publish and not exam.has_been_published:
         exam.has_been_published = True
         update_fields.append("has_been_published")
+
+    # Freeze the grading configuration on the first successful publish.
+    # Keep the original snapshot when the exam is unpublished and republished.
+    if publish and exam.grading_snapshot is None:
+        scale = exam.grade_scale
+        snapshot_ranges = scale.ranges.all().order_by("min_percentage", "id")
+        exam.grading_snapshot = {
+            "grade_scale_id": scale.id,
+            "name": scale.name,
+            "maximum_gpa": str(scale.maximum_gpa),
+            "is_active": scale.is_active,
+            "ranges": [
+                {
+                    "id": grade_range.id,
+                    "grade_name": grade_range.grade_name,
+                    "min_percentage": str(grade_range.min_percentage),
+                    "max_percentage": str(grade_range.max_percentage),
+                    "grade_point": (
+                        str(grade_range.grade_point)
+                        if grade_range.grade_point is not None
+                        else None
+                    ),
+                }
+                for grade_range in snapshot_ranges
+            ],
+        }
+        update_fields.append("grading_snapshot")
+
     exam.save(update_fields=update_fields)
 
     return Response({
@@ -7088,7 +7107,7 @@ def institution_exam_results(request, exam_id):
         institution=institution,
         academic_session=exam.academic_session,
         status=StudentEnrollment.STATUS_RUNNING,
-    ).select_related("student")
+    ).select_related("student").prefetch_related("student__profile_photos")
 
     department_id = request.query_params.get("department_id")
     if department_id:
@@ -7100,6 +7119,14 @@ def institution_exam_results(request, exam_id):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         enrollments = enrollments.filter(department_id=department_id)
+
+    search_query = str(request.query_params.get("search", "")).strip()
+    if search_query:
+        enrollments = enrollments.filter(
+            Q(student__name__icontains=search_query)
+            | Q(roll__icontains=search_query)
+            | Q(student__global_student_id__icontains=search_query)
+        )
 
     dynamic_enrollment_ids = StudentEnrollmentAcademicValue.objects.filter(
         academic_level=exam.academic_level,
@@ -7125,24 +7152,48 @@ def institution_exam_results(request, exam_id):
         )
     }
 
+    grading_snapshot = exam.grading_snapshot
     grade_ranges = []
-    if exam.grade_scale and exam.grade_scale.is_active:
-        grade_ranges = list(
-            exam.grade_scale.ranges.all().order_by("min_percentage")
-        )
+
+    if grading_snapshot and isinstance(grading_snapshot, dict):
+        grade_ranges = [
+            {
+                "min_percentage": Decimal(item["min_percentage"]),
+                "max_percentage": Decimal(item["max_percentage"]),
+                "grade_name": item["grade_name"],
+                "grade_point": (
+                    Decimal(item["grade_point"])
+                    if item.get("grade_point") is not None
+                    else None
+                ),
+            }
+            for item in grading_snapshot.get("ranges", [])
+        ]
+    elif exam.grade_scale and exam.grade_scale.is_active:
+        grade_ranges = [
+            {
+                "min_percentage": grade_range.min_percentage,
+                "max_percentage": grade_range.max_percentage,
+                "grade_name": grade_range.grade_name,
+                "grade_point": grade_range.grade_point,
+            }
+            for grade_range in exam.grade_scale.ranges.all().order_by(
+                "min_percentage"
+            )
+        ]
 
     def grade_for_percentage(percentage):
         for grade_range in grade_ranges:
             if (
-                grade_range.min_percentage
+                grade_range["min_percentage"]
                 <= percentage
-                <= grade_range.max_percentage
+                <= grade_range["max_percentage"]
             ):
                 return {
-                    "grade": grade_range.grade_name,
+                    "grade": grade_range["grade_name"],
                     "grade_point": (
-                        str(grade_range.grade_point)
-                        if grade_range.grade_point is not None
+                        str(grade_range["grade_point"])
+                        if grade_range["grade_point"] is not None
                         else None
                     ),
                 }
@@ -7293,6 +7344,15 @@ def institution_exam_results(request, exam_id):
         results.append({
             "enrollment_id": enrollment.id,
             "student_name": enrollment.student.name,
+            "global_student_id": enrollment.student.global_student_id,
+            "profile_photo": next(
+                (
+                    photo.photo.url
+                    for photo in enrollment.student.profile_photos.all()
+                    if photo.is_current and photo.photo
+                ),
+                None,
+            ),
             "roll": enrollment.roll,
             "class_name": enrollment.class_name,
             "section": enrollment.section,
@@ -7308,6 +7368,35 @@ def institution_exam_results(request, exam_id):
             "status": overall_status,
             "subjects": subject_results,
         })
+
+    # Automatic merit roll: complete results first, then fewer failed
+    # subjects, higher total marks, and higher individual marks.
+    def merit_sort_key(result):
+        subjects = result["subjects"]
+        failed_subjects = sum(
+            1 for subject in subjects
+            if subject.get("status") in ("FAIL", "ABSENT")
+        )
+        subject_marks = sorted(
+            (
+                Decimal(str(subject["marks_obtained"]))
+                if subject.get("marks_obtained") is not None
+                else Decimal("-1")
+                for subject in subjects
+            ),
+            reverse=True,
+        )
+        return (
+            result["status"] == "INCOMPLETE",
+            failed_subjects,
+            -Decimal(result["total_obtained"]),
+            tuple(-mark for mark in subject_marks),
+            result["enrollment_id"],
+        )
+
+    results.sort(key=merit_sort_key)
+    for merit_roll, result in enumerate(results, start=1):
+        result["merit_roll"] = merit_roll
 
     pass_rate = (
         str(
@@ -7326,8 +7415,16 @@ def institution_exam_results(request, exam_id):
         "category": exam.category,
         "academic_session_id": exam.academic_session_id,
         "academic_level_id": exam.academic_level_id,
-        "grade_scale_id": exam.grade_scale_id,
-        "grade_scale": exam.grade_scale.name if exam.grade_scale else None,
+        "grade_scale_id": (
+            grading_snapshot.get("grade_scale_id")
+            if grading_snapshot
+            else exam.grade_scale_id
+        ),
+        "grade_scale": (
+            grading_snapshot.get("name")
+            if grading_snapshot
+            else (exam.grade_scale.name if exam.grade_scale else None)
+        ),
         "status": "CALCULATED",
         "count": len(results),
         "results": results,
@@ -7339,4 +7436,475 @@ def institution_exam_results(request, exam_id):
             "failed": failed_count,
             "pass_rate": pass_rate,
         },
+    })
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_exam_results_send_email(request, exam_id):
+    """Email published exam results to students and their guardians."""
+    from django.conf import settings
+
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        exam = InstitutionExam.objects.get(
+            id=exam_id,
+            institution=institution,
+            academic_session__institution=institution,
+            academic_level__institution=institution,
+        )
+    except InstitutionExam.DoesNotExist:
+        return Response(
+            {"detail": "Exam not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if not exam.is_published:
+        return Response(
+            {"detail": "Publish the exam results before sending emails."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not settings.EMAIL_HOST or not settings.EMAIL_HOST_USER or not settings.EMAIL_HOST_PASSWORD:
+        return Response(
+            {"detail": "SMTP is not configured. No emails were sent."},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    department_id = request.data.get("department_id")
+    params = {}
+
+    if department_id not in (None, ""):
+        try:
+            department_id = int(department_id)
+            if department_id <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Invalid department_id."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        params["department_id"] = department_id
+
+    # Reuse the existing result calculation, including its grading and merit logic.
+    from rest_framework.test import APIRequestFactory, force_authenticate
+
+    internal_request = APIRequestFactory().get(
+        "/internal-results/",
+        data=params,
+    )
+    force_authenticate(internal_request, user=request.user)
+    calculated = institution_exam_results(internal_request, exam_id)
+
+    if calculated.status_code != status.HTTP_200_OK:
+        return Response(
+            {"detail": "Could not calculate exam results."},
+            status=calculated.status_code,
+        )
+
+    data = calculated.data
+    if data.get("status") != "CALCULATED":
+        return Response(
+            {"detail": "Exam results are not ready to send."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    rows = data.get("results", [])
+    enrollment_ids = [
+        row["enrollment_id"]
+        for row in rows
+        if row.get("enrollment_id") is not None
+    ]
+    enrollments = StudentEnrollment.objects.filter(
+        institution=institution,
+        academic_session=exam.academic_session,
+        id__in=enrollment_ids,
+    ).select_related("student")
+    enrollment_map = {item.id: item for item in enrollments}
+
+    sent = 0
+    skipped = 0
+    failed = 0
+
+    for row in rows:
+        enrollment = enrollment_map.get(row.get("enrollment_id"))
+        if enrollment is None:
+            skipped += 1
+            continue
+
+        student = enrollment.student
+        recipients = list(dict.fromkeys(
+            address.strip().lower()
+            for address in (student.email, student.guardian_email)
+            if address and address.strip()
+        ))
+
+        if not recipients:
+            skipped += 1
+            continue
+
+        subject_lines = [
+            (
+                f"- {item.get('subject', 'Subject')}: "
+                f"{item.get('marks_obtained') if item.get('marks_obtained') is not None else 'Not entered'}"
+                f"/{item.get('full_marks', '-')}; "
+                f"Grade: {item.get('grade') or '-'}; "
+                f"Status: {item.get('status', '-')}"
+            )
+            for item in row.get("subjects", [])
+        ]
+
+        message = "\n".join([
+            f"Exam: {exam.name}",
+            f"Institution: {institution.institution_name}",
+            f"Student: {row.get('student_name', student.name)}",
+            f"Class: {row.get('class_name', enrollment.class_name)}",
+            f"Section: {row.get('section') or enrollment.section or '-'}",
+            f"Roll: {row.get('roll') or enrollment.roll or '-'}",
+            f"Merit Roll: {row.get('merit_roll') or '-'}",
+            f"Total: {row.get('total_obtained', '-')}/{row.get('total_full_marks', '-')}",
+            f"Percentage: {row.get('percentage') or '-'}%",
+            f"Grade: {row.get('grade') or '-'}",
+            f"GPA: {row.get('gpa') or '-'}",
+            f"Overall Status: {row.get('status', '-')}",
+            "",
+            "Subject-wise results:",
+            *subject_lines,
+        ])
+
+        for recipient in recipients:
+            try:
+                count = send_mail(
+                    subject=f"Exam Result: {exam.name}",
+                    message=message,
+                    from_email=settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER,
+                    recipient_list=[recipient],
+                    fail_silently=False,
+                )
+                if count:
+                    sent += 1
+                else:
+                    failed += 1
+            except Exception:
+                failed += 1
+
+    return Response({
+        "exam_id": exam.id,
+        "sent": sent,
+        "skipped": skipped,
+        "failed": failed,
+        "detail": "Email sending process completed.",
+    })
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_grade_scale_versions(request, scale_id):
+    """List immutable grading versions or save a new version when config changes."""
+    from decimal import Decimal, InvalidOperation
+
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+        scale = InstitutionGradeScale.objects.get(
+            id=scale_id,
+            institution=institution,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    except InstitutionGradeScale.DoesNotExist:
+        return Response(
+            {"detail": "Grading scale not found for this institution."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    def version_payload(version):
+        return {
+            "id": version.id,
+            "version_number": version.version_number,
+            "name": version.name,
+            "maximum_gpa": str(version.maximum_gpa),
+            "ranges": version.ranges_snapshot,
+            "is_active": version.is_active,
+            "created_at": version.created_at.isoformat(),
+        }
+
+    if request.method == "GET":
+        versions = scale.versions.all()
+        return Response({
+            "active_version_id": scale.active_version_id,
+            "count": versions.count(),
+            "results": [version_payload(v) for v in versions],
+        })
+
+    data = request.data
+    name = str(data.get("name", scale.name) or "").strip()
+    if not name:
+        return Response(
+            {"detail": "name is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        maximum_gpa = Decimal(str(data.get("maximum_gpa", scale.maximum_gpa)))
+        raw_ranges = data.get("ranges")
+        if not isinstance(raw_ranges, list) or not raw_ranges:
+            raise ValueError("ranges must be a non-empty list")
+
+        normalized_ranges = []
+        seen_names = set()
+
+        for item in raw_ranges:
+            if not isinstance(item, dict):
+                raise ValueError("Each range must be an object.")
+
+            grade_name = str(item.get("grade_name") or "").strip()
+            minimum = Decimal(str(item.get("min_percentage")))
+            maximum = Decimal(str(item.get("max_percentage")))
+            raw_point = item.get("grade_point")
+            point = Decimal(str(raw_point)) if raw_point not in (None, "") else None
+
+            if not grade_name:
+                raise ValueError("Every range requires a grade_name.")
+            if grade_name.casefold() in seen_names:
+                raise ValueError("Grade names must be unique.")
+            seen_names.add(grade_name.casefold())
+
+            values = [minimum, maximum]
+            if point is not None:
+                values.append(point)
+
+            if (
+                any(not value.is_finite() for value in values)
+                or minimum < 0
+                or maximum > 100
+                or minimum > maximum
+                or (point is not None and (point < 0 or point > maximum_gpa))
+            ):
+                raise ValueError("Invalid percentage range or grade point.")
+
+            normalized_ranges.append({
+                "grade_name": grade_name,
+                "min_percentage": f"{minimum:.2f}",
+                "max_percentage": f"{maximum:.2f}",
+                "grade_point": f"{point:.2f}" if point is not None else None,
+            })
+
+    except (InvalidOperation, TypeError, ValueError, KeyError) as exc:
+        return Response(
+            {"detail": str(exc) or "Invalid grading configuration."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if (
+        not maximum_gpa.is_finite()
+        or maximum_gpa <= 0
+        or maximum_gpa > Decimal("999.99")
+    ):
+        return Response(
+            {"detail": "maximum_gpa must be greater than 0 and at most 999.99."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    normalized_ranges.sort(
+        key=lambda item: (
+            -Decimal(item["min_percentage"]),
+            item["grade_name"].casefold(),
+        )
+    )
+
+    for previous, current in zip(normalized_ranges, normalized_ranges[1:]):
+        if Decimal(current["max_percentage"]) >= Decimal(previous["min_percentage"]):
+            return Response(
+                {"detail": "This percentage range overlaps another grade range."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    if Decimal(normalized_ranges[-1]["min_percentage"]) != Decimal("0.00"):
+        return Response(
+            {"detail": "Grade ranges must start at 0.00 percent."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if Decimal(normalized_ranges[0]["max_percentage"]) != Decimal("100.00"):
+        return Response(
+            {"detail": "Grade ranges must end at 100.00 percent."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    with transaction.atomic():
+        scale = InstitutionGradeScale.objects.select_for_update().get(
+            id=scale.id,
+            institution=institution,
+        )
+        latest = scale.versions.order_by("-version_number").first()
+
+        current_config = {
+            "name": scale.name,
+            "maximum_gpa": f"{Decimal(scale.maximum_gpa):.2f}",
+            "ranges": sorted(
+                [
+                    {
+                        "grade_name": r.grade_name,
+                        "min_percentage": f"{Decimal(r.min_percentage):.2f}",
+                        "max_percentage": f"{Decimal(r.max_percentage):.2f}",
+                        "grade_point": (
+                            f"{Decimal(r.grade_point):.2f}"
+                            if r.grade_point is not None else None
+                        ),
+                    }
+                    for r in scale.ranges.all()
+                ],
+                key=lambda item: (
+                    -Decimal(item["min_percentage"]),
+                    item["grade_name"].casefold(),
+                ),
+            ),
+        }
+        requested_config = {
+            "name": name,
+            "maximum_gpa": f"{maximum_gpa:.2f}",
+            "ranges": normalized_ranges,
+        }
+
+        if current_config == requested_config and latest is not None:
+            version = latest
+            created = False
+        else:
+            version = InstitutionGradeScaleVersion.objects.create(
+                grade_scale=scale,
+                version_number=(latest.version_number + 1) if latest else 1,
+                name=name,
+                maximum_gpa=maximum_gpa,
+                ranges_snapshot=normalized_ranges,
+                is_active=True,
+            )
+            scale.versions.exclude(id=version.id).update(is_active=False)
+
+            scale.name = name
+            scale.maximum_gpa = maximum_gpa
+            scale.active_version = version
+            scale.save(update_fields=[
+                "name", "maximum_gpa", "active_version", "updated_at"
+            ])
+
+            scale.ranges.all().delete()
+            InstitutionGradeRange.objects.bulk_create([
+                InstitutionGradeRange(
+                    grade_scale=scale,
+                    grade_name=item["grade_name"],
+                    min_percentage=Decimal(item["min_percentage"]),
+                    max_percentage=Decimal(item["max_percentage"]),
+                    grade_point=(
+                        Decimal(item["grade_point"])
+                        if item["grade_point"] is not None else None
+                    ),
+                )
+                for item in normalized_ranges
+            ])
+            created = True
+
+    return Response(
+        {
+            "created": created,
+            "active_version_id": scale.active_version_id,
+            "version": version_payload(version),
+        },
+        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+    )
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_grade_scale_activate_version(request, scale_id, version_id):
+    """Activate a saved grading version and restore its ranges atomically."""
+    from decimal import Decimal
+
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+        scale = InstitutionGradeScale.objects.get(
+            id=scale_id,
+            institution=institution,
+        )
+        version = InstitutionGradeScaleVersion.objects.get(
+            id=version_id,
+            grade_scale=scale,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    except (
+        InstitutionGradeScale.DoesNotExist,
+        InstitutionGradeScaleVersion.DoesNotExist,
+    ):
+        return Response(
+            {"detail": "Grading scale or version not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    with transaction.atomic():
+        scale = InstitutionGradeScale.objects.select_for_update().get(
+            id=scale.id,
+            institution=institution,
+        )
+        version = InstitutionGradeScaleVersion.objects.get(
+            id=version.id,
+            grade_scale=scale,
+        )
+
+        scale.versions.exclude(id=version.id).update(is_active=False)
+        version.is_active = True
+        version.save(update_fields=["is_active"])
+
+        scale.name = version.name
+        scale.maximum_gpa = version.maximum_gpa
+        scale.active_version = version
+        scale.save(update_fields=[
+            "name", "maximum_gpa", "active_version", "updated_at"
+        ])
+
+        scale.ranges.all().delete()
+        InstitutionGradeRange.objects.bulk_create([
+            InstitutionGradeRange(
+                grade_scale=scale,
+                grade_name=item["grade_name"],
+                min_percentage=Decimal(item["min_percentage"]),
+                max_percentage=Decimal(item["max_percentage"]),
+                grade_point=(
+                    Decimal(item["grade_point"])
+                    if item.get("grade_point") is not None else None
+                ),
+            )
+            for item in version.ranges_snapshot
+        ])
+
+    return Response({
+        "detail": "Grading version activated.",
+        "active_version_id": version.id,
+        "version_number": version.version_number,
+        "name": version.name,
+        "maximum_gpa": str(version.maximum_gpa),
+        "ranges": version.ranges_snapshot,
     })

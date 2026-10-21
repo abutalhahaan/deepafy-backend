@@ -558,6 +558,72 @@ class InstitutionResultsAPITests(APITestCase):
             subject_response.data,
         )
 
+    def test_results_email_rejects_unpublished_exam(self):
+        exam_subject, enrollment = self._create_exam_subject_and_enrollment()
+
+        response = self.client.post(
+            reverse(
+                "institution-exam-results-send-email",
+                args=[exam_subject.exam.id],
+            ),
+            {},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Publish", response.data["detail"])
+
+    def test_results_email_requires_smtp_configuration(self):
+        from django.test import override_settings
+
+        exam_subject, enrollment = self._create_exam_subject_and_enrollment()
+        exam = exam_subject.exam
+        exam.is_published = True
+        exam.save(update_fields=["is_published"])
+
+        with override_settings(
+            EMAIL_HOST="",
+            EMAIL_HOST_USER="",
+            EMAIL_HOST_PASSWORD="",
+        ):
+            response = self.client.post(
+                reverse(
+                    "institution-exam-results-send-email",
+                    args=[exam.id],
+                ),
+                {},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("SMTP", response.data["detail"])
+
+    def test_results_email_cannot_access_another_institutions_exam(self):
+        from institution.models import InstitutionExam
+
+        other_exam = InstitutionExam.objects.create(
+            institution=self.other_institution,
+            academic_session=self.other_session,
+            academic_level=self.other_level,
+            name="Other Institution Exam",
+            category="INTERNAL",
+            exam_type="Class Test",
+            full_marks=100,
+            pass_mark=33,
+            is_published=True,
+        )
+
+        response = self.client.post(
+            reverse(
+                "institution-exam-results-send-email",
+                args=[other_exam.id],
+            ),
+            {},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 404)
+
     def test_unauthenticated_results_request_is_rejected(self):
         self.client.force_authenticate(user=None)
         response = self.client.get(reverse("institution-exams"))
@@ -899,7 +965,7 @@ class InstitutionResultsAPITests(APITestCase):
         grade.refresh_from_db()
         self.assertEqual(str(grade.grade_point), "5.00")
 
-    def test_published_exam_rejects_grade_range_changes(self):
+    def test_published_exam_allows_new_grade_range(self):
         from institution.models import InstitutionGradeScale, InstitutionExam
 
         scale = InstitutionGradeScale.objects.create(
@@ -918,6 +984,13 @@ class InstitutionResultsAPITests(APITestCase):
             grade_scale=scale,
             is_published=True,
             has_been_published=True,
+            grading_snapshot={
+                "grade_scale_id": scale.id,
+                "name": scale.name,
+                "maximum_gpa": "5.00",
+                "is_active": True,
+                "ranges": [],
+            },
         )
 
         response = self.client.post(
@@ -931,9 +1004,10 @@ class InstitutionResultsAPITests(APITestCase):
             format="json",
         )
 
-        self.assertEqual(response.status_code, 400, response.data)
-        self.assertIn("Unpublish the exam first.", response.data["detail"])
-        self.assertFalse(scale.ranges.exists())
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(scale.ranges.count(), 1)
+        exam.refresh_from_db()
+        self.assertEqual(exam.grading_snapshot["ranges"], [])
         self.assertTrue(exam.is_published)
 
     def test_overlapping_grade_ranges_are_rejected(self):
@@ -1097,7 +1171,7 @@ class InstitutionResultsAPITests(APITestCase):
         grade.refresh_from_db()
         self.assertEqual(grade.grade_name, "A")
 
-    def test_published_exam_prevents_grade_range_update_and_delete(self):
+    def test_published_exam_allows_grade_range_update_and_delete(self):
         from institution.models import (
             InstitutionGradeScale,
             InstitutionGradeRange,
@@ -1106,7 +1180,7 @@ class InstitutionResultsAPITests(APITestCase):
 
         scale = InstitutionGradeScale.objects.create(
             institution=self.institution,
-            name="Protected Grade Scale",
+            name="Editable Grade Scale",
         )
         grade = InstitutionGradeRange.objects.create(
             grade_scale=scale,
@@ -1115,11 +1189,11 @@ class InstitutionResultsAPITests(APITestCase):
             max_percentage=100,
             grade_point=5,
         )
-        InstitutionExam.objects.create(
+        exam = InstitutionExam.objects.create(
             institution=self.institution,
             academic_session=self.session,
             academic_level=self.level,
-            name="Published Protection Test",
+            name="Published Snapshot Test",
             category="INTERNAL",
             exam_type="Class Test",
             full_marks=100,
@@ -1127,6 +1201,21 @@ class InstitutionResultsAPITests(APITestCase):
             grade_scale=scale,
             is_published=True,
             has_been_published=True,
+            grading_snapshot={
+                "grade_scale_id": scale.id,
+                "name": scale.name,
+                "maximum_gpa": "5.00",
+                "is_active": True,
+                "ranges": [
+                    {
+                        "id": grade.id,
+                        "grade_name": "A",
+                        "min_percentage": "80.00",
+                        "max_percentage": "100.00",
+                        "grade_point": "5.00",
+                    }
+                ],
+            },
         )
 
         url = reverse(
@@ -1138,12 +1227,14 @@ class InstitutionResultsAPITests(APITestCase):
             {"grade_name": "Changed"},
             format="json",
         )
-        delete_response = self.client.delete(url)
+        self.assertEqual(update_response.status_code, 200, update_response.data)
 
-        self.assertEqual(update_response.status_code, 400)
-        self.assertEqual(delete_response.status_code, 400)
-        grade.refresh_from_db()
-        self.assertEqual(grade.grade_name, "A")
+        delete_response = self.client.delete(url)
+        self.assertEqual(delete_response.status_code, 204, getattr(delete_response, "data", None))
+
+        exam.refresh_from_db()
+        self.assertEqual(exam.grading_snapshot["ranges"][0]["grade_name"], "A")
+        self.assertFalse(scale.ranges.filter(id=grade.id).exists())
 
     def test_exam_can_use_own_grade_scale(self):
         from institution.models import InstitutionGradeScale
@@ -1257,6 +1348,93 @@ class InstitutionResultsAPITests(APITestCase):
         self.assertEqual(response.data["statistics"]["passed"], 1)
         self.assertEqual(response.data["statistics"]["failed"], 0)
         self.assertEqual(response.data["statistics"]["pass_rate"], "100.00")
+
+    def test_exam_results_assign_merit_roll_by_fail_count_and_marks(self):
+        from institution.models import (
+            Subject,
+            InstitutionExamMark,
+            InstitutionExamSubject,
+            Student,
+            StudentEnrollment,
+            InstitutionClassSubject,
+        )
+
+        exam_subject, first_enrollment = self._create_exam_subject_and_enrollment()
+        exam = exam_subject.exam
+
+        second_subject = Subject.objects.create(
+            name="Results Test English",
+            code="RTE",
+            is_active=True,
+        )
+        InstitutionClassSubject.objects.create(
+            institution=self.institution,
+            academic_level=self.level,
+            subject=second_subject,
+        )
+        second_exam_subject = InstitutionExamSubject.objects.create(
+            exam=exam,
+            subject=second_subject,
+            full_marks=100,
+            pass_mark=33,
+        )
+
+        second_student = Student.objects.create(
+            global_student_id="RST-000002",
+            name="Second Results Student",
+        )
+        second_enrollment = StudentEnrollment.objects.create(
+            student=second_student,
+            institution=self.institution,
+            academic_session=self.session,
+            class_name=self.level.name,
+            roll="2",
+        )
+
+        third_student = Student.objects.create(
+            global_student_id="RST-000003",
+            name="Third Results Student",
+        )
+        third_enrollment = StudentEnrollment.objects.create(
+            student=third_student,
+            institution=self.institution,
+            academic_session=self.session,
+            class_name=self.level.name,
+            roll="3",
+        )
+
+        marks = [
+            # One failed subject, total 150.
+            (exam_subject, first_enrollment, 20),
+            (second_exam_subject, first_enrollment, 130),
+            # No failed subjects, total 120: should rank first.
+            (exam_subject, second_enrollment, 60),
+            (second_exam_subject, second_enrollment, 60),
+            # No failed subjects, total 120; higher top subject mark wins.
+            (exam_subject, third_enrollment, 80),
+            (second_exam_subject, third_enrollment, 40),
+        ]
+        for subject, enrollment, obtained in marks:
+            InstitutionExamMark.objects.create(
+                exam_subject=subject,
+                enrollment=enrollment,
+                marks_obtained=obtained,
+            )
+
+        response = self.client.get(
+            reverse("institution-exam-results", args=[exam.id])
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        results = response.data["results"]
+        self.assertEqual(
+            [item["enrollment_id"] for item in results],
+            [third_enrollment.id, second_enrollment.id, first_enrollment.id],
+        )
+        self.assertEqual([item["merit_roll"] for item in results], [1, 2, 3])
+        self.assertEqual(first_enrollment.roll, "1")
+        self.assertEqual(second_enrollment.roll, "2")
+        self.assertEqual(third_enrollment.roll, "3")
 
     def test_exam_results_reject_another_institutions_exam(self):
         from institution.models import InstitutionExam
@@ -1386,6 +1564,97 @@ class InstitutionResultsAPITests(APITestCase):
 
         exam = InstitutionExam.objects.get(id=exam_subject.exam_id)
         self.assertTrue(exam.is_published)
+
+    def test_grading_snapshot_survives_scale_edit_unpublish_and_republish(self):
+        from institution.models import (
+            InstitutionExam,
+            InstitutionExamMark,
+            InstitutionGradeScale,
+            InstitutionGradeRange,
+        )
+
+        exam_subject, enrollment = self._create_exam_subject_and_enrollment()
+        scale = InstitutionGradeScale.objects.create(
+            institution=self.institution,
+            name="Original Snapshot Scale",
+        )
+        InstitutionGradeRange.objects.create(
+            grade_scale=scale,
+            grade_name="F",
+            min_percentage="0.00",
+            max_percentage="39.99",
+            grade_point="0.00",
+        )
+        InstitutionGradeRange.objects.create(
+            grade_scale=scale,
+            grade_name="A",
+            min_percentage="40.00",
+            max_percentage="100.00",
+            grade_point="5.00",
+        )
+        exam_subject.exam.grade_scale = scale
+        exam_subject.exam.save(update_fields=["grade_scale"])
+        InstitutionExamMark.objects.create(
+            exam_subject=exam_subject,
+            enrollment=enrollment,
+            marks_obtained=80,
+        )
+
+        publish_url = reverse(
+            "institution-exam-publish",
+            args=[exam_subject.exam_id],
+        )
+        first_publish = self.client.post(
+            publish_url,
+            {"is_published": True},
+            format="json",
+        )
+        self.assertEqual(first_publish.status_code, 200, first_publish.data)
+
+        exam = InstitutionExam.objects.get(id=exam_subject.exam_id)
+        original_snapshot = exam.grading_snapshot
+        self.assertIsNotNone(original_snapshot)
+        self.assertEqual(original_snapshot["name"], "Original Snapshot Scale")
+        self.assertEqual(
+            [item["grade_name"] for item in original_snapshot["ranges"]],
+            ["F", "A"],
+        )
+
+        unpublish = self.client.post(
+            publish_url,
+            {"is_published": False},
+            format="json",
+        )
+        self.assertEqual(unpublish.status_code, 200, unpublish.data)
+
+        scale.name = "Edited Scale Name"
+        scale.save(update_fields=["name"])
+        grade_a = scale.ranges.get(grade_name="A")
+        grade_a.grade_name = "A+"
+        grade_a.grade_point = "4.00"
+        grade_a.save(update_fields=["grade_name", "grade_point"])
+
+        republish = self.client.post(
+            publish_url,
+            {"is_published": True},
+            format="json",
+        )
+        self.assertEqual(republish.status_code, 200, republish.data)
+
+        exam.refresh_from_db()
+        self.assertEqual(exam.grading_snapshot, original_snapshot)
+
+        results = self.client.get(
+            reverse("institution-exam-results", args=[exam.id])
+        )
+        self.assertEqual(results.status_code, 200, results.data)
+        self.assertEqual(results.data["grade_scale"], "Original Snapshot Scale")
+        self.assertEqual(results.data["results"][0]["subjects"][0]["grade"], "A")
+        self.assertEqual(
+            results.data["results"][0]["subjects"][0]["grade_point"],
+            "5.00",
+        )
+
 
     def test_exam_publish_rejects_another_institutions_exam(self):
         from institution.models import InstitutionExam
@@ -1546,6 +1815,174 @@ class InstitutionResultsAPITests(APITestCase):
 
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(response.data["marks_obtained"], "82")
+
+
+    def _create_versioned_grade_scale(self):
+        from institution.models import (
+            InstitutionGradeScale,
+            InstitutionGradeRange,
+            InstitutionGradeScaleVersion,
+        )
+
+        scale = InstitutionGradeScale.objects.create(
+            institution=self.institution,
+            name="Version Test Scale",
+            maximum_gpa="5.00",
+            is_default=True,
+            is_active=True,
+        )
+        ranges = [
+            ("A", "80.00", "100.00", "5.00"),
+            ("B", "60.00", "79.99", "4.00"),
+            ("F", "0.00", "59.99", "0.00"),
+        ]
+        for grade_name, minimum, maximum, point in ranges:
+            InstitutionGradeRange.objects.create(
+                grade_scale=scale,
+                grade_name=grade_name,
+                min_percentage=minimum,
+                max_percentage=maximum,
+                grade_point=point,
+            )
+
+        version = InstitutionGradeScaleVersion.objects.create(
+            grade_scale=scale,
+            version_number=1,
+            name=scale.name,
+            maximum_gpa=scale.maximum_gpa,
+            ranges_snapshot=[
+                {
+                    "grade_name": grade_name,
+                    "min_percentage": minimum,
+                    "max_percentage": maximum,
+                    "grade_point": point,
+                }
+                for grade_name, minimum, maximum, point in ranges
+            ],
+            is_active=True,
+        )
+        scale.active_version = version
+        scale.save(update_fields=["active_version"])
+        return scale, version
+
+    def test_grade_scale_version_does_not_increment_without_changes(self):
+        from institution.models import InstitutionGradeScaleVersion
+
+        scale, version = self._create_versioned_grade_scale()
+        url = reverse(
+            "institution-grade-scale-versions",
+            args=[scale.id],
+        )
+        payload = {
+            "name": scale.name,
+            "maximum_gpa": "5.00",
+            "ranges": version.ranges_snapshot,
+        }
+
+        response = self.client.post(url, payload, format="json")
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertFalse(response.data["created"])
+        self.assertEqual(
+            InstitutionGradeScaleVersion.objects.filter(
+                grade_scale=scale
+            ).count(),
+            1,
+        )
+
+    def test_grade_scale_version_increments_when_configuration_changes(self):
+        from institution.models import InstitutionGradeScaleVersion
+
+        scale, version = self._create_versioned_grade_scale()
+        url = reverse(
+            "institution-grade-scale-versions",
+            args=[scale.id],
+        )
+        payload = {
+            "name": scale.name,
+            "maximum_gpa": "5.00",
+            "ranges": [
+                {
+                    **item,
+                    "grade_point": (
+                        "4.50" if item["grade_name"] == "B"
+                        else item["grade_point"]
+                    ),
+                }
+                for item in version.ranges_snapshot
+            ],
+        }
+
+        response = self.client.post(url, payload, format="json")
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertTrue(response.data["created"])
+        self.assertEqual(response.data["version"]["version_number"], 2)
+        self.assertEqual(
+            InstitutionGradeScaleVersion.objects.filter(
+                grade_scale=scale
+            ).count(),
+            2,
+        )
+
+    def test_grade_scale_previous_version_can_be_activated(self):
+        from institution.models import (
+            InstitutionGradeScaleVersion,
+            InstitutionGradeRange,
+        )
+
+        scale, version1 = self._create_versioned_grade_scale()
+        save_url = reverse(
+            "institution-grade-scale-versions",
+            args=[scale.id],
+        )
+        changed_ranges = [
+            {
+                **item,
+                "grade_point": (
+                    "4.50" if item["grade_name"] == "B"
+                    else item["grade_point"]
+                ),
+            }
+            for item in version1.ranges_snapshot
+        ]
+        response = self.client.post(
+            save_url,
+            {
+                "name": scale.name,
+                "maximum_gpa": "5.00",
+                "ranges": changed_ranges,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        version2_id = response.data["version"]["id"]
+
+        activate_url = reverse(
+            "institution-grade-scale-activate-version",
+            args=[scale.id, version1.id],
+        )
+        response = self.client.post(activate_url, format="json")
+
+        self.assertEqual(response.status_code, 200, response.data)
+        scale.refresh_from_db()
+        self.assertEqual(scale.active_version_id, version1.id)
+        self.assertEqual(
+            InstitutionGradeScaleVersion.objects.get(id=version1.id).is_active,
+            True,
+        )
+        self.assertFalse(
+            InstitutionGradeScaleVersion.objects.get(id=version2_id).is_active
+        )
+        restored = list(
+            InstitutionGradeRange.objects.filter(grade_scale=scale)
+            .order_by("grade_name")
+            .values_list("grade_name", "grade_point")
+        )
+        self.assertEqual(
+            [(name, str(point)) for name, point in restored],
+            [("A", "5.00"), ("B", "4.00"), ("F", "0.00")],
+        )
 
 
 class StudentSubjectAPITests(APITestCase):

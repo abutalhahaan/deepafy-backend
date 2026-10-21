@@ -45,10 +45,13 @@ from .views import (
     institution_exam_subjects,
     institution_exam_marks,
     institution_exam_results,
+    institution_exam_results_send_email,
     institution_exam_publish,
     institution_grade_scales,
     institution_grade_ranges,
     institution_grade_range_detail,
+    institution_grade_scale_versions,
+    institution_grade_scale_activate_version,
 )
 
 
@@ -184,6 +187,11 @@ urlpatterns = [
         name="institution-exam-results",
     ),
     path(
+        "results/exams/<int:exam_id>/send-email/",
+        institution_exam_results_send_email,
+        name="institution-exam-results-send-email",
+    ),
+    path(
         "results/exams/<int:exam_id>/students/",
         institution_exam_students,
         name="institution-exam-students",
@@ -212,6 +220,16 @@ urlpatterns = [
         "results/grade-scales/<int:scale_id>/ranges/<int:range_id>/",
         institution_grade_range_detail,
         name="institution-grade-range-detail",
+    ),
+    path(
+        "results/grade-scales/<int:scale_id>/versions/",
+        institution_grade_scale_versions,
+        name="institution-grade-scale-versions",
+    ),
+    path(
+        "results/grade-scales/<int:scale_id>/versions/<int:version_id>/activate/",
+        institution_grade_scale_activate_version,
+        name="institution-grade-scale-activate-version",
     ),
     path(
         "results/exam-types/",
