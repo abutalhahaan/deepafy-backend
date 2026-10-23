@@ -4432,6 +4432,40 @@ def institution_attendance_monthly(request):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+    department_id = request.query_params.get("department_id")
+    if department_id:
+        try:
+            department_id = int(department_id)
+            if department_id <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Invalid department."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        enrollments = enrollments.filter(
+            department_id=department_id,
+            institution__departments__id=department_id,
+            institution__departments__is_active=True,
+        )
+
+    available_academic_periods = list(
+        enrollments.exclude(academic_period="")
+        .values_list("academic_period", flat=True)
+        .distinct()
+        .order_by("academic_period")
+    )
+
+    academic_period = str(
+        request.query_params.get("academic_period") or ""
+    ).strip()
+
+    if academic_period:
+        enrollments = enrollments.filter(
+            academic_period=academic_period
+        )
+
     global_student_id = str(
         request.query_params.get("global_student_id", "")
     ).strip()
@@ -4557,9 +4591,9 @@ def institution_attendance_monthly(request):
                 "is_holiday": status_code == "H",
                 "holiday_name": holiday_name,
                 "default_status": (
-                    status_code
+                    "H"
                     if status_code == "H"
-                    else "P"
+                    else ("" if current_date > today else "P")
                 ),
             }
         )
@@ -4576,6 +4610,10 @@ def institution_attendance_monthly(request):
 
             if date_info["is_holiday"]:
                 daily[str(date_info["day"])] = "H"
+                continue
+
+            if date_info["is_future"]:
+                daily[str(date_info["day"])] = ""
                 continue
 
             saved_status = attendance_map.get(
@@ -4596,8 +4634,27 @@ def institution_attendance_monthly(request):
                     enrollment.student.global_student_id
                 ),
                 "student_name": enrollment.student.name,
+                "photo": (
+                    request.build_absolute_uri(current_photo.photo.url)
+                    if (
+                        current_photo := next(
+                            (
+                                photo
+                                for photo in enrollment.student.profile_photos.all()
+                                if photo.is_current and photo.photo
+                            ),
+                            None,
+                        )
+                    )
+                    else None
+                ),
+                "guardian_name": enrollment.student.guardian_name,
+                "guardian_relationship": enrollment.student.guardian_relationship,
+                "guardian_mobile": enrollment.student.guardian_mobile,
+                "guardian_email": enrollment.student.guardian_email,
                 "roll": enrollment.roll,
                 "class_name": enrollment.class_name,
+                "academic_period": enrollment.academic_period,
                 "department": (
                     {
                         "id": enrollment.department_id,
@@ -4637,6 +4694,7 @@ def institution_attendance_monthly(request):
             "today": today.isoformat(),
             "dates": dates,
             "students": students,
+            "available_academic_periods": available_academic_periods,
             "count": len(students),
         }
     )
