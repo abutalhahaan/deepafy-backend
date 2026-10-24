@@ -3512,7 +3512,7 @@ def institution_academic_levels_public(request, username):
 
     try:
         profile = InstitutionProfile.objects.get(
-            username=username,
+            identity__username=username,
             is_active=True,
         )
     except InstitutionProfile.DoesNotExist:
@@ -4698,6 +4698,119 @@ def institution_attendance_monthly(request):
             "count": len(students),
         }
     )
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_student_attendance_save(request):
+    """Save or update student attendance for today only."""
+    from datetime import date
+
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        attendance_date = date.fromisoformat(
+            str(request.data.get("date") or "")
+        )
+    except (TypeError, ValueError):
+        return Response(
+            {"detail": "Invalid attendance date."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if attendance_date != date.today():
+        return Response(
+            {"detail": "Only today's attendance can be changed."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        enrollment_id = int(request.data.get("enrollment_id"))
+    except (TypeError, ValueError):
+        return Response(
+            {"detail": "Invalid enrollment ID."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    attendance_status = str(
+        request.data.get("status") or ""
+    ).strip().upper()
+
+    if attendance_status not in {
+        StudentAttendance.STATUS_PRESENT,
+        StudentAttendance.STATUS_ABSENT,
+        StudentAttendance.STATUS_LEAVE,
+    }:
+        return Response(
+            {"detail": "Attendance status must be P, A, or L."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        enrollment = StudentEnrollment.objects.get(
+            id=enrollment_id,
+            institution=institution,
+        )
+    except StudentEnrollment.DoesNotExist:
+        return Response(
+            {"detail": "Student enrollment not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    settings_obj = InstitutionAttendanceSettings.objects.filter(
+        institution=institution,
+    ).first()
+
+    weekly_holidays = set(
+        settings_obj.weekly_holidays
+        if settings_obj
+        and isinstance(settings_obj.weekly_holidays, list)
+        else []
+    )
+
+    if attendance_date.weekday() in weekly_holidays:
+        return Response(
+            {"detail": "Attendance cannot be recorded on a weekly holiday."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if InstitutionHoliday.objects.filter(
+        institution=institution,
+        from_date__lte=attendance_date,
+        to_date__gte=attendance_date,
+        is_active=True,
+    ).exists():
+        return Response(
+            {"detail": "Attendance cannot be recorded on an institution holiday."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    attendance, created = StudentAttendance.objects.update_or_create(
+        enrollment=enrollment,
+        date=attendance_date,
+        defaults={"status": attendance_status},
+    )
+
+    return Response(
+        {
+            "id": attendance.id,
+            "enrollment_id": attendance.enrollment_id,
+            "date": attendance.date.isoformat(),
+            "status": attendance.status,
+            "created": created,
+        },
+        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+    )
+
 
 @api_view(["POST"])
 @authentication_classes([JWTAuthentication])
@@ -7966,3 +8079,1103 @@ def institution_grade_scale_activate_version(request, scale_id, version_id):
         "maximum_gpa": str(version.maximum_gpa),
         "ranges": version.ranges_snapshot,
     })
+
+
+@api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def institution_attendance_monthly_public(request, username):
+    """
+    Return monthly student attendance sheet for the authenticated institution.
+
+    H (Holiday) is derived from weekly holidays and specific institution holidays.
+    StudentAttendance stores only P/A/L.
+    """
+
+    from calendar import monthrange
+    from datetime import date, timedelta
+
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity__username=username,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        year = int(request.query_params.get("year"))
+        month = int(request.query_params.get("month"))
+    except (TypeError, ValueError):
+        today = date.today()
+        year = today.year
+        month = today.month
+
+    if month < 1 or month > 12:
+        return Response(
+            {"detail": "Invalid month."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if year < 2000 or year > 2100:
+        return Response(
+            {"detail": "Invalid year."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    session_id = request.query_params.get("academic_session")
+    academic_filters_raw = request.query_params.get("academic_filters")
+    academic_filters = {}
+
+    if academic_filters_raw:
+        try:
+            parsed_filters = json.loads(academic_filters_raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return Response(
+                {"detail": "Invalid academic filters."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not isinstance(parsed_filters, dict):
+            return Response(
+                {"detail": "Academic filters must be an object."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        academic_filters = parsed_filters
+
+    enrollments = (
+        StudentEnrollment.objects
+        .filter(
+            institution=institution,
+        )
+        .select_related(
+            "student",
+            "academic_session",
+            "department",
+        )
+        .prefetch_related(
+            "academic_values__academic_level",
+        )
+    )
+
+    if session_id:
+        try:
+            enrollments = enrollments.filter(
+                academic_session_id=int(session_id)
+            )
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Invalid academic session."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    department_id = request.query_params.get("department_id")
+    if department_id:
+        try:
+            department_id = int(department_id)
+            if department_id <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Invalid department."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        enrollments = enrollments.filter(
+            department_id=department_id,
+            institution__departments__id=department_id,
+            institution__departments__is_active=True,
+        )
+
+    available_academic_periods = list(
+        enrollments.exclude(academic_period="")
+        .values_list("academic_period", flat=True)
+        .distinct()
+        .order_by("academic_period")
+    )
+
+    academic_period = str(
+        request.query_params.get("academic_period") or ""
+    ).strip()
+
+    if academic_period:
+        enrollments = enrollments.filter(
+            academic_period=academic_period
+        )
+
+    global_student_id = str(
+        request.query_params.get("global_student_id", "")
+    ).strip()
+
+    if global_student_id:
+        enrollments = enrollments.filter(
+            student__global_student_id=global_student_id
+        )
+
+    if academic_filters:
+        for level_id, selected_value in academic_filters.items():
+            try:
+                level_id = int(level_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "Invalid academic level."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            selected_value = str(selected_value or "").strip()
+            if not selected_value or selected_value == "all":
+                continue
+
+            level_exists = InstitutionAcademicLevel.objects.filter(
+                id=level_id,
+                institution=institution,
+            ).exists()
+
+            if not level_exists:
+                return Response(
+                    {"detail": "Academic level not found."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            enrollments = enrollments.filter(
+                academic_values__academic_level_id=level_id,
+                academic_values__value=selected_value,
+            )
+
+    enrollments = enrollments.order_by(
+        "roll",
+        "student__name",
+        "id",
+    )
+
+    first_day = date(year, month, 1)
+    last_day_number = monthrange(year, month)[1]
+    last_day = date(year, month, last_day_number)
+
+    settings_obj = InstitutionAttendanceSettings.objects.filter(
+        institution=institution,
+    ).first()
+
+    weekly_holidays = set(
+        settings_obj.weekly_holidays
+        if settings_obj and isinstance(
+            settings_obj.weekly_holidays,
+            list,
+        )
+        else []
+    )
+
+    holiday_ranges = InstitutionHoliday.objects.filter(
+        institution=institution,
+        academic_session_id=int(session_id) if session_id else None,
+        from_date__lte=last_day,
+        to_date__gte=first_day,
+        is_active=True,
+    )
+
+    holidays = {}
+
+    for holiday in holiday_ranges:
+        current_date = max(holiday.from_date, first_day)
+        holiday_end = min(holiday.to_date, last_day)
+
+        while current_date <= holiday_end:
+            holidays[current_date] = holiday.name
+            current_date += timedelta(days=1)
+
+    attendance_records = StudentAttendance.objects.filter(
+        enrollment__in=enrollments,
+        date__range=(first_day, last_day),
+    ).values(
+        "enrollment_id",
+        "date",
+        "status",
+    )
+
+    attendance_map = {
+        (
+            record["enrollment_id"],
+            record["date"],
+        ): record["status"]
+        for record in attendance_records
+    }
+
+    today = date.today()
+
+    dates = []
+
+    for day in range(1, last_day_number + 1):
+        current_date = date(year, month, day)
+
+        if current_date in holidays:
+            status_code = "H"
+            holiday_name = holidays[current_date]
+        elif current_date.weekday() in weekly_holidays:
+            status_code = "H"
+            holiday_name = "Weekly Holiday"
+        else:
+            status_code = None
+            holiday_name = None
+
+        dates.append(
+            {
+                "date": current_date.isoformat(),
+                "day": day,
+                "weekday": current_date.strftime("%A"),
+                "is_today": current_date == today,
+                "is_past": current_date < today,
+                "is_future": current_date > today,
+                "is_holiday": status_code == "H",
+                "holiday_name": holiday_name,
+                "default_status": (
+                    "H"
+                    if status_code == "H"
+                    else ("" if current_date > today else "P")
+                ),
+            }
+        )
+
+    students = []
+
+    for enrollment in enrollments:
+        daily = {}
+
+        for date_info in dates:
+            current_date = date.fromisoformat(
+                date_info["date"]
+            )
+
+            if date_info["is_holiday"]:
+                daily[str(date_info["day"])] = "H"
+                continue
+
+            if date_info["is_future"]:
+                daily[str(date_info["day"])] = ""
+                continue
+
+            saved_status = attendance_map.get(
+                (enrollment.id, current_date)
+            )
+
+            daily[str(date_info["day"])] = (
+                saved_status
+                if saved_status
+                else "P"
+            )
+
+        students.append(
+            {
+                "enrollment_id": enrollment.id,
+                "student_id": enrollment.student_id,
+                "global_student_id": (
+                    enrollment.student.global_student_id
+                ),
+                "student_name": enrollment.student.name,
+                "photo": (
+                    request.build_absolute_uri(current_photo.photo.url)
+                    if (
+                        current_photo := next(
+                            (
+                                photo
+                                for photo in enrollment.student.profile_photos.all()
+                                if photo.is_current and photo.photo
+                            ),
+                            None,
+                        )
+                    )
+                    else None
+                ),
+                "roll": enrollment.roll,
+                "class_name": enrollment.class_name,
+                "academic_period": enrollment.academic_period,
+                "department": (
+                    {
+                        "id": enrollment.department_id,
+                        "name": enrollment.department.name,
+                    }
+                    if enrollment.department
+                    else None
+                ),
+                "section": enrollment.section,
+                "academic_values": [
+                    {
+                        "id": value.id,
+                        "academic_level_id": value.academic_level_id,
+                        "type": value.academic_level.level_type,
+                        "name": value.academic_level.name,
+                        "parent": value.academic_level.parent,
+                        "value": value.value,
+                    }
+                    for value in enrollment.academic_values.all()
+                ],
+                "academic_session": {
+                    "id": enrollment.academic_session_id,
+                    "name": enrollment.academic_session.name,
+                    "is_current": (
+                        enrollment.academic_session.is_current
+                    ),
+                },
+                "attendance": daily,
+            }
+        )
+
+    return Response(
+        {
+            "year": year,
+            "month": month,
+            "days_in_month": last_day_number,
+            "today": today.isoformat(),
+            "dates": dates,
+            "students": students,
+            "available_academic_periods": available_academic_periods,
+            "count": len(students),
+        }
+    )
+
+
+@api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def institution_staff_attendance_monthly_public(request, username):
+    """
+    Return monthly attendance for active running teachers and staff.
+
+    This is completely separate from student attendance.
+
+    Staff can come from two independent sources:
+    - Deepafy staff: InstitutionStaffService
+    - Manual staff: UnclaimedPerson
+
+    No academic session, class, section, or student enrollment data is used.
+    """
+
+    from calendar import monthrange
+    from datetime import date, timedelta
+
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity__username=username,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+
+    try:
+        year = int(request.query_params.get("year"))
+        month = int(request.query_params.get("month"))
+    except (TypeError, ValueError):
+        today = date.today()
+        year = today.year
+        month = today.month
+
+    if month < 1 or month > 12:
+        return Response(
+            {"detail": "Invalid month."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if year < 2000 or year > 2100:
+        return Response(
+            {"detail": "Invalid year."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    staff_services = list(
+        InstitutionStaffService.objects
+        .filter(
+            institution=institution,
+            status=InstitutionStaffService.STATUS_RUNNING,
+            is_active=True,
+        )
+        .select_related("identity")
+        .order_by(
+            "designation",
+            "identity__first_name",
+            "identity__last_name",
+            "identity_id",
+        )
+    )
+
+    manual_staff = list(
+        UnclaimedPerson.objects
+        .filter(
+            institution=institution,
+            status=UnclaimedPerson.STATUS_RUNNING,
+            is_active=True,
+        )
+        .order_by(
+            "designation",
+            "full_name",
+            "id",
+        )
+    )
+
+    first_day = date(year, month, 1)
+    last_day_number = monthrange(year, month)[1]
+    last_day = date(year, month, last_day_number)
+
+    settings_obj = InstitutionAttendanceSettings.objects.filter(
+        institution=institution,
+    ).first()
+
+    weekly_holidays = set(
+        settings_obj.weekly_holidays
+        if settings_obj
+        and isinstance(settings_obj.weekly_holidays, list)
+        else []
+    )
+
+    holiday_ranges = InstitutionHoliday.objects.filter(
+        institution=institution,
+        from_date__lte=last_day,
+        to_date__gte=first_day,
+        is_active=True,
+    )
+
+    holidays = {}
+
+    for holiday in holiday_ranges:
+        current_date = max(holiday.from_date, first_day)
+        holiday_end = min(holiday.to_date, last_day)
+
+        while current_date <= holiday_end:
+            holidays[current_date] = holiday.name
+            current_date += timedelta(days=1)
+
+    attendance_records = (
+        InstitutionStaffAttendance.objects
+        .filter(date__range=(first_day, last_day))
+        .filter(
+            Q(staff_service__in=staff_services)
+            | Q(unclaimed_person__in=manual_staff)
+        )
+        .values(
+            "staff_service_id",
+            "unclaimed_person_id",
+            "date",
+            "status",
+        )
+    )
+
+    attendance_map = {}
+
+    for record in attendance_records:
+        if record["staff_service_id"] is not None:
+            attendance_map[
+                (
+                    "deepafy",
+                    record["staff_service_id"],
+                    record["date"],
+                )
+            ] = record["status"]
+
+        if record["unclaimed_person_id"] is not None:
+            attendance_map[
+                (
+                    "manual",
+                    record["unclaimed_person_id"],
+                    record["date"],
+                )
+            ] = record["status"]
+
+    today = date.today()
+    dates = []
+
+    for day in range(1, last_day_number + 1):
+        current_date = date(year, month, day)
+
+        if current_date in holidays:
+            status_code = "H"
+            holiday_name = holidays[current_date]
+        elif current_date.weekday() in weekly_holidays:
+            status_code = "H"
+            holiday_name = "Weekly Holiday"
+        else:
+            status_code = None
+            holiday_name = None
+
+        dates.append(
+            {
+                "date": current_date.isoformat(),
+                "day": day,
+                "weekday": current_date.strftime("%A"),
+                "is_today": current_date == today,
+                "is_past": current_date < today,
+                "is_future": current_date > today,
+                "is_holiday": status_code == "H",
+                "holiday_name": holiday_name,
+                "default_status": (
+                    status_code
+                    if status_code == "H"
+                    else "P"
+                ),
+            }
+        )
+
+    teachers_staff = []
+
+    for service in staff_services:
+        daily = {}
+
+        for date_info in dates:
+            current_date = date.fromisoformat(
+                date_info["date"]
+            )
+
+            if date_info["is_holiday"]:
+                daily[str(date_info["day"])] = "H"
+                continue
+
+            saved_status = attendance_map.get(
+                ("deepafy", service.id, current_date)
+            )
+
+            daily[str(date_info["day"])] = (
+                saved_status
+                if saved_status
+                else "P"
+            )
+
+        teachers_staff.append(
+            {
+                "staff_source": "deepafy",
+                "staff_service_id": service.id,
+                "unclaimed_person_id": None,
+                "identity_id": service.identity_id,
+                "name": (
+                    f"{service.identity.first_name or ''} "
+                    f"{service.identity.last_name or ''}"
+                ).strip() or service.identity.username,
+                "username": service.identity.username,
+                "designation": service.designation,
+                "department": service.department,
+                "attendance": daily,
+            }
+        )
+
+    for person in manual_staff:
+        daily = {}
+
+        for date_info in dates:
+            current_date = date.fromisoformat(
+                date_info["date"]
+            )
+
+            if date_info["is_holiday"]:
+                daily[str(date_info["day"])] = "H"
+                continue
+
+            saved_status = attendance_map.get(
+                ("manual", person.id, current_date)
+            )
+
+            daily[str(date_info["day"])] = (
+                saved_status
+                if saved_status
+                else "P"
+            )
+
+        teachers_staff.append(
+            {
+                "staff_source": "manual",
+                "staff_service_id": None,
+                "unclaimed_person_id": person.id,
+                "identity_id": None,
+                "name": person.full_name,
+                "username": None,
+                "designation": person.designation,
+                "department": person.department,
+                "attendance": daily,
+            }
+        )
+
+    teachers_staff.sort(
+        key=lambda staff: (
+            (staff["designation"] or "").lower(),
+            (staff["name"] or "").lower(),
+        )
+    )
+
+    return Response(
+        {
+            "year": year,
+            "month": month,
+            "days_in_month": last_day_number,
+            "today": today.isoformat(),
+            "dates": dates,
+            "teachers_staff": teachers_staff,
+            "count": len(teachers_staff),
+        }
+    )
+
+
+@api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def institution_academic_sessions_public(request, username):
+    """
+    List or create academic sessions for the authenticated institution.
+    """
+
+    try:
+        profile = InstitutionProfile.objects.get(
+            identity__username=username,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "GET":
+        sessions = InstitutionAcademicSession.objects.filter(
+            institution=profile,
+            is_active=True,
+        )
+
+        return Response({
+            "count": sessions.count(),
+            "results": [
+                {
+                    "id": session.id,
+                    "name": session.name,
+                    "start_date": session.start_date.isoformat(),
+                    "end_date": session.end_date.isoformat(),
+                    "status": session.status,
+                    "is_current": session.is_current,
+                    "is_active": session.is_active,
+                }
+                for session in sessions
+            ],
+        })
+
+    data = request.data
+
+    name = str(data.get("name") or "").strip()
+    start_date = data.get("start_date")
+    end_date = data.get("end_date")
+    session_status = str(
+        data.get("status")
+        or InstitutionAcademicSession.STATUS_UPCOMING
+    ).strip().upper()
+
+    if not name:
+        return Response(
+            {"detail": "Session name is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not start_date or not end_date:
+        return Response(
+            {"detail": "Start date and end date are required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    valid_statuses = {
+        choice[0]
+        for choice in InstitutionAcademicSession.STATUS_CHOICES
+    }
+
+    if session_status not in valid_statuses:
+        return Response(
+            {"detail": "Invalid session status."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if InstitutionAcademicSession.objects.filter(
+        institution=profile,
+        name=name,
+    ).exists():
+        return Response(
+            {"detail": "This session already exists for this institution."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        from datetime import date, timedelta, timedelta
+
+        parsed_start = date.fromisoformat(str(start_date))
+        parsed_end = date.fromisoformat(str(end_date))
+    except ValueError:
+        return Response(
+            {"detail": "Invalid date format. Use YYYY-MM-DD."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if parsed_end < parsed_start:
+        return Response(
+            {"detail": "End date cannot be before start date."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    is_current = bool(data.get("is_current", False))
+
+    if is_current:
+        InstitutionAcademicSession.objects.filter(
+            institution=profile,
+            is_current=True,
+        ).update(is_current=False)
+
+    session = InstitutionAcademicSession.objects.create(
+        institution=profile,
+        name=name,
+        start_date=parsed_start,
+        end_date=parsed_end,
+        status=session_status,
+        is_current=is_current,
+    )
+
+    return Response(
+        {
+            "id": session.id,
+            "name": session.name,
+            "start_date": session.start_date.isoformat(),
+            "end_date": session.end_date.isoformat(),
+            "status": session.status,
+            "is_current": session.is_current,
+            "is_active": session.is_active,
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def institution_selected_departments_public(request, username):
+    """List or save the authenticated institution's selected global departments."""
+    try:
+        profile = InstitutionProfile.objects.get(
+            identity__username=username,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "PUT":
+        department_ids = request.data.get("department_ids")
+        if not isinstance(department_ids, list):
+            return Response(
+                {"detail": "department_ids must be a list."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            department_ids = list({int(value) for value in department_ids})
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Every department ID must be an integer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        departments = Department.objects.filter(
+            id__in=department_ids,
+            is_active=True,
+        )
+        if departments.count() != len(department_ids):
+            return Response(
+                {"detail": "One or more departments do not exist or are inactive."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        profile.departments.set(departments)
+
+    selected = profile.departments.filter(is_active=True).order_by("name")
+    return Response({
+        "results": [
+            {
+                "id": department.id,
+                "name": department.name,
+                "code": department.code,
+            }
+            for department in selected
+        ],
+    })
+
+
+@api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def institution_attendance_weekly_holidays_public(request, username):
+    """
+    Get or update weekly holidays for the institution.
+    Weekday values follow Python convention:
+    Monday=0 ... Sunday=6.
+    """
+
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity__username=username,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    settings_obj = InstitutionAttendanceSettings.objects.filter(
+        institution=institution,
+    ).first()
+
+    if request.method == "GET":
+        weekly_holidays = settings_obj.weekly_holidays if settings_obj else []
+
+        if not isinstance(weekly_holidays, list):
+            weekly_holidays = []
+
+        return Response({
+            "weekly_holidays": weekly_holidays,
+        })
+
+    weekly_holidays = request.data.get("weekly_holidays")
+
+    if not isinstance(weekly_holidays, list):
+        return Response(
+            {"detail": "weekly_holidays must be a list."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        weekly_holidays = sorted(
+            set(int(day) for day in weekly_holidays)
+        )
+    except (TypeError, ValueError):
+        return Response(
+            {"detail": "Weekly holiday values must be integers."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if any(day < 0 or day > 6 for day in weekly_holidays):
+        return Response(
+            {"detail": "Weekly holiday values must be between 0 and 6."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    settings_obj.weekly_holidays = weekly_holidays
+    settings_obj.save(update_fields=["weekly_holidays", "updated_at"])
+
+    return Response({
+        "weekly_holidays": weekly_holidays,
+    })
+
+
+@api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def institution_attendance_holidays_public(request, username):
+    """
+    List or create institution holiday date ranges for an academic session.
+    """
+
+    from datetime import date, timedelta
+
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity__username=username,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "GET":
+        session_id = request.query_params.get("academic_session")
+
+        holidays = InstitutionHoliday.objects.filter(
+            institution=institution,
+            is_active=True,
+        )
+
+        if session_id:
+            try:
+                holidays = holidays.filter(
+                    academic_session_id=int(session_id)
+                )
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "Invalid academic session."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        holidays = holidays.select_related(
+            "academic_session",
+        ).order_by("from_date", "id")
+
+        return Response({
+            "count": holidays.count(),
+            "results": [
+                {
+                    "id": holiday.id,
+                    "academic_session": (
+                        holiday.academic_session_id
+                    ),
+                    "academic_session_name": (
+                        holiday.academic_session.name
+                        if holiday.academic_session
+                        else None
+                    ),
+                    "from_date": holiday.from_date.isoformat(),
+                    "to_date": holiday.to_date.isoformat(),
+                    "total_days": holiday.total_days,
+                    "name": holiday.name,
+                    "is_active": holiday.is_active,
+                }
+                for holiday in holidays
+            ],
+        })
+
+    data = request.data
+
+    session_id = data.get("academic_session")
+    from_date_raw = data.get("from_date")
+    to_date_raw = data.get("to_date")
+    name = str(data.get("name") or "").strip()
+
+    if not session_id:
+        return Response(
+            {"detail": "Academic session is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        session = InstitutionAcademicSession.objects.get(
+            id=int(session_id),
+            institution=institution,
+            is_active=True,
+        )
+    except (
+        TypeError,
+        ValueError,
+        InstitutionAcademicSession.DoesNotExist,
+    ):
+        return Response(
+            {"detail": "Academic session not found."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not from_date_raw:
+        return Response(
+            {"detail": "From date is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        from_date = date.fromisoformat(str(from_date_raw))
+        to_date = (
+            date.fromisoformat(str(to_date_raw))
+            if to_date_raw
+            else from_date
+        )
+    except ValueError:
+        return Response(
+            {"detail": "Invalid holiday date."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if from_date > to_date:
+        return Response(
+            {"detail": "From date cannot be after to date."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not name:
+        return Response(
+            {"detail": "Holiday name is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if (
+        from_date < session.start_date
+        or to_date > session.end_date
+    ):
+        return Response(
+            {
+                "detail": (
+                    "Holiday dates must be within the academic session."
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    existing_exact = InstitutionHoliday.objects.filter(
+        institution=institution,
+        academic_session=session,
+        from_date=from_date,
+        to_date=to_date,
+    ).first()
+
+    if existing_exact:
+        if existing_exact.is_active:
+            return Response(
+                {
+                    "detail": (
+                        "This holiday already exists for the selected dates."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        existing_exact.name = name
+        existing_exact.is_active = True
+        existing_exact.save(
+            update_fields=["name", "is_active", "updated_at"]
+        )
+        holiday = existing_exact
+    else:
+        overlapping = InstitutionHoliday.objects.filter(
+            institution=institution,
+            academic_session=session,
+            is_active=True,
+            from_date__lte=to_date,
+            to_date__gte=from_date,
+        ).exists()
+
+        if overlapping:
+            return Response(
+                {
+                    "detail": (
+                        "This holiday date range overlaps "
+                        "with an existing holiday."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        holiday = InstitutionHoliday.objects.create(
+            institution=institution,
+            academic_session=session,
+            from_date=from_date,
+            to_date=to_date,
+            name=name,
+            is_active=True,
+        )
+
+
+    return Response(
+        {
+            "id": holiday.id,
+            "academic_session": holiday.academic_session_id,
+            "academic_session_name": session.name,
+            "from_date": holiday.from_date.isoformat(),
+            "to_date": holiday.to_date.isoformat(),
+            "total_days": holiday.total_days,
+            "name": holiday.name,
+            "is_active": holiday.is_active,
+        },
+        status=status.HTTP_201_CREATED,
+    )
