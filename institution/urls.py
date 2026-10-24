@@ -52,6 +52,8 @@ from .views import (
     institution_exam_subjects,
     institution_exam_marks,
     institution_exam_results,
+    institution_public_exam_results,
+    institution_public_exam_list,
     institution_exam_results_send_email,
     institution_exam_publish,
     institution_grade_scales,
@@ -63,6 +65,16 @@ from .views import (
 
 
 urlpatterns = [
+    path(
+        "profile/username/<str:username>/results/exams/",
+        institution_public_exam_list,
+        name="institution-public-exam-list",
+    ),
+    path(
+        "profile/username/<str:username>/results/exams/<int:exam_id>/results/",
+        institution_public_exam_results,
+        name="institution-public-exam-results",
+    ),
     path(
         "profile/username/<str:username>/",
         institution_profile_by_username,

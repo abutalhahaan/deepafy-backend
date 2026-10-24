@@ -7215,6 +7215,81 @@ def institution_exam_publish(request, exam_id):
 
 
 @api_view(["GET"])
+@permission_classes([AllowAny])
+def institution_public_exam_list(request, username):
+    """List only published exams for a public institution profile."""
+    try:
+        profile = InstitutionProfile.objects.get(
+            identity__username=username,
+            identity__is_active=True,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    exams = InstitutionExam.objects.filter(
+        institution=profile,
+        academic_session__institution=profile,
+        academic_level__institution=profile,
+        is_published=True,
+    ).select_related(
+        "academic_session",
+        "academic_level",
+        "grade_scale",
+        "central_exam_type",
+    ).order_by(
+        "-exam_date",
+        "-id",
+    )
+
+    session_id = request.query_params.get("academic_session_id")
+    level_id = request.query_params.get("academic_level_id")
+    academic_period = str(
+        request.query_params.get("academic_period") or ""
+    ).strip()
+
+    if session_id:
+        exams = exams.filter(academic_session_id=session_id)
+    if level_id:
+        exams = exams.filter(academic_level_id=level_id)
+    if academic_period:
+        exams = exams.filter(academic_period=academic_period)
+
+    return Response({
+        "count": exams.count(),
+        "results": [
+            {
+                "id": exam.id,
+                "name": exam.name,
+                "academic_period": exam.academic_period,
+                "category": exam.category,
+                "exam_type": (
+                    exam.central_exam_type.name
+                    if exam.central_exam_type_id
+                    else exam.exam_type
+                ),
+                "exam_date": (
+                    exam.exam_date.isoformat()
+                    if exam.exam_date else None
+                ),
+                "academic_session_id": exam.academic_session_id,
+                "academic_session": exam.academic_session.name,
+                "academic_level_id": exam.academic_level_id,
+                "academic_level": exam.academic_level.name,
+                "grade_scale": (
+                    exam.grade_scale.name if exam.grade_scale else None
+                ),
+                "is_published": True,
+            }
+            for exam in exams
+        ],
+    })
+
+
+@api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def institution_exam_results(request, exam_id):
     """Calculate subject-wise and overall results for an institution exam."""
@@ -7608,6 +7683,405 @@ def institution_exam_results(request, exam_id):
             "pass_rate": pass_rate,
         },
     })
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def institution_public_exam_results(request, username, exam_id):
+    """Calculate subject-wise and overall results for an institution exam."""
+    from decimal import Decimal
+
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity__username=username,
+            identity__is_active=True,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Institution profile not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        exam = InstitutionExam.objects.select_related(
+            "academic_session",
+            "academic_level",
+            "grade_scale",
+        ).get(
+            id=exam_id,
+            institution=institution,
+            academic_session__institution=institution,
+            academic_level__institution=institution,
+            is_published=True,
+        )
+    except InstitutionExam.DoesNotExist:
+        return Response(
+            {"detail": "Exam not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    exam_subjects = list(
+        InstitutionExamSubject.objects.filter(
+            exam=exam,
+        ).select_related("subject").order_by("subject__name", "id")
+    )
+
+    if not exam_subjects:
+        return Response(
+            {
+                "exam_id": exam.id,
+                "exam_name": exam.name,
+                "status": "INCOMPLETE",
+                "detail": "Add at least one subject before calculating results.",
+                "count": 0,
+                "results": [],
+                "statistics": {
+                    "total_students": 0,
+                    "completed": 0,
+                    "incomplete": 0,
+                    "passed": 0,
+                    "failed": 0,
+                    "pass_rate": None,
+                },
+            }
+        )
+
+    enrollments = StudentEnrollment.objects.filter(
+        institution=institution,
+        academic_session=exam.academic_session,
+        status=StudentEnrollment.STATUS_RUNNING,
+    ).select_related("student").prefetch_related("student__profile_photos")
+
+    department_id = request.query_params.get("department_id")
+    if department_id:
+        try:
+            department_id = int(department_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Invalid department_id."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        enrollments = enrollments.filter(department_id=department_id)
+
+    search_query = str(request.query_params.get("search", "")).strip()
+    if search_query:
+        enrollments = enrollments.filter(
+            Q(student__name__icontains=search_query)
+            | Q(roll__icontains=search_query)
+            | Q(student__global_student_id__icontains=search_query)
+        )
+
+    dynamic_enrollment_ids = StudentEnrollmentAcademicValue.objects.filter(
+        academic_level=exam.academic_level,
+        value__iexact=exam.academic_level.name,
+        enrollment__in=enrollments,
+    ).values_list("enrollment_id", flat=True)
+
+    enrollments = list(
+        enrollments.filter(
+            Q(id__in=dynamic_enrollment_ids)
+            | Q(class_name__iexact=exam.academic_level.name)
+        ).order_by("roll", "student__name", "id")
+    )
+
+    enrollment_ids = [item.id for item in enrollments]
+    subject_ids = [item.id for item in exam_subjects]
+
+    saved_marks = {
+        (mark.exam_subject_id, mark.enrollment_id): mark
+        for mark in InstitutionExamMark.objects.filter(
+            exam_subject_id__in=subject_ids,
+            enrollment_id__in=enrollment_ids,
+        )
+    }
+
+    grading_snapshot = exam.grading_snapshot
+    grade_ranges = []
+
+    if grading_snapshot and isinstance(grading_snapshot, dict):
+        grade_ranges = [
+            {
+                "min_percentage": Decimal(item["min_percentage"]),
+                "max_percentage": Decimal(item["max_percentage"]),
+                "grade_name": item["grade_name"],
+                "grade_point": (
+                    Decimal(item["grade_point"])
+                    if item.get("grade_point") is not None
+                    else None
+                ),
+            }
+            for item in grading_snapshot.get("ranges", [])
+        ]
+    elif exam.grade_scale and exam.grade_scale.is_active:
+        grade_ranges = [
+            {
+                "min_percentage": grade_range.min_percentage,
+                "max_percentage": grade_range.max_percentage,
+                "grade_name": grade_range.grade_name,
+                "grade_point": grade_range.grade_point,
+            }
+            for grade_range in exam.grade_scale.ranges.all().order_by(
+                "min_percentage"
+            )
+        ]
+
+    def grade_for_percentage(percentage):
+        for grade_range in grade_ranges:
+            if (
+                grade_range["min_percentage"]
+                <= percentage
+                <= grade_range["max_percentage"]
+            ):
+                return {
+                    "grade": grade_range["grade_name"],
+                    "grade_point": (
+                        str(grade_range["grade_point"])
+                        if grade_range["grade_point"] is not None
+                        else None
+                    ),
+                }
+        return {"grade": None, "grade_point": None}
+
+    results = []
+    completed_count = 0
+    incomplete_count = 0
+    passed_count = 0
+    failed_count = 0
+
+    for enrollment in enrollments:
+        subject_results = []
+        total_obtained = Decimal("0")
+        total_full_marks = Decimal("0")
+        all_subjects_entered = True
+        all_subjects_passed = True
+        subject_grade_points = []
+        all_grade_points_available = bool(grade_ranges)
+
+        for exam_subject in exam_subjects:
+            mark = saved_marks.get((exam_subject.id, enrollment.id))
+            full_marks = exam_subject.full_marks
+            pass_mark = exam_subject.pass_mark
+            total_full_marks += full_marks
+
+            if mark is None:
+                all_subjects_entered = False
+                subject_results.append({
+                    "exam_subject_id": exam_subject.id,
+                    "subject_id": exam_subject.subject_id,
+                    "subject": exam_subject.subject.name,
+                    "marks_obtained": None,
+                    "full_marks": str(full_marks),
+                    "pass_mark": str(pass_mark),
+                    "percentage": None,
+                    "grade": None,
+                    "grade_point": None,
+                    "is_absent": False,
+                    "status": "INCOMPLETE",
+                })
+                continue
+
+            if mark.is_absent:
+                all_subjects_passed = False
+                subject_results.append({
+                    "exam_subject_id": exam_subject.id,
+                    "subject_id": exam_subject.subject_id,
+                    "subject": exam_subject.subject.name,
+                    "marks_obtained": None,
+                    "full_marks": str(full_marks),
+                    "pass_mark": str(pass_mark),
+                    "percentage": None,
+                    "grade": None,
+                    "grade_point": None,
+                    "is_absent": True,
+                    "status": "ABSENT",
+                })
+                continue
+
+            obtained = mark.marks_obtained
+            if obtained is None:
+                all_subjects_entered = False
+                subject_results.append({
+                    "exam_subject_id": exam_subject.id,
+                    "subject_id": exam_subject.subject_id,
+                    "subject": exam_subject.subject.name,
+                    "marks_obtained": None,
+                    "full_marks": str(full_marks),
+                    "pass_mark": str(pass_mark),
+                    "percentage": None,
+                    "grade": None,
+                    "grade_point": None,
+                    "is_absent": False,
+                    "status": "INCOMPLETE",
+                })
+                continue
+
+            total_obtained += obtained
+            percentage = (
+                obtained * Decimal("100") / full_marks
+                if full_marks > 0
+                else Decimal("0")
+            )
+            grade_data = grade_for_percentage(percentage)
+            subject_passed = obtained >= pass_mark
+
+            if not subject_passed:
+                all_subjects_passed = False
+
+            if grade_data["grade_point"] is None:
+                all_grade_points_available = False
+            else:
+                subject_grade_points.append(
+                    Decimal(grade_data["grade_point"])
+                )
+
+            subject_results.append({
+                "exam_subject_id": exam_subject.id,
+                "subject_id": exam_subject.subject_id,
+                "subject": exam_subject.subject.name,
+                "marks_obtained": str(obtained),
+                "full_marks": str(full_marks),
+                "pass_mark": str(pass_mark),
+                "percentage": str(percentage.quantize(Decimal("0.01"))),
+                "grade": grade_data["grade"],
+                "grade_point": grade_data["grade_point"],
+                "is_absent": False,
+                "status": "PASS" if subject_passed else "FAIL",
+            })
+
+        percentage = (
+            total_obtained * Decimal("100") / total_full_marks
+            if total_full_marks > 0
+            else Decimal("0")
+        )
+
+        if not all_subjects_entered:
+            overall_status = "INCOMPLETE"
+            overall_grade = None
+            gpa = None
+            incomplete_count += 1
+        else:
+            completed_count += 1
+            overall_status = "PASS" if all_subjects_passed else "FAIL"
+
+            if all_subjects_passed:
+                passed_count += 1
+            else:
+                failed_count += 1
+
+            overall_grade_data = grade_for_percentage(percentage)
+            overall_grade = overall_grade_data["grade"]
+
+            if (
+                all_subjects_passed
+                and all_grade_points_available
+                and len(subject_grade_points) == len(exam_subjects)
+            ):
+                gpa = str(
+                    (
+                        sum(subject_grade_points) / Decimal(len(subject_grade_points))
+                    ).quantize(Decimal("0.01"))
+                )
+            else:
+                gpa = None
+
+        results.append({
+            "enrollment_id": enrollment.id,
+            "student_name": enrollment.student.name,
+            "profile_photo": next(
+                (
+                    photo.photo.url
+                    for photo in enrollment.student.profile_photos.all()
+                    if photo.is_current and photo.photo
+                ),
+                None,
+            ),
+            "roll": enrollment.roll,
+            "class_name": enrollment.class_name,
+            "section": enrollment.section,
+            "total_obtained": str(total_obtained),
+            "total_full_marks": str(total_full_marks),
+            "percentage": (
+                str(percentage.quantize(Decimal("0.01")))
+                if all_subjects_entered
+                else None
+            ),
+            "grade": overall_grade,
+            "gpa": gpa,
+            "status": overall_status,
+            "subjects": subject_results,
+        })
+
+    # Automatic merit roll: complete results first, then fewer failed
+    # subjects, higher total marks, and higher individual marks.
+    def merit_sort_key(result):
+        subjects = result["subjects"]
+        failed_subjects = sum(
+            1 for subject in subjects
+            if subject.get("status") in ("FAIL", "ABSENT")
+        )
+        subject_marks = sorted(
+            (
+                Decimal(str(subject["marks_obtained"]))
+                if subject.get("marks_obtained") is not None
+                else Decimal("-1")
+                for subject in subjects
+            ),
+            reverse=True,
+        )
+        return (
+            result["status"] == "INCOMPLETE",
+            failed_subjects,
+            -Decimal(result["total_obtained"]),
+            tuple(-mark for mark in subject_marks),
+            result["enrollment_id"],
+        )
+
+    results.sort(key=merit_sort_key)
+    for merit_roll, result in enumerate(results, start=1):
+        result["merit_roll"] = merit_roll
+
+    pass_rate = (
+        str(
+            (
+                Decimal(passed_count) * Decimal("100")
+                / Decimal(completed_count)
+            ).quantize(Decimal("0.01"))
+        )
+        if completed_count
+        else None
+    )
+
+    return Response({
+        "exam_id": exam.id,
+        "exam_name": exam.name,
+        "category": exam.category,
+        "academic_session_id": exam.academic_session_id,
+        "academic_level_id": exam.academic_level_id,
+        "grade_scale_id": (
+            grading_snapshot.get("grade_scale_id")
+            if grading_snapshot
+            else exam.grade_scale_id
+        ),
+        "grade_scale": (
+            grading_snapshot.get("name")
+            if grading_snapshot
+            else (exam.grade_scale.name if exam.grade_scale else None)
+        ),
+        "status": "CALCULATED",
+        "count": len(results),
+        "results": results,
+        "statistics": {
+            "total_students": len(results),
+            "completed": completed_count,
+            "incomplete": incomplete_count,
+            "passed": passed_count,
+            "failed": failed_count,
+            "pass_rate": pass_rate,
+        },
+    })
+
+
 
 
 @api_view(["POST"])
