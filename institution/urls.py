@@ -10,6 +10,13 @@ from .views import (
     institution_student_create,
     institution_student_enrollment,
     institution_attendance_monthly,
+    institution_student_attendance_save,
+    institution_attendance_monthly_public,
+    institution_academic_sessions_public,
+    institution_selected_departments_public,
+    institution_attendance_weekly_holidays_public,
+    institution_attendance_holidays_public,
+    institution_staff_attendance_monthly_public,
     institution_staff_attendance_monthly,
     institution_staff_attendance_save,
     institution_attendance_holidays,
@@ -82,9 +89,44 @@ urlpatterns = [
         name="institution-student-create",
     ),
     path(
+        "profile/username/<str:username>/sessions/",
+        institution_academic_sessions_public,
+        name="institution-academic-sessions-public",
+    ),
+    path(
+        "profile/username/<str:username>/selected-departments/",
+        institution_selected_departments_public,
+        name="institution-selected-departments-public",
+    ),
+    path(
+        "profile/username/<str:username>/attendance/weekly-holidays/",
+        institution_attendance_weekly_holidays_public,
+        name="institution-attendance-weekly-holidays-public",
+    ),
+    path(
+        "profile/username/<str:username>/attendance/holidays/",
+        institution_attendance_holidays_public,
+        name="institution-attendance-holidays-public",
+    ),
+    path(
+        "profile/username/<str:username>/attendance/monthly/",
+        institution_attendance_monthly_public,
+        name="institution-attendance-monthly-public",
+    ),
+    path(
+        "profile/username/<str:username>/attendance/staff-monthly/",
+        institution_staff_attendance_monthly_public,
+        name="institution-staff-attendance-monthly-public",
+    ),
+    path(
         "attendance/monthly/",
         institution_attendance_monthly,
         name="institution-attendance-monthly",
+    ),
+    path(
+        "attendance/student/",
+        institution_student_attendance_save,
+        name="institution-student-attendance-save",
     ),
     path(
         "attendance/staff-monthly/",
