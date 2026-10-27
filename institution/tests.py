@@ -448,6 +448,201 @@ class InstitutionResultsAPITests(APITestCase):
 
         self.client.force_authenticate(user=self.owner)
 
+
+
+    def test_department_settings_owner_can_update_all_permissions(self):
+        from institution.models import Department
+
+        department = Department.objects.create(
+            name="Settings Owner Test Department"
+        )
+        self.institution.departments.add(department)
+
+        payload = {
+            "can_manage_students": True,
+            "can_manage_subjects": True,
+            "can_manage_attendance": False,
+            "can_manage_marks": True,
+            "can_manage_results": False,
+            "can_publish_results": True,
+        }
+
+        response = self.client.put(
+            reverse("institution-department-settings", args=[department.id]),
+            payload,
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+
+        for field, expected in payload.items():
+            self.assertEqual(response.data[field], expected)
+
+        response = self.client.get(
+            reverse("institution-department-settings", args=[department.id])
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        for field, expected in payload.items():
+            self.assertEqual(response.data[field], expected)
+
+    def test_other_institution_owner_cannot_access_department_settings(self):
+        from institution.models import Department
+
+        department = Department.objects.create(
+            name="Settings Restricted Department"
+        )
+        self.institution.departments.add(department)
+
+        self.client.force_authenticate(user=self.other_owner)
+        response = self.client.put(
+            reverse("institution-department-settings", args=[department.id]),
+            {"can_manage_marks": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 404, response.data)
+
+    def test_department_admin_cannot_update_department_settings(self):
+        from institution.models import Department, InstitutionDepartmentAdmin
+
+        department = Department.objects.create(
+            name="Settings Admin Restricted Department"
+        )
+        self.institution.departments.add(department)
+
+        admin = UserIdentity.objects.create(
+            email="settings-department-admin@example.com",
+            username="settings_department_admin",
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=department,
+            identity=admin,
+            assigned_by=self.owner,
+        )
+
+        self.client.force_authenticate(user=admin)
+        response = self.client.put(
+            reverse("institution-department-settings", args=[department.id]),
+            {"can_manage_marks": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403, response.data)
+
+    def test_department_admin_can_only_list_marks_for_assigned_department(self):
+        from institution.models import (
+            Department,
+            InstitutionDepartmentAdmin,
+            Student,
+            StudentEnrollment,
+        )
+
+        own_department = Department.objects.create(name="Results Own Department")
+        other_department = Department.objects.create(name="Results Other Department")
+        self.institution.departments.add(own_department, other_department)
+
+        admin = UserIdentity.objects.create(
+            email="results-department-admin@example.com",
+            username="results_department_admin",
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=own_department,
+            identity=admin,
+            assigned_by=self.owner,
+        )
+
+        from institution.models import InstitutionDepartmentSettings
+
+        InstitutionDepartmentSettings.objects.update_or_create(
+            institution=self.institution,
+            department=own_department,
+            defaults={"can_manage_marks": True},
+        )
+
+        exam_subject, own_enrollment = self._create_exam_subject_and_enrollment()
+        own_enrollment.department = own_department
+        own_enrollment.save(update_fields=["department"])
+
+        other_student = Student.objects.create(
+            global_student_id="RST-000099",
+            name="Other Department Student",
+        )
+        other_enrollment = StudentEnrollment.objects.create(
+            student=other_student,
+            institution=self.institution,
+            academic_session=self.session,
+            class_name=self.level.name,
+            roll="99",
+            department=other_department,
+        )
+
+        self.client.force_authenticate(user=admin)
+        response = self.client.get(
+            reverse("institution-exam-marks", args=[exam_subject.id])
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        returned_ids = {
+            row["enrollment_id"] for row in response.data["results"]
+        }
+        self.assertIn(own_enrollment.id, returned_ids)
+        self.assertNotIn(other_enrollment.id, returned_ids)
+
+    def test_department_admin_cannot_save_marks_for_another_department(self):
+        from institution.models import (
+            Department,
+            InstitutionDepartmentAdmin,
+            Student,
+            StudentEnrollment,
+            InstitutionExamMark,
+        )
+
+        own_department = Department.objects.create(name="Marks Own Department")
+        other_department = Department.objects.create(name="Marks Other Department")
+        self.institution.departments.add(own_department, other_department)
+
+        admin = UserIdentity.objects.create(
+            email="marks-department-admin@example.com",
+            username="marks_department_admin",
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=own_department,
+            identity=admin,
+            assigned_by=self.owner,
+        )
+
+        exam_subject, _ = self._create_exam_subject_and_enrollment()
+        other_student = Student.objects.create(
+            global_student_id="RST-000098",
+            name="Forbidden Marks Student",
+        )
+        other_enrollment = StudentEnrollment.objects.create(
+            student=other_student,
+            institution=self.institution,
+            academic_session=self.session,
+            class_name=self.level.name,
+            roll="98",
+            department=other_department,
+        )
+
+        self.client.force_authenticate(user=admin)
+        response = self.client.post(
+            reverse("institution-exam-marks", args=[exam_subject.id]),
+            {
+                "enrollment_id": other_enrollment.id,
+                "marks_obtained": "80",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403, response.data)
+        self.assertFalse(
+            InstitutionExamMark.objects.filter(
+                exam_subject=exam_subject,
+                enrollment=other_enrollment,
+            ).exists()
+        )
+
     def test_class_subject_assignment_and_listing(self):
         response = self.client.post(
             reverse("institution-class-subjects"),
@@ -776,6 +971,164 @@ class InstitutionResultsAPITests(APITestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+
+    def test_department_admin_cannot_list_other_department_marks(self):
+        from institution.models import (
+            Department,
+            InstitutionDepartmentAdmin,
+            Student,
+            StudentEnrollment,
+        )
+
+        own_department = Department.objects.create(name="Marks Access Own")
+        other_department = Department.objects.create(name="Marks Access Other")
+        self.institution.departments.add(own_department, other_department)
+
+        admin = UserIdentity.objects.create(
+            email="marks-access-admin@example.com",
+            username="marks_access_admin",
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=own_department,
+            identity=admin,
+            assigned_by=self.owner,
+        )
+
+        from institution.models import InstitutionDepartmentSettings
+
+        InstitutionDepartmentSettings.objects.update_or_create(
+            institution=self.institution,
+            department=own_department,
+            defaults={"can_manage_marks": True},
+        )
+
+        exam_subject, own_enrollment = self._create_exam_subject_and_enrollment()
+        own_enrollment.department = own_department
+        own_enrollment.save(update_fields=["department"])
+
+        other_student = Student.objects.create(
+            global_student_id="RST-000097",
+            name="Other Department Marks Student",
+        )
+        other_enrollment = StudentEnrollment.objects.create(
+            student=other_student,
+            institution=self.institution,
+            academic_session=self.session,
+            class_name=self.level.name,
+            roll="97",
+            department=other_department,
+        )
+
+        self.client.force_authenticate(user=admin)
+        response = self.client.get(
+            reverse("institution-exam-marks", args=[exam_subject.id])
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        returned_ids = {
+            row["enrollment_id"] for row in response.data["results"]
+        }
+        self.assertIn(own_enrollment.id, returned_ids)
+        self.assertNotIn(other_enrollment.id, returned_ids)
+
+    def test_department_admin_can_list_only_assigned_department_subjects(self):
+        from institution.models import (
+            Department,
+            InstitutionDepartmentAdmin,
+            InstitutionClassSubject,
+        )
+
+        own_department = Department.objects.create(name="Subjects Access Own")
+        other_department = Department.objects.create(name="Subjects Access Other")
+        self.institution.departments.add(own_department, other_department)
+
+        admin = UserIdentity.objects.create(
+            email="subjects-access-admin@example.com",
+            username="subjects_access_admin",
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=own_department,
+            identity=admin,
+            assigned_by=self.owner,
+        )
+
+        from institution.models import InstitutionDepartmentSettings
+
+        InstitutionDepartmentSettings.objects.create(
+            institution=self.institution,
+            department=own_department,
+            can_manage_subjects=True,
+        )
+
+        own_assignment = InstitutionClassSubject.objects.create(
+            institution=self.institution,
+            academic_level=self.level,
+            department=own_department,
+            subject=self.subject,
+            is_active=True,
+        )
+        other_subject = type(self.subject).objects.create(
+            name="Other Department Test Subject",
+            code="ODTS",
+            is_active=True,
+        )
+        other_assignment = InstitutionClassSubject.objects.create(
+            institution=self.institution,
+            academic_level=self.level,
+            department=other_department,
+            subject=other_subject,
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=admin)
+        response = self.client.get(
+            reverse("institution-class-subjects"),
+            {"academic_level_id": self.level.id},
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        returned_ids = {item["id"] for item in response.data["results"]}
+        self.assertIn(own_assignment.id, returned_ids)
+        self.assertNotIn(other_assignment.id, returned_ids)
+
+    def test_department_admin_cannot_assign_subject_to_another_department(self):
+        from institution.models import Department, InstitutionDepartmentAdmin
+
+        own_department = Department.objects.create(name="Subjects Write Own")
+        other_department = Department.objects.create(name="Subjects Write Other")
+        self.institution.departments.add(own_department, other_department)
+
+        admin = UserIdentity.objects.create(
+            email="subjects-write-admin@example.com",
+            username="subjects_write_admin",
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=own_department,
+            identity=admin,
+            assigned_by=self.owner,
+        )
+
+        self.client.force_authenticate(user=admin)
+        response = self.client.post(
+            reverse("institution-class-subjects"),
+            {
+                "academic_level_id": self.level.id,
+                "department_id": other_department.id,
+                "subjects": [
+                    {
+                        "subject_id": self.subject.id,
+                        "full_marks": 100,
+                        "pass_mark": 33,
+                    }
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403, response.data)
     def test_grade_scale_can_be_created_and_listed(self):
         response = self.client.post(
             reverse("institution-grade-scales"),
@@ -1565,6 +1918,174 @@ class InstitutionResultsAPITests(APITestCase):
         exam = InstitutionExam.objects.get(id=exam_subject.exam_id)
         self.assertTrue(exam.is_published)
 
+
+    def _create_publish_department_admin(self, can_publish=True):
+        from institution.models import (
+            Department,
+            InstitutionDepartmentAdmin,
+            InstitutionDepartmentSettings,
+        )
+
+        department = Department.objects.create(
+            name="Publish Test Department"
+        )
+        self.institution.departments.add(department)
+
+        admin = UserIdentity.objects.create(
+            email="publish-department-admin@example.com",
+            username="publish_department_admin",
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=department,
+            identity=admin,
+            assigned_by=self.owner,
+        )
+        InstitutionDepartmentSettings.objects.create(
+            institution=self.institution,
+            department=department,
+            can_publish_results=can_publish,
+        )
+        return admin, department
+
+    def test_department_admin_can_publish_and_unpublish_own_department_exam(self):
+        from institution.models import (
+            InstitutionExam,
+            InstitutionExamMark,
+            InstitutionGradeScale,
+            InstitutionGradeRange,
+        )
+
+        exam_subject, enrollment = self._create_exam_subject_and_enrollment()
+        admin, department = self._create_publish_department_admin(
+            can_publish=True
+        )
+        enrollment.department = department
+        enrollment.save(update_fields=["department"])
+
+        scale = InstitutionGradeScale.objects.create(
+            institution=self.institution,
+            name="Department Publish Test Scale",
+        )
+        InstitutionGradeRange.objects.create(
+            grade_scale=scale,
+            grade_name="F",
+            min_percentage="0.00",
+            max_percentage="39.99",
+            grade_point="0",
+        )
+        InstitutionGradeRange.objects.create(
+            grade_scale=scale,
+            grade_name="A",
+            min_percentage="40.00",
+            max_percentage="100.00",
+            grade_point="5",
+        )
+        exam = exam_subject.exam
+        exam.grade_scale = scale
+        exam.save(update_fields=["grade_scale"])
+
+        InstitutionExamMark.objects.create(
+            exam_subject=exam_subject,
+            enrollment=enrollment,
+            marks_obtained=80,
+        )
+
+        self.client.force_authenticate(user=admin)
+
+        publish_response = self.client.post(
+            reverse("institution-exam-publish", args=[exam.id]),
+            {"is_published": True},
+            format="json",
+        )
+        self.assertEqual(
+            publish_response.status_code, 200, publish_response.data
+        )
+        self.assertTrue(publish_response.data["is_published"])
+
+        unpublish_response = self.client.post(
+            reverse("institution-exam-publish", args=[exam.id]),
+            {"is_published": False},
+            format="json",
+        )
+        self.assertEqual(
+            unpublish_response.status_code, 200, unpublish_response.data
+        )
+        self.assertFalse(unpublish_response.data["is_published"])
+
+        exam.refresh_from_db()
+        self.assertFalse(exam.is_published)
+
+    def test_department_admin_cannot_publish_without_permission(self):
+        exam_subject, enrollment = self._create_exam_subject_and_enrollment()
+        admin, department = self._create_publish_department_admin(
+            can_publish=False
+        )
+        enrollment.department = department
+        enrollment.save(update_fields=["department"])
+
+        self.client.force_authenticate(user=admin)
+        for publish_value in (True, False):
+            with self.subTest(is_published=publish_value):
+                response = self.client.post(
+                    reverse(
+                        "institution-exam-publish",
+                        args=[exam_subject.exam_id],
+                    ),
+                    {"is_published": publish_value},
+                    format="json",
+                )
+                self.assertEqual(
+                    response.status_code, 403, response.data
+                )
+
+    def test_department_admin_cannot_publish_exam_with_multiple_departments(self):
+        from institution.models import (
+            Department,
+            Student,
+            StudentEnrollment,
+        )
+
+        exam_subject, enrollment = self._create_exam_subject_and_enrollment()
+        admin, assigned_department = self._create_publish_department_admin(
+            can_publish=True
+        )
+        other_department = Department.objects.create(
+            name="Other Publish Test Department"
+        )
+        self.institution.departments.add(other_department)
+
+        enrollment.department = assigned_department
+        enrollment.save(update_fields=["department"])
+
+        other_student = Student.objects.create(
+            global_student_id="RST-000002",
+            name="Other Department Student",
+        )
+        StudentEnrollment.objects.create(
+            student=other_student,
+            institution=self.institution,
+            academic_session=self.session,
+            class_name=self.level.name,
+            roll="2",
+            department=other_department,
+        )
+
+        self.client.force_authenticate(user=admin)
+        for publish_value in (True, False):
+            with self.subTest(is_published=publish_value):
+                response = self.client.post(
+                    reverse(
+                        "institution-exam-publish",
+                        args=[exam_subject.exam_id],
+                    ),
+                    {"is_published": publish_value},
+                    format="json",
+                )
+                self.assertEqual(
+                    response.status_code, 403, response.data
+                )
+
     def test_grading_snapshot_survives_scale_edit_unpublish_and_republish(self):
         from institution.models import (
             InstitutionExam,
@@ -1983,6 +2504,297 @@ class InstitutionResultsAPITests(APITestCase):
             [(name, str(point)) for name, point in restored],
             [("A", "5.00"), ("B", "4.00"), ("F", "0.00")],
         )
+
+
+    def _create_department_admin_for_access_test(
+        self, *, can_manage_students=False, can_manage_attendance=False
+    ):
+        from institution.models import (
+            Department,
+            InstitutionDepartmentAdmin,
+            InstitutionDepartmentSettings,
+        )
+
+        department = Department.objects.create(
+            name="Access Test Department"
+        )
+        self.institution.departments.add(department)
+
+        admin = UserIdentity.objects.create(
+            email="access-department-admin@example.com",
+            username="access_department_admin",
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=department,
+            identity=admin,
+            assigned_by=self.owner,
+        )
+        InstitutionDepartmentSettings.objects.create(
+            institution=self.institution,
+            department=department,
+            can_manage_students=can_manage_students,
+            can_manage_attendance=can_manage_attendance,
+        )
+        return admin, department
+
+    def test_department_admin_student_endpoints_require_permission(self):
+        admin, _department = self._create_department_admin_for_access_test()
+        self.client.force_authenticate(user=admin)
+
+        create_response = self.client.get(
+            reverse("institution-student-create")
+        )
+        self.assertEqual(create_response.status_code, 403, create_response.data)
+
+        enrollment_response = self.client.get(
+            reverse("institution-student-enrollment"),
+            {"global_student_id": "UNKNOWN-STUDENT"},
+        )
+        self.assertEqual(
+            enrollment_response.status_code, 403, enrollment_response.data
+        )
+
+    def test_department_admin_can_list_students_only_in_assigned_department(self):
+        from institution.models import (
+            Student,
+            StudentEnrollment,
+            StudentInstitutionIdentity,
+        )
+
+        admin, own_department = self._create_department_admin_for_access_test(
+            can_manage_students=True
+        )
+        other_department = self._create_extra_department_for_access_test()
+
+        own_student = Student.objects.create(
+            global_student_id="RST-OWN-001",
+            name="Own Department Student",
+        )
+        StudentInstitutionIdentity.objects.create(
+            student=own_student,
+            institution=self.institution,
+            global_student_id=own_student.global_student_id,
+        )
+        StudentEnrollment.objects.create(
+            student=own_student,
+            institution=self.institution,
+            academic_session=self.session,
+            class_name=self.level.name,
+            department=own_department,
+            roll="1",
+        )
+
+        other_student = Student.objects.create(
+            global_student_id="RST-OTHER-001",
+            name="Other Department Student",
+        )
+        StudentInstitutionIdentity.objects.create(
+            student=other_student,
+            institution=self.institution,
+            global_student_id=other_student.global_student_id,
+        )
+        StudentEnrollment.objects.create(
+            student=other_student,
+            institution=self.institution,
+            academic_session=self.session,
+            class_name=self.level.name,
+            department=other_department,
+            roll="2",
+        )
+
+        self.client.force_authenticate(user=admin)
+        response = self.client.get(reverse("institution-student-create"))
+
+        self.assertEqual(response.status_code, 200, response.data)
+        returned_ids = {
+            student["global_student_id"]
+            for student in response.data["students"]
+        }
+        self.assertIn(own_student.global_student_id, returned_ids)
+        self.assertNotIn(other_student.global_student_id, returned_ids)
+
+    def test_department_admin_cannot_access_other_department_student_enrollment(self):
+        from institution.models import (
+            Student,
+            StudentEnrollment,
+            StudentInstitutionIdentity,
+        )
+
+        admin, _own_department = self._create_department_admin_for_access_test(
+            can_manage_students=True
+        )
+        other_department = self._create_extra_department_for_access_test()
+
+        student = Student.objects.create(
+            global_student_id="RST-OTHER-002",
+            name="Restricted Department Student",
+        )
+        StudentInstitutionIdentity.objects.create(
+            student=student,
+            institution=self.institution,
+            global_student_id=student.global_student_id,
+        )
+        StudentEnrollment.objects.create(
+            student=student,
+            institution=self.institution,
+            academic_session=self.session,
+            class_name=self.level.name,
+            department=other_department,
+            roll="3",
+        )
+
+        self.client.force_authenticate(user=admin)
+        response = self.client.get(
+            reverse("institution-student-enrollment"),
+            {"global_student_id": student.global_student_id},
+        )
+
+        self.assertEqual(response.status_code, 403, response.data)
+
+    def test_department_admin_attendance_endpoints_require_permission(self):
+        admin, _department = self._create_department_admin_for_access_test()
+        self.client.force_authenticate(user=admin)
+
+        monthly_response = self.client.get(
+            reverse("institution-attendance-monthly"),
+            {"year": 2026, "month": 10},
+        )
+        self.assertEqual(
+            monthly_response.status_code, 403, monthly_response.data
+        )
+
+        save_response = self.client.post(
+            reverse("institution-student-attendance-save"),
+            {"date": "2026-10-25", "enrollment_id": 999999, "status": "P"},
+            format="json",
+        )
+        self.assertEqual(save_response.status_code, 403, save_response.data)
+
+    def test_department_admin_cannot_change_attendance_for_other_department(self):
+        from datetime import date
+        from institution.models import StudentEnrollment
+
+        admin, assigned_department = self._create_department_admin_for_access_test(
+            can_manage_attendance=True
+        )
+        _exam_subject, enrollment = self._create_exam_subject_and_enrollment()
+
+        other_department = self._create_extra_department_for_access_test()
+        enrollment.department = other_department
+        enrollment.save(update_fields=["department"])
+
+        self.client.force_authenticate(user=admin)
+        response = self.client.post(
+            reverse("institution-student-attendance-save"),
+            {
+                "date": date.today().isoformat(),
+                "enrollment_id": enrollment.id,
+                "status": "P",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 404, response.data)
+
+    def test_department_admin_can_save_attendance_in_assigned_department(self):
+        from datetime import date
+        from institution.models import StudentAttendance
+
+        admin, department = self._create_department_admin_for_access_test(
+            can_manage_attendance=True
+        )
+        _exam_subject, enrollment = self._create_exam_subject_and_enrollment()
+        enrollment.department = department
+        enrollment.save(update_fields=["department"])
+
+        self.client.force_authenticate(user=admin)
+        response = self.client.post(
+            reverse("institution-student-attendance-save"),
+            {
+                "date": date.today().isoformat(),
+                "enrollment_id": enrollment.id,
+                "status": "P",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertTrue(
+            StudentAttendance.objects.filter(
+                enrollment=enrollment,
+                date=date.today(),
+                status="P",
+            ).exists()
+        )
+
+    def test_department_admin_can_save_marks_in_assigned_department(self):
+        from institution.models import (
+            InstitutionDepartmentSettings,
+            InstitutionExamMark,
+        )
+
+        admin, department = self._create_department_admin_for_access_test()
+        InstitutionDepartmentSettings.objects.update_or_create(
+            institution=self.institution,
+            department=department,
+            defaults={"can_manage_marks": True},
+        )
+        exam_subject, enrollment = self._create_exam_subject_and_enrollment()
+        enrollment.department = department
+        enrollment.save(update_fields=["department"])
+
+        self.client.force_authenticate(user=admin)
+        response = self.client.post(
+            reverse("institution-exam-marks", args=[exam_subject.id]),
+            {
+                "enrollment_id": enrollment.id,
+                "marks_obtained": "75",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertTrue(
+            InstitutionExamMark.objects.filter(
+                exam_subject=exam_subject,
+                enrollment=enrollment,
+                marks_obtained=75,
+            ).exists()
+        )
+
+    def test_department_admin_can_access_results_for_assigned_department(self):
+        from institution.models import InstitutionDepartmentSettings
+
+        admin, department = self._create_department_admin_for_access_test()
+        InstitutionDepartmentSettings.objects.update_or_create(
+            institution=self.institution,
+            department=department,
+            defaults={"can_manage_results": True},
+        )
+        exam_subject, enrollment = self._create_exam_subject_and_enrollment()
+        enrollment.department = department
+        enrollment.save(update_fields=["department"])
+
+        self.client.force_authenticate(user=admin)
+        response = self.client.get(
+            reverse("institution-exam-results", args=[exam_subject.exam_id])
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        returned_ids = {
+            item["enrollment_id"] for item in response.data["results"]
+        }
+        self.assertIn(enrollment.id, returned_ids)
+
+    def _create_extra_department_for_access_test(self):
+        from institution.models import Department
+
+        department = Department.objects.create(
+            name="Other Access Test Department"
+        )
+        self.institution.departments.add(department)
+        return department
 
 
 class StudentSubjectAPITests(APITestCase):
