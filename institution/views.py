@@ -19,6 +19,10 @@ from core.views import IsDeepafyAdmin
 from .models import (
     InstitutionTypeGroup,
     InstitutionProfile,
+    InstitutionDepartmentAdmin,
+    InstitutionDepartmentSettings,
+    InstitutionDepartmentProfile,
+    InstitutionDepartmentHistory,
     InstitutionAuthority,
     InstitutionAcademicData,
     InstitutionAcademicLevel,
@@ -50,6 +54,46 @@ from .models import (
     InstitutionGradeScaleVersion,
 )
 from identity.models import UserIdentity, AcademicBackground
+
+
+
+def get_institution_department_access(request):
+    """
+    Return (institution, department, is_owner).
+    Owners have full institution access; department admins are limited
+    to one active department assignment.
+    """
+    institution = InstitutionProfile.objects.filter(
+        identity=request.user,
+        is_active=True,
+    ).first()
+
+    if institution is not None:
+        return institution, None, True
+
+    assignment = (
+        InstitutionDepartmentAdmin.objects
+        .filter(
+            identity=request.user,
+            is_active=True,
+            institution__is_active=True,
+            department__is_active=True,
+        )
+        .select_related("institution", "department")
+        .order_by("id")
+        .first()
+    )
+
+    if assignment is None:
+        return None, None, False
+
+    if not assignment.institution.departments.filter(
+        id=assignment.department_id,
+        is_active=True,
+    ).exists():
+        return None, None, False
+
+    return assignment.institution, assignment.department, False
 
 
 def sync_staff_retirement_status(institution):
@@ -431,6 +475,240 @@ def institution_academic_session_detail(request, session_id):
         "is_active": session.is_active,
     })
 
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_my_department_access(request):
+    """List the current user's assignments or verify password for one department."""
+    assignments = (
+        InstitutionDepartmentAdmin.objects
+        .filter(
+            identity=request.user,
+            is_active=True,
+            institution__is_active=True,
+            department__is_active=True,
+        )
+        .select_related("institution", "department")
+        .order_by("institution__institution_name", "department__name")
+    )
+
+    assignments = [
+        item for item in assignments
+        if item.institution.departments.filter(
+            id=item.department_id,
+            is_active=True,
+        ).exists()
+    ]
+
+    if request.method == "GET":
+        return Response({
+            "results": [
+                {
+                    "institution_username": item.institution.identity.username,
+                    "institution_name": item.institution.institution_name,
+                    "department_id": item.department_id,
+                    "department_name": item.department.name,
+                }
+                for item in assignments
+            ]
+        })
+
+    password = request.data.get("password")
+    department_id = request.data.get("department_id")
+
+    if not isinstance(password, str) or not password:
+        return Response(
+            {"detail": "Password is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        department_id = int(department_id)
+    except (TypeError, ValueError):
+        return Response(
+            {"detail": "A valid department_id is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not request.user.check_password(password):
+        return Response(
+            {"detail": "Invalid password."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    assignment = next(
+        (item for item in assignments if item.department_id == department_id),
+        None,
+    )
+
+    if assignment is None:
+        return Response(
+            {"detail": "You are not an active admin for this department."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    settings_obj = InstitutionDepartmentSettings.objects.filter(
+        institution=assignment.institution,
+        department=assignment.department,
+    ).first()
+
+    return Response({
+        "verified": True,
+        "institution_username": assignment.institution.identity.username,
+        "institution_name": assignment.institution.institution_name,
+        "department_id": assignment.department_id,
+        "department_name": assignment.department.name,
+        "permissions": {
+            "can_manage_students": settings_obj.can_manage_students if settings_obj else False,
+            "can_manage_subjects": settings_obj.can_manage_subjects if settings_obj else False,
+            "can_manage_attendance": settings_obj.can_manage_attendance if settings_obj else False,
+            "can_manage_marks": settings_obj.can_manage_marks if settings_obj else False,
+            "can_manage_results": settings_obj.can_manage_results if settings_obj else False,
+            "can_publish_results": settings_obj.can_publish_results if settings_obj else False,
+        },
+    })
+
+
+@api_view(["GET", "POST", "DELETE"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_department_admins(request):
+    """Manage department-admin assignments for the authenticated institution owner."""
+    try:
+        institution = InstitutionProfile.objects.get(
+            identity=request.user,
+            is_active=True,
+        )
+    except InstitutionProfile.DoesNotExist:
+        return Response(
+            {"detail": "Only an institution owner can manage department admins."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    if request.method == "GET":
+        assignments = (
+            InstitutionDepartmentAdmin.objects
+            .filter(institution=institution, is_active=True)
+            .select_related("department", "identity")
+            .order_by("department__name", "identity__username")
+        )
+        return Response({
+            "results": [
+                {
+                    "id": item.id,
+                    "department_id": item.department_id,
+                    "department_name": item.department.name,
+                    "username": item.identity.username,
+                    "first_name": item.identity.first_name,
+                    "last_name": item.identity.last_name,
+                    "email": item.identity.email,
+                    "is_active": item.is_active,
+                }
+                for item in assignments
+            ],
+        })
+
+    if request.method == "POST":
+        username = str(request.data.get("username") or "").strip()
+        try:
+            department_id = int(request.data.get("department_id"))
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "A valid department_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not username:
+            return Response(
+                {"detail": "An existing Deepafy username is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        department = institution.departments.filter(
+            id=department_id,
+            is_active=True,
+        ).first()
+        if department is None:
+            return Response(
+                {"detail": "Select a department belonging to this institution."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        identity = UserIdentity.objects.filter(
+            username__iexact=username,
+            is_active=True,
+        ).exclude(
+            status__in=[
+                UserIdentity.Status.INACTIVE,
+                UserIdentity.Status.SUSPENDED,
+                UserIdentity.Status.RESTRICTED,
+                UserIdentity.Status.LOCKED,
+                UserIdentity.Status.DEACTIVATED,
+                UserIdentity.Status.DELETED,
+            ],
+        ).first()
+        if identity is None:
+            return Response(
+                {"detail": "No active Deepafy account found for this username."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if identity.pk == request.user.pk:
+            return Response(
+                {"detail": "The institution owner cannot be assigned as a department admin."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        assignment, created = InstitutionDepartmentAdmin.objects.get_or_create(
+            institution=institution,
+            department=department,
+            identity=identity,
+            defaults={"assigned_by": request.user, "is_active": True},
+        )
+        if not created:
+            if assignment.is_active:
+                return Response(
+                    {"detail": "This user is already an admin for this department."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            assignment.is_active = True
+            assignment.assigned_by = request.user
+            assignment.save(update_fields=[
+                "is_active", "assigned_by", "updated_at",
+            ])
+
+        return Response({
+            "id": assignment.id,
+            "department_id": department.id,
+            "department_name": department.name,
+            "username": identity.username,
+            "is_active": assignment.is_active,
+        }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+    try:
+        assignment_id = int(request.data.get("assignment_id"))
+    except (TypeError, ValueError):
+        return Response(
+            {"detail": "A valid assignment_id is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    assignment = InstitutionDepartmentAdmin.objects.filter(
+        id=assignment_id,
+        institution=institution,
+        is_active=True,
+    ).first()
+    if assignment is None:
+        return Response(
+            {"detail": "Active department-admin assignment not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    assignment.is_active = False
+    assignment.save(update_fields=["is_active", "updated_at"])
+    return Response({"detail": "Department admin access revoked."})
 
 
 @api_view(["GET", "PUT"])
@@ -2338,16 +2616,25 @@ def institution_student_create(request):
     Academic enrollment is intentionally NOT created here.
     Enrollment will be added later from the Student Profile.
     """
-    try:
-        institution = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    institution, assigned_department, is_owner = (
+        get_institution_department_access(request)
+    )
+    if institution is None:
         return Response(
-            {"detail": "Institution profile not found."},
-            status=404,
+            {"detail": "Institution profile not found or access denied."},
+            status=403,
         )
+
+    if not is_owner:
+        settings_obj = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=assigned_department,
+        ).first()
+        if not settings_obj or not settings_obj.can_manage_students:
+            return Response(
+                {"detail": "You do not have permission to manage students."},
+                status=403,
+            )
 
     if request.method == "GET":
         global_student_id = str(
@@ -2357,11 +2644,20 @@ def institution_student_create(request):
         # List all students belonging to the current institution.
         # A specific student is returned below when global_student_id is provided.
         if not global_student_id:
-            identities = list(
-                institution.student_identities
-                .select_related("student")
-                .order_by("-id")
+            identities_qs = institution.student_identities.select_related(
+                "student"
             )
+
+            if not is_owner:
+                department_student_ids = StudentEnrollment.objects.filter(
+                    institution=institution,
+                    department=assigned_department,
+                ).values_list("student_id", flat=True)
+                identities_qs = identities_qs.filter(
+                    student_id__in=department_student_ids
+                )
+
+            identities = list(identities_qs.order_by("-id"))
 
             student_ids = [identity.student.id for identity in identities]
 
@@ -2370,6 +2666,11 @@ def institution_student_create(request):
                 .filter(
                     institution=institution,
                     student_id__in=student_ids,
+                    **(
+                        {"department": assigned_department}
+                        if not is_owner
+                        else {}
+                    ),
                 )
                 .select_related(
                     "academic_session",
@@ -2819,16 +3120,25 @@ def institution_student_enrollment(request):
     Enrollment is linked through the student's Global Student ID.
     """
 
-    try:
-        institution = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    institution, assigned_department, is_owner = (
+        get_institution_department_access(request)
+    )
+    if institution is None:
         return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
+            {"detail": "Institution profile not found or access denied."},
+            status=status.HTTP_403_FORBIDDEN,
         )
+
+    if not is_owner:
+        settings_obj = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=assigned_department,
+        ).first()
+        if not settings_obj or not settings_obj.can_manage_students:
+            return Response(
+                {"detail": "You do not have permission to manage students."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
     global_student_id = str(
         request.query_params.get("global_student_id")
@@ -2861,12 +3171,31 @@ def institution_student_enrollment(request):
             status=status.HTTP_403_FORBIDDEN,
         )
 
+    if not is_owner and not StudentEnrollment.objects.filter(
+        student=student,
+        institution=institution,
+        department=assigned_department,
+    ).exists():
+        return Response(
+            {
+                "detail": (
+                    "Student does not belong to your assigned department."
+                )
+            },
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     if request.method == "GET":
         enrollments = (
             StudentEnrollment.objects
             .filter(
                 student=student,
                 institution=institution,
+                **(
+                    {"department": assigned_department}
+                    if not is_owner
+                    else {}
+                ),
             )
             .select_related("academic_session", "department", "previous_institution_profile", "admission_type_master")
             .prefetch_related(
@@ -2971,7 +3300,27 @@ def institution_student_enrollment(request):
     department = None
     department_id = request.data.get("department_id")
 
-    if department_id not in (None, "", 0, "0"):
+    if not is_owner:
+        department = assigned_department
+        if department_id not in (None, "", 0, "0"):
+            try:
+                requested_department_id = int(department_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "Invalid department."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if requested_department_id != assigned_department.id:
+                return Response(
+                    {
+                        "detail": (
+                            "You can manage enrollments only in your "
+                            "assigned department."
+                        )
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+    elif department_id not in (None, "", 0, "0"):
         try:
             department = Department.objects.get(
                 id=int(department_id),
@@ -4354,16 +4703,25 @@ def institution_attendance_monthly(request):
     from calendar import monthrange
     from datetime import date, timedelta
 
-    try:
-        institution = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    institution, assigned_department, is_owner = (
+        get_institution_department_access(request)
+    )
+    if institution is None:
         return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
+            {"detail": "Institution profile not found or access denied."},
+            status=status.HTTP_403_FORBIDDEN,
         )
+
+    if not is_owner:
+        settings_obj = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=assigned_department,
+        ).first()
+        if not settings_obj or not settings_obj.can_manage_attendance:
+            return Response(
+                {"detail": "You do not have permission to manage attendance."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
     try:
         year = int(request.query_params.get("year"))
@@ -4421,6 +4779,11 @@ def institution_attendance_monthly(request):
         )
     )
 
+    if not is_owner:
+        enrollments = enrollments.filter(
+            department=assigned_department,
+        )
+
     if session_id:
         try:
             enrollments = enrollments.filter(
@@ -4442,6 +4805,12 @@ def institution_attendance_monthly(request):
             return Response(
                 {"detail": "Invalid department."},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not is_owner and department_id != assigned_department.id:
+            return Response(
+                {"detail": "You can only access your assigned department."},
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         enrollments = enrollments.filter(
@@ -4706,16 +5075,25 @@ def institution_student_attendance_save(request):
     """Save or update student attendance for today only."""
     from datetime import date
 
-    try:
-        institution = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    institution, assigned_department, is_owner = (
+        get_institution_department_access(request)
+    )
+    if institution is None:
         return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
+            {"detail": "Institution profile not found or access denied."},
+            status=status.HTTP_403_FORBIDDEN,
         )
+
+    if not is_owner:
+        settings_obj = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=assigned_department,
+        ).first()
+        if not settings_obj or not settings_obj.can_manage_attendance:
+            return Response(
+                {"detail": "You do not have permission to manage attendance."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
     try:
         attendance_date = date.fromisoformat(
@@ -4756,10 +5134,15 @@ def institution_student_attendance_save(request):
         )
 
     try:
-        enrollment = StudentEnrollment.objects.get(
+        enrollment_query = StudentEnrollment.objects.filter(
             id=enrollment_id,
             institution=institution,
         )
+        if not is_owner:
+            enrollment_query = enrollment_query.filter(
+                department=assigned_department,
+            )
+        enrollment = enrollment_query.get()
     except StudentEnrollment.DoesNotExist:
         return Response(
             {"detail": "Student enrollment not found."},
@@ -5355,16 +5738,23 @@ def institution_class_student_roster(request):
 @permission_classes([IsAuthenticated])
 def institution_class_subjects(request):
     """List or save subjects and marks for an institution's academic level."""
-    try:
-        institution = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    institution, assigned_department, is_owner = get_institution_department_access(request)
+    if institution is None:
         return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
+            {"detail": "Institution or department-admin access not found."},
+            status=status.HTTP_403_FORBIDDEN,
         )
+
+    if not is_owner:
+        settings_obj = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=assigned_department,
+        ).first()
+        if not settings_obj or not settings_obj.can_manage_subjects:
+            return Response(
+                {"detail": "You do not have permission to manage subjects."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
     if request.method == "GET":
         level_id = request.query_params.get("academic_level_id")
@@ -5387,6 +5777,23 @@ def institution_class_subjects(request):
 
         academic_period = request.query_params.get("academic_period", "")
         department_id = request.query_params.get("department_id")
+
+        if not is_owner:
+            if department_id not in (None, ""):
+                try:
+                    requested_department_id = int(department_id)
+                except (TypeError, ValueError):
+                    return Response(
+                        {"detail": "department_id must be a valid integer."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if requested_department_id != assigned_department.id:
+                    return Response(
+                        {"detail": "You can only access your assigned department."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+            department_id = str(assigned_department.id)
+
         assignments = InstitutionClassSubject.objects.filter(
             institution=institution,
             academic_level=level,
@@ -5434,6 +5841,27 @@ def institution_class_subjects(request):
     level_id = request.data.get("academic_level_id")
     academic_period = str(request.data.get("academic_period") or "").strip()
     department_id = request.data.get("department_id")
+
+    if not is_owner:
+        if department_id in (None, ""):
+            return Response(
+                {"detail": "Department ID is required for department admins."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            requested_department_id = int(department_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "department_id must be a valid integer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if requested_department_id != assigned_department.id:
+            return Response(
+                {"detail": "You can only manage your assigned department."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        department_id = assigned_department.id
+
     department = None
     if department_id not in (None, ""):
         try:
@@ -5660,22 +6088,36 @@ def institution_class_subjects(request):
 @permission_classes([IsAuthenticated])
 def institution_class_subject_detail(request, assignment_id):
     """Deactivate a subject assignment owned by the authenticated institution."""
-    try:
-        institution = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    institution, assigned_department, is_owner = (
+        get_institution_department_access(request)
+    )
+    if institution is None:
         return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
+            {"detail": "Institution profile not found or access denied."},
+            status=status.HTTP_403_FORBIDDEN,
         )
 
+    if not is_owner:
+        settings_obj = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=assigned_department,
+        ).first()
+        if not settings_obj or not settings_obj.can_manage_subjects:
+            return Response(
+                {"detail": "You do not have permission to manage subjects."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
     try:
-        assignment = InstitutionClassSubject.objects.get(
+        assignment_query = InstitutionClassSubject.objects.filter(
             id=assignment_id,
             institution=institution,
         )
+        if not is_owner:
+            assignment_query = assignment_query.filter(
+                department=assigned_department,
+            )
+        assignment = assignment_query.get()
     except InstitutionClassSubject.DoesNotExist:
         return Response(
             {"detail": "Subject assignment not found."},
@@ -5858,15 +6300,25 @@ def institution_exam_types(request):
 @permission_classes([IsAuthenticated])
 def institution_exams(request):
     """List or create examinations for the authenticated institution."""
-    try:
-        institution = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    institution, assigned_department, is_owner = (
+        get_institution_department_access(request)
+    )
+
+    if institution is None:
         return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
+            {"detail": "Institution profile not found or access denied."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    if not is_owner and request.method != "GET":
+        return Response(
+            {
+                "detail": (
+                    "Department Admin can only manage existing exams' "
+                    "marks and results."
+                )
+            },
+            status=status.HTTP_403_FORBIDDEN,
         )
 
     if request.method == "GET":
@@ -5888,8 +6340,8 @@ def institution_exams(request):
                 is_active=True,
             ).order_by("id").first()
 
-        # Auto-create missing exams from saved exam types.
-        if session_id and level_id:
+        # Only the institution owner may auto-create missing exams.
+        if is_owner and session_id and level_id:
             selected_types = CentralExamType.objects.filter(
                 is_active=True,
                 institution_selections__institution=institution,
@@ -6371,16 +6823,23 @@ def institution_exam_subjects(request, exam_id):
 @permission_classes([IsAuthenticated])
 def institution_exam_marks(request, exam_subject_id):
     """List or save student marks for an exam subject."""
-    try:
-        institution = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    institution, assigned_department, is_owner = get_institution_department_access(request)
+    if institution is None:
         return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
+            {"detail": "Institution or department-admin access not found."},
+            status=status.HTTP_403_FORBIDDEN,
         )
+
+    if not is_owner:
+        settings_obj = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=assigned_department,
+        ).first()
+        if not settings_obj or not settings_obj.can_manage_marks:
+            return Response(
+                {"detail": "You do not have permission to manage marks."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
     try:
         exam_subject = InstitutionExamSubject.objects.select_related(
@@ -6407,6 +6866,9 @@ def institution_exam_marks(request, exam_subject_id):
             academic_session=exam.academic_session,
             status=StudentEnrollment.STATUS_RUNNING,
         ).select_related("student")
+
+        if not is_owner:
+            enrollments = enrollments.filter(department=assigned_department)
 
         # Support dynamic academic-level values and legacy class_name values.
         dynamic_enrollment_ids = StudentEnrollmentAcademicValue.objects.filter(
@@ -6500,6 +6962,12 @@ def institution_exam_marks(request, exam_subject_id):
         return Response(
             {"detail": "Student enrollment does not match this exam."},
             status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not is_owner and enrollment.department_id != assigned_department.id:
+        return Response(
+            {"detail": "You can only manage marks for your assigned department."},
+            status=status.HTTP_403_FORBIDDEN,
         )
 
     exam_level = exam_subject.exam.academic_level
@@ -7025,17 +7493,28 @@ def institution_grade_ranges(request, scale_id):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def institution_exam_publish(request, exam_id):
-    """Publish or unpublish results for an institution-owned exam."""
-    try:
-        institution = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    """Publish or unpublish results with owner or department permission."""
+    institution, assigned_department, is_owner = (
+        get_institution_department_access(request)
+    )
+
+    if institution is None:
         return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
+            {"detail": "Institution profile not found or access denied."},
+            status=status.HTTP_403_FORBIDDEN,
         )
+
+    if not is_owner:
+        settings_obj = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=assigned_department,
+        ).first()
+
+        if not settings_obj or not settings_obj.can_publish_results:
+            return Response(
+                {"detail": "You do not have permission to publish or unpublish results."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
     try:
         exam = InstitutionExam.objects.get(
@@ -7056,6 +7535,47 @@ def institution_exam_publish(request, exam_id):
             {"detail": "is_published must be true or false."},
             status=status.HTTP_400_BAD_REQUEST,
         )
+
+    enrollments = StudentEnrollment.objects.filter(
+        institution=institution,
+        academic_session=exam.academic_session,
+        status=StudentEnrollment.STATUS_RUNNING,
+    )
+
+    dynamic_enrollment_ids = StudentEnrollmentAcademicValue.objects.filter(
+        academic_level=exam.academic_level,
+        value__iexact=exam.academic_level.name,
+        enrollment__in=enrollments,
+    ).values_list("enrollment_id", flat=True)
+
+    eligible_enrollments = enrollments.filter(
+        Q(id__in=dynamic_enrollment_ids)
+        | Q(class_name__iexact=exam.academic_level.name)
+    )
+    enrollment_ids = list(
+        eligible_enrollments.values_list("id", flat=True)
+    )
+
+    if not is_owner:
+        eligible_department_ids = set(
+            eligible_enrollments.values_list(
+                "department_id", flat=True
+            ).distinct()
+        )
+        if (
+            not eligible_department_ids
+            or eligible_department_ids != {assigned_department.id}
+        ):
+            return Response(
+                {
+                    "detail": (
+                        "Department Admin can publish or unpublish only "
+                        "an exam whose eligible students all belong to "
+                        "their assigned department."
+                    )
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
     if publish:
         if not exam.grade_scale_id:
@@ -7114,26 +7634,6 @@ def institution_exam_publish(request, exam_id):
                 {"detail": "Add at least one subject before publishing."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        enrollments = StudentEnrollment.objects.filter(
-            institution=institution,
-            academic_session=exam.academic_session,
-            status=StudentEnrollment.STATUS_RUNNING,
-        )
-
-        dynamic_enrollment_ids = StudentEnrollmentAcademicValue.objects.filter(
-            academic_level=exam.academic_level,
-            value__iexact=exam.academic_level.name,
-            enrollment__in=enrollments,
-        ).values_list("enrollment_id", flat=True)
-
-        eligible_enrollments = enrollments.filter(
-            Q(id__in=dynamic_enrollment_ids)
-            | Q(class_name__iexact=exam.academic_level.name)
-        )
-        enrollment_ids = list(
-            eligible_enrollments.values_list("id", flat=True)
-        )
 
         if not enrollment_ids:
             return Response(
@@ -7295,16 +7795,25 @@ def institution_exam_results(request, exam_id):
     """Calculate subject-wise and overall results for an institution exam."""
     from decimal import Decimal
 
-    try:
-        institution = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    institution, assigned_department, is_owner = (
+        get_institution_department_access(request)
+    )
+    if institution is None:
         return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
+            {"detail": "Institution or department-admin access not found."},
+            status=status.HTTP_403_FORBIDDEN,
         )
+
+    if not is_owner:
+        settings_obj = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=assigned_department,
+        ).first()
+        if not settings_obj or not settings_obj.can_manage_results:
+            return Response(
+                {"detail": "You do not have permission to manage results."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
     try:
         exam = InstitutionExam.objects.select_related(
@@ -7355,6 +7864,11 @@ def institution_exam_results(request, exam_id):
         status=StudentEnrollment.STATUS_RUNNING,
     ).select_related("student").prefetch_related("student__profile_photos")
 
+    if not is_owner:
+        enrollments = enrollments.filter(
+            department=assigned_department,
+        )
+
     department_id = request.query_params.get("department_id")
     if department_id:
         try:
@@ -7363,6 +7877,11 @@ def institution_exam_results(request, exam_id):
             return Response(
                 {"detail": "Invalid department_id."},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not is_owner and department_id != assigned_department.id:
+            return Response(
+                {"detail": "You can only access results for your assigned department."},
+                status=status.HTTP_403_FORBIDDEN,
             )
         enrollments = enrollments.filter(department_id=department_id)
 
@@ -9653,3 +10172,323 @@ def institution_attendance_holidays_public(request, username):
         },
         status=status.HTTP_201_CREATED,
     )
+
+
+@api_view(["GET", "PUT"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_department_settings(request, department_id):
+    """Read or update department permissions; only the institution owner may do so."""
+    institution = InstitutionProfile.objects.filter(
+        identity=request.user,
+        is_active=True,
+    ).first()
+
+    if institution is None:
+        return Response(
+            {"detail": "Only an institution owner can manage department settings."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    department = institution.departments.filter(
+        id=department_id,
+        is_active=True,
+    ).first()
+
+    if department is None:
+        return Response(
+            {"detail": "Department not found for this institution."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    permission_fields = (
+        "can_manage_students",
+        "can_manage_subjects",
+        "can_manage_attendance",
+        "can_manage_marks",
+        "can_manage_results",
+        "can_publish_results",
+        "can_manage_profile",
+    )
+
+    settings_obj, _ = InstitutionDepartmentSettings.objects.get_or_create(
+        institution=institution,
+        department=department,
+    )
+
+    if request.method == "PUT":
+        supplied_fields = [
+            field for field in permission_fields if field in request.data
+        ]
+
+        if not supplied_fields:
+            return Response(
+                {"detail": "At least one permission field is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        for field in supplied_fields:
+            if not isinstance(request.data[field], bool):
+                return Response(
+                    {"detail": f"{field} must be true or false."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        for field in supplied_fields:
+            setattr(settings_obj, field, request.data[field])
+
+        settings_obj.save()
+
+    return Response({
+        "department_id": department.id,
+        "department_name": department.name,
+        **{field: getattr(settings_obj, field) for field in permission_fields},
+        "updated_at": settings_obj.updated_at,
+    })
+@api_view(["GET", "POST", "PUT", "DELETE"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+
+def institution_department_history(request, department_id):
+    """List, create, update, or delete history records for a department."""
+    from django.core.exceptions import ValidationError
+    from django.utils.dateparse import parse_date
+
+    institution, assigned_department, is_owner = get_institution_department_access(request)
+
+    if institution is None:
+        return Response(
+            {"detail": "Institution access required."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    department = institution.departments.filter(
+        id=department_id, is_active=True
+    ).first()
+
+    if department is None or (
+        not is_owner
+        and (assigned_department is None or assigned_department.id != department_id)
+    ):
+        return Response(
+            {"detail": "Department not found or access denied."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    can_manage = is_owner
+    if not is_owner:
+        settings_obj = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=department,
+        ).first()
+        can_manage = bool(settings_obj and settings_obj.can_manage_profile)
+
+    if request.method in ("POST", "PUT", "DELETE") and not can_manage:
+        return Response(
+            {"detail": "You do not have permission to manage department history."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    if request.method in ("PUT", "DELETE"):
+        record_id = request.data.get("id") or request.query_params.get("id")
+        if not record_id or not str(record_id).isdigit():
+            return Response(
+                {"detail": "A valid history record id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        record = InstitutionDepartmentHistory.objects.filter(
+            id=int(record_id),
+            institution=institution,
+            department=department,
+        ).first()
+
+        if record is None:
+            return Response(
+                {"detail": "History record not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if request.method == "DELETE":
+            if record.attachment:
+                record.attachment.delete(save=False)
+            record.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        if "event_date" in request.data:
+            event_date = parse_date(str(request.data.get("event_date", "")))
+            if not event_date:
+                return Response(
+                    {"detail": "A valid event_date (YYYY-MM-DD) is required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            record.event_date = event_date
+
+        if "title" in request.data:
+            title = request.data.get("title")
+            if not isinstance(title, str) or not title.strip():
+                return Response(
+                    {"detail": "title must not be empty."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            record.title = title.strip()
+
+        if "description" in request.data:
+            description = request.data.get("description")
+            if not isinstance(description, str):
+                return Response(
+                    {"detail": "description must be a string."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            record.description = description
+
+        uploaded_file = request.FILES.get("attachment")
+        if uploaded_file:
+            if record.attachment:
+                record.attachment.delete(save=False)
+            record.attachment = uploaded_file
+
+        try:
+            record.full_clean()
+            record.save()
+        except ValidationError as exc:
+            return Response(
+                {"detail": exc.message_dict if hasattr(exc, "message_dict") else exc.messages},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response({
+            "id": record.id,
+            "department_id": department.id,
+            "event_date": record.event_date,
+            "title": record.title,
+            "description": record.description,
+            "attachment": request.build_absolute_uri(record.attachment.url) if record.attachment else None,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        })
+
+    if request.method == "POST":
+        event_date = parse_date(str(request.data.get("event_date", "")))
+        title = request.data.get("title")
+        description = request.data.get("description", "")
+
+        if not event_date:
+            return Response(
+                {"detail": "A valid event_date (YYYY-MM-DD) is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not isinstance(title, str) or not title.strip():
+            return Response(
+                {"detail": "title is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not isinstance(description, str):
+            return Response(
+                {"detail": "description must be a string."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        record = InstitutionDepartmentHistory(
+            institution=institution,
+            department=department,
+            event_date=event_date,
+            title=title.strip(),
+            description=description,
+        )
+        uploaded_file = request.FILES.get("attachment")
+        if uploaded_file:
+            record.attachment = uploaded_file
+
+        try:
+            record.full_clean()
+            record.save()
+        except ValidationError as exc:
+            return Response(
+                {"detail": exc.message_dict if hasattr(exc, "message_dict") else exc.messages},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response({
+            "id": record.id,
+            "department_id": department.id,
+            "event_date": record.event_date,
+            "title": record.title,
+            "description": record.description,
+            "attachment": request.build_absolute_uri(record.attachment.url) if record.attachment else None,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        }, status=status.HTTP_201_CREATED)
+
+    records = InstitutionDepartmentHistory.objects.filter(
+        institution=institution,
+        department=department,
+    ).order_by("-event_date", "-created_at")
+
+    return Response({
+        "department_id": department.id,
+        "department_name": department.name,
+        "can_manage_history": can_manage,
+        "results": [{
+            "id": record.id,
+            "event_date": record.event_date,
+            "title": record.title,
+            "description": record.description,
+            "attachment": request.build_absolute_uri(record.attachment.url) if record.attachment else None,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        } for record in records],
+    })
+@api_view(["GET", "PUT"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+
+def institution_department_profile(request, department_id):
+    """Read or update an institution-specific department description."""
+    institution, assigned_department, is_owner = get_institution_department_access(request)
+
+    if institution is None:
+        return Response({"detail": "Institution access required."}, status=status.HTTP_403_FORBIDDEN)
+
+    department = institution.departments.filter(id=department_id, is_active=True).first()
+    if department is None or (not is_owner and assigned_department.id != department_id):
+        return Response({"detail": "Department not found or access denied."}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == "PUT":
+        if not isinstance(request.data.get("description"), str):
+            return Response({"detail": "description must be a string."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not is_owner:
+            settings_obj = InstitutionDepartmentSettings.objects.filter(
+                institution=institution, department=department
+            ).first()
+            if not settings_obj or not settings_obj.can_manage_profile:
+                return Response({"detail": "You do not have permission to edit this department profile."}, status=status.HTTP_403_FORBIDDEN)
+
+        profile, _ = InstitutionDepartmentProfile.objects.get_or_create(
+            institution=institution, department=department
+        )
+        profile.description = request.data["description"]
+        profile.save(update_fields=["description", "updated_at"])
+    else:
+        profile = InstitutionDepartmentProfile.objects.filter(
+            institution=institution, department=department
+        ).first()
+
+    can_edit_description = is_owner
+    if not is_owner:
+        settings_obj = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=department,
+        ).first()
+        can_edit_description = bool(
+            settings_obj and settings_obj.can_manage_profile
+        )
+
+    return Response({
+        "department_id": department.id,
+        "department_name": department.name,
+        "description": profile.description if profile else "",
+        "updated_at": profile.updated_at if profile else None,
+        "can_edit_description": can_edit_description,
+    })

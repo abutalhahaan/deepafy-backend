@@ -1523,6 +1523,113 @@ class Department(models.Model):
     def __str__(self):
         return self.name
 
+
+class InstitutionDepartmentAdmin(models.Model):
+    institution = models.ForeignKey(
+        InstitutionProfile,
+        on_delete=models.CASCADE,
+        related_name="department_admin_assignments",
+    )
+    department = models.ForeignKey(
+        Department,
+        on_delete=models.PROTECT,
+        related_name="institution_admin_assignments",
+    )
+    identity = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.CASCADE,
+        related_name="institution_department_admin_assignments",
+    )
+    assigned_by = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_department_admin_assignments",
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["department__name", "identity__username"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["institution", "department", "identity"],
+                name="unique_inst_dept_admin_assignment",
+            )
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.identity.username} - "
+            f"{self.department.name} - "
+            f"{self.institution.institution_name}"
+        )
+
+
+
+class InstitutionDepartmentProfile(models.Model):
+    institution = models.ForeignKey(
+        InstitutionProfile,
+        on_delete=models.CASCADE,
+        related_name="department_profiles",
+    )
+    department = models.ForeignKey(
+        Department,
+        on_delete=models.CASCADE,
+        related_name="department_profile_entries",
+    )
+    description = models.TextField(blank=True, default="")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["institution", "department"],
+                name="unique_inst_department_profile",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.institution.institution_name} - {self.department.name}"
+
+
+class InstitutionDepartmentSettings(models.Model):
+    institution = models.ForeignKey(
+        InstitutionProfile,
+        on_delete=models.CASCADE,
+        related_name="department_settings",
+    )
+    department = models.ForeignKey(
+        Department,
+        on_delete=models.CASCADE,
+        related_name="institution_settings",
+    )
+    can_manage_students = models.BooleanField(default=False)
+    can_manage_subjects = models.BooleanField(default=False)
+    can_manage_attendance = models.BooleanField(default=False)
+    can_manage_marks = models.BooleanField(default=False)
+    can_manage_results = models.BooleanField(default=False)
+    can_publish_results = models.BooleanField(default=False)
+    can_manage_profile = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["department__name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["institution", "department"],
+                name="unique_inst_department_settings",
+            )
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.institution.institution_name} - "
+            f"{self.department.name} Settings"
+        )
+
 class StudentSubject(models.Model):
     """
     Independent subject master for student academics.
@@ -1945,3 +2052,32 @@ class InstitutionGradeRange(models.Model):
             f"{self.grade_scale.name}: {self.grade_name} "
             f"({self.min_percentage}-{self.max_percentage}%)"
         )
+
+
+class InstitutionDepartmentHistory(models.Model):
+    institution = models.ForeignKey(
+        InstitutionProfile,
+        on_delete=models.CASCADE,
+        related_name="department_history_entries",
+    )
+    department = models.ForeignKey(
+        Department,
+        on_delete=models.CASCADE,
+        related_name="history_entries",
+    )
+    event_date = models.DateField()
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True, default="")
+    attachment = models.FileField(
+        upload_to="department_history/",
+        blank=True,
+        null=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-event_date", "-created_at"]
+
+    def __str__(self):
+        return f"{self.department.name} - {self.title}"
