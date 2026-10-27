@@ -10444,7 +10444,9 @@ def institution_department_history(request, department_id):
 @permission_classes([IsAuthenticated])
 
 def institution_department_profile(request, department_id):
-    """Read or update an institution-specific department description."""
+    """Read or update an institution-specific department profile."""
+    from datetime import date
+
     institution, assigned_department, is_owner = get_institution_department_access(request)
 
     if institution is None:
@@ -10455,9 +10457,6 @@ def institution_department_profile(request, department_id):
         return Response({"detail": "Department not found or access denied."}, status=status.HTTP_404_NOT_FOUND)
 
     if request.method == "PUT":
-        if not isinstance(request.data.get("description"), str):
-            return Response({"detail": "description must be a string."}, status=status.HTTP_400_BAD_REQUEST)
-
         if not is_owner:
             settings_obj = InstitutionDepartmentSettings.objects.filter(
                 institution=institution, department=department
@@ -10465,15 +10464,62 @@ def institution_department_profile(request, department_id):
             if not settings_obj or not settings_obj.can_manage_profile:
                 return Response({"detail": "You do not have permission to edit this department profile."}, status=status.HTTP_403_FORBIDDEN)
 
+        data = request.data
+        has_description = "description" in data
+        has_established_date = "established_date" in data
+
+        if not has_description and not has_established_date:
+            return Response(
+                {"detail": "Provide description or established_date."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if has_established_date and not is_owner:
+            existing_profile = InstitutionDepartmentProfile.objects.filter(
+                institution=institution,
+                department=department,
+            ).first()
+            if existing_profile and existing_profile.established_date is not None:
+                return Response(
+                    {"detail": "Only the institution owner can change an established date after it has been set."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if data.get("established_date") in (None, ""):
+                return Response(
+                    {"detail": "Department admins cannot clear an established date once set."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        if has_description and not isinstance(data["description"], str):
+            return Response({"detail": "description must be a string."}, status=status.HTTP_400_BAD_REQUEST)
+
+        established_date = None
+        if has_established_date:
+            raw_date = data.get("established_date")
+            if raw_date not in (None, ""):
+                if not isinstance(raw_date, str):
+                    return Response({"detail": "established_date must be YYYY-MM-DD or empty."}, status=status.HTTP_400_BAD_REQUEST)
+                try:
+                    established_date = date.fromisoformat(raw_date)
+                except ValueError:
+                    return Response({"detail": "established_date must be a valid YYYY-MM-DD date."}, status=status.HTTP_400_BAD_REQUEST)
+
         profile, _ = InstitutionDepartmentProfile.objects.get_or_create(
             institution=institution, department=department
         )
-        profile.description = request.data["description"]
-        profile.save(update_fields=["description", "updated_at"])
-    else:
-        profile = InstitutionDepartmentProfile.objects.filter(
-            institution=institution, department=department
-        ).first()
+        update_fields = []
+        if has_description:
+            profile.description = data["description"]
+            update_fields.append("description")
+        if has_established_date:
+            profile.established_date = established_date
+            update_fields.append("established_date")
+        if update_fields:
+            profile.save(update_fields=[*update_fields, "updated_at"])
+
+    profile = InstitutionDepartmentProfile.objects.filter(
+        institution=institution, department=department
+    ).first()
 
     can_edit_description = is_owner
     if not is_owner:
@@ -10481,14 +10527,13 @@ def institution_department_profile(request, department_id):
             institution=institution,
             department=department,
         ).first()
-        can_edit_description = bool(
-            settings_obj and settings_obj.can_manage_profile
-        )
+        can_edit_description = bool(settings_obj and settings_obj.can_manage_profile)
 
     return Response({
         "department_id": department.id,
         "department_name": department.name,
         "description": profile.description if profile else "",
+        "established_date": profile.established_date.isoformat() if profile and profile.established_date else "",
         "updated_at": profile.updated_at if profile else None,
         "can_edit_description": can_edit_description,
     })

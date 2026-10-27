@@ -14,6 +14,10 @@ from institution.models import (
     InstitutionStaffAttendance,
     InstitutionAttendanceSettings,
     InstitutionHoliday,
+    Department,
+    InstitutionDepartmentAdmin,
+    InstitutionDepartmentSettings,
+    InstitutionDepartmentProfile,
 )
 
 
@@ -3196,3 +3200,113 @@ class InstitutionExamTypeAPITests(APITestCase):
                 exam_type=exam_type,
             ).exists()
         )
+
+class InstitutionDepartmentEstablishedDatePermissionTests(APITestCase):
+    def setUp(self):
+        country_model = apps.get_model("organization", "Country")
+        region_model = country_model._meta.get_field(
+            "region"
+        ).remote_field.model
+
+        region = region_model.objects.create(
+            name="Established Date Test Region"
+        )
+        country = country_model.objects.create(
+            region=region,
+            name="Established Date Test Country",
+            code="EDT",
+        )
+        group = InstitutionTypeGroup.objects.create(
+            name="Established Date Test Group"
+        )
+        institution_type = InstitutionType.objects.create(
+            group=group,
+            name="Established Date Test Type",
+        )
+
+        self.owner = UserIdentity.objects.create(
+            email="established-date-owner@example.com",
+            username="established_date_owner",
+        )
+        self.admin = UserIdentity.objects.create(
+            email="established-date-admin@example.com",
+            username="established_date_admin",
+            is_staff=True,
+        )
+        self.institution = InstitutionProfile.objects.create(
+            identity=self.owner,
+            institution_name="Established Date Test Institution",
+            institution_type=institution_type,
+            country=country,
+        )
+        self.department = Department.objects.create(
+            name="Established Date Test Department",
+            code="EDT-DEPT",
+        )
+        self.institution.departments.add(self.department)
+
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=self.department,
+            identity=self.admin,
+            is_active=True,
+        )
+        InstitutionDepartmentSettings.objects.create(
+            institution=self.institution,
+            department=self.department,
+            can_manage_profile=True,
+        )
+        self.url = reverse(
+            "institution-department-profile",
+            kwargs={"department_id": self.department.id},
+        )
+
+    def test_owner_can_set_and_edit_established_date(self):
+        self.client.force_authenticate(user=self.owner)
+
+        first = self.client.put(
+            self.url,
+            {"established_date": "2001-02-03"},
+            format="json",
+        )
+        self.assertEqual(first.status_code, 200, first.data)
+        self.assertEqual(first.data["established_date"], "2001-02-03")
+
+        second = self.client.put(
+            self.url,
+            {"established_date": "2002-03-04"},
+            format="json",
+        )
+        self.assertEqual(second.status_code, 200, second.data)
+        self.assertEqual(second.data["established_date"], "2002-03-04")
+
+    def test_department_admin_can_set_date_once_but_cannot_change_or_clear_it(self):
+        self.client.force_authenticate(user=self.admin)
+
+        first = self.client.put(
+            self.url,
+            {"established_date": "2001-02-03"},
+            format="json",
+        )
+        self.assertEqual(first.status_code, 200, first.data)
+        self.assertEqual(first.data["established_date"], "2001-02-03")
+
+        change = self.client.put(
+            self.url,
+            {"established_date": "2002-03-04"},
+            format="json",
+        )
+        self.assertEqual(change.status_code, 403, change.data)
+
+        clear = self.client.put(
+            self.url,
+            {"established_date": ""},
+            format="json",
+        )
+        self.assertEqual(clear.status_code, 403, clear.data)
+
+        profile = InstitutionDepartmentProfile.objects.get(
+            institution=self.institution,
+            department=self.department,
+        )
+        self.assertEqual(profile.established_date.isoformat(), "2001-02-03")
