@@ -1581,6 +1581,7 @@ class InstitutionDepartmentProfile(models.Model):
         related_name="department_profile_entries",
     )
     description = models.TextField(blank=True, default="")
+    established_date = models.DateField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
