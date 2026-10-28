@@ -167,6 +167,11 @@ urlpatterns = [
         name="personal-tab-colors-update",
     ),
     path(
+        "<int:identity_id>/personal-account/appearance-settings/",
+        views.personal_appearance_settings_update,
+        name="personal-appearance-settings-update",
+    ),
+    path(
         "<int:identity_id>/personal-account/photos/",
         views.personal_account_photos_update,
         name="personal-account-photos-update",
