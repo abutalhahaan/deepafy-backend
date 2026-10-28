@@ -44,6 +44,8 @@ from .views import (
     institution_department_settings,
     institution_department_profile,
     institution_department_history,
+    institution_department_facility_categories,
+    institution_department_facilities,
     institution_department_detail,
     institution_result_period_settings,
     institution_academic_sessions,
@@ -369,6 +371,16 @@ urlpatterns = [
         "departments/<int:department_id>/history/",
         institution_department_history,
         name="institution-department-history",
+    ),
+    path(
+        "departments/<int:department_id>/facility-categories/",
+        institution_department_facility_categories,
+        name="institution-department-facility-categories",
+    ),
+    path(
+        "departments/<int:department_id>/facilities/",
+        institution_department_facilities,
+        name="institution-department-facilities",
     ),
     path(
         "departments/<int:department_id>/",
