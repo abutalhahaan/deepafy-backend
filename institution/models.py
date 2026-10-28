@@ -2082,3 +2082,74 @@ class InstitutionDepartmentHistory(models.Model):
 
     def __str__(self):
         return f"{self.department.name} - {self.title}"
+class InstitutionDepartmentFacilityCategory(models.Model):
+    institution = models.ForeignKey(
+        InstitutionProfile,
+        on_delete=models.CASCADE,
+        related_name="department_facility_categories",
+    )
+    department = models.ForeignKey(
+        Department,
+        on_delete=models.CASCADE,
+        related_name="facility_categories",
+    )
+    name = models.CharField(max_length=100)
+    is_default = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["institution", "department", "name"],
+                name="unique_inst_dept_facility_category",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.department.name} - {self.name}"
+
+
+class InstitutionDepartmentFacility(models.Model):
+    institution = models.ForeignKey(
+        InstitutionProfile,
+        on_delete=models.CASCADE,
+        related_name="department_facilities",
+    )
+    department = models.ForeignKey(
+        Department,
+        on_delete=models.CASCADE,
+        related_name="facilities",
+    )
+    category = models.ForeignKey(
+        InstitutionDepartmentFacilityCategory,
+        on_delete=models.PROTECT,
+        related_name="facilities",
+    )
+    description = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.department.name} - {self.category.name}"
+
+
+class InstitutionDepartmentFacilityPhoto(models.Model):
+    facility = models.ForeignKey(
+        InstitutionDepartmentFacility,
+        on_delete=models.CASCADE,
+        related_name="photos",
+    )
+    image = models.ImageField(upload_to="department_facilities/")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"Facility {self.facility_id} photo"

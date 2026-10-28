@@ -1,4 +1,6 @@
 from institution.models import Department
+from core.services.image_processor import process_image
+
 from rest_framework import status
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import AllowAny
@@ -23,6 +25,9 @@ from .models import (
     InstitutionDepartmentSettings,
     InstitutionDepartmentProfile,
     InstitutionDepartmentHistory,
+    InstitutionDepartmentFacilityCategory,
+    InstitutionDepartmentFacility,
+    InstitutionDepartmentFacilityPhoto,
     InstitutionAuthority,
     InstitutionAcademicData,
     InstitutionAcademicLevel,
@@ -10537,3 +10542,290 @@ def institution_department_profile(request, department_id):
         "updated_at": profile.updated_at if profile else None,
         "can_edit_description": can_edit_description,
     })
+
+FACILITY_DEFAULT_CATEGORIES = [
+    "Laboratories",
+    "Equipment & Instruments",
+    "Classrooms & Academic Spaces",
+    "Research & Learning Resources",
+    "Safety & Support Facilities",
+    "Student Facilities",
+    "Staff & Faculty Facilities",
+    "Sports & Recreation",
+    "Accessibility Facilities",
+    "Storage & Inventory",
+    "Maintenance & Utilities",
+    "Transport & Parking",
+    "Digital & IT Infrastructure",
+    "Library",
+    "Workshops",
+]
+
+
+def _department_facility_access(request, department_id, write=False):
+    institution, assigned_department, is_owner = get_institution_department_access(request)
+    if institution is None:
+        return None, None, Response(
+            {"detail": "Institution access required."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    department = institution.departments.filter(
+        id=department_id, is_active=True
+    ).first()
+    if department is None or (
+        not is_owner and (
+            assigned_department is None
+            or assigned_department.id != department_id
+        )
+    ):
+        return None, None, Response(
+            {"detail": "Department not found or access denied."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if write and not is_owner:
+        settings_obj = InstitutionDepartmentSettings.objects.filter(
+            institution=institution, department=department
+        ).first()
+        if not settings_obj or not settings_obj.can_manage_profile:
+            return None, None, Response(
+                {"detail": "You do not have permission to manage department facilities."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+    return institution, department, None
+
+
+def _facility_category_data(category):
+    return {
+        "id": category.id,
+        "name": category.name,
+        "is_default": category.is_default,
+        "is_active": category.is_active,
+    }
+
+
+def _facility_data(request, facility):
+    return {
+        "id": facility.id,
+        "department_id": facility.department_id,
+        "category": _facility_category_data(facility.category),
+        "description": facility.description,
+        "photos": [
+            {
+                "id": photo.id,
+                "image": request.build_absolute_uri(photo.image.url),
+            }
+            for photo in facility.photos.all()
+        ],
+        "created_at": facility.created_at,
+        "updated_at": facility.updated_at,
+    }
+
+
+@api_view(["GET", "POST", "PUT", "DELETE"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_department_facility_categories(request, department_id):
+    institution, department, error = _department_facility_access(
+        request, department_id, write=request.method != "GET"
+    )
+    if error:
+        return error
+
+    categories = InstitutionDepartmentFacilityCategory.objects.filter(
+        institution=institution, department=department
+    )
+
+    if request.method == "GET":
+        return Response([
+            _facility_category_data(category)
+            for category in categories.filter(is_active=True)
+        ])
+
+    if request.method == "POST":
+        name = request.data.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return Response(
+                {"detail": "A category name is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        category, created = InstitutionDepartmentFacilityCategory.objects.get_or_create(
+            institution=institution,
+            department=department,
+            name=name.strip(),
+            defaults={"is_default": False, "is_active": True},
+        )
+        if not created and not category.is_active:
+            category.is_active = True
+            category.save(update_fields=["is_active", "updated_at"])
+        return Response(
+            _facility_category_data(category),
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    category_id = request.data.get("id") or request.query_params.get("id")
+    if not str(category_id or "").isdigit():
+        return Response(
+            {"detail": "A valid category id is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    category = categories.filter(id=int(category_id)).first()
+    if category is None:
+        return Response({"detail": "Category not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == "PUT":
+        name = request.data.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return Response(
+                {"detail": "A category name is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        category.name = name.strip()
+        try:
+            category.save(update_fields=["name", "updated_at"])
+        except IntegrityError:
+            return Response(
+                {"detail": "A category with this name already exists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(_facility_category_data(category))
+
+    if category.facilities.exists():
+        return Response(
+            {"detail": "This category is in use and cannot be deleted."},
+            status=status.HTTP_409_CONFLICT,
+        )
+    category.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(["GET", "POST", "PUT", "DELETE"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_department_facilities(request, department_id):
+    institution, department, error = _department_facility_access(
+        request, department_id, write=request.method != "GET"
+    )
+    if error:
+        return error
+
+    facilities = InstitutionDepartmentFacility.objects.filter(
+        institution=institution, department=department
+    ).select_related("category").prefetch_related("photos")
+
+    if request.method == "GET":
+        return Response([_facility_data(request, item) for item in facilities])
+
+    if request.method == "POST":
+        category_id = request.data.get("category_id") or request.data.get("category")
+        category = InstitutionDepartmentFacilityCategory.objects.filter(
+            id=category_id,
+            institution=institution,
+            department=department,
+            is_active=True,
+        ).first()
+        if category is None:
+            return Response(
+                {"detail": "Select a valid active category."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        description = request.data.get("description", "")
+        if not isinstance(description, str):
+            return Response(
+                {"detail": "Description must be text."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        facility = InstitutionDepartmentFacility.objects.create(
+            institution=institution,
+            department=department,
+            category=category,
+            description=description,
+        )
+        for uploaded_image in request.FILES.getlist("photos"):
+            try:
+                processed_image = process_image(uploaded_image, preset="editor")
+            except ValueError as error:
+                facility.delete()
+                return Response(
+                    {"detail": str(error)},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            photo = InstitutionDepartmentFacilityPhoto(facility=facility)
+            photo.image.save(
+                processed_image.name,
+                processed_image,
+                save=True,
+            )
+        return Response(
+            _facility_data(request, facility),
+            status=status.HTTP_201_CREATED,
+        )
+
+    facility_id = request.data.get("id") or request.query_params.get("id")
+    if not str(facility_id or "").isdigit():
+        return Response(
+            {"detail": "A valid facility id is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    facility = facilities.filter(id=int(facility_id)).first()
+    if facility is None:
+        return Response(
+            {"detail": "Facility not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "PUT":
+        if "category_id" in request.data or "category" in request.data:
+            category_id = request.data.get("category_id") or request.data.get("category")
+            category = InstitutionDepartmentFacilityCategory.objects.filter(
+                id=category_id,
+                institution=institution,
+                department=department,
+                is_active=True,
+            ).first()
+            if category is None:
+                return Response(
+                    {"detail": "Select a valid active category."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            facility.category = category
+
+        if "description" in request.data:
+            description = request.data.get("description")
+            if not isinstance(description, str):
+                return Response(
+                    {"detail": "Description must be text."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            facility.description = description
+        facility.save()
+
+        for uploaded_image in request.FILES.getlist("photos"):
+            try:
+                processed_image = process_image(uploaded_image, preset="editor")
+            except ValueError as error:
+                return Response(
+                    {"detail": str(error)},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            photo = InstitutionDepartmentFacilityPhoto(facility=facility)
+            photo.image.save(
+                processed_image.name,
+                processed_image,
+                save=True,
+            )
+        return Response(_facility_data(request, facility))
+
+    for photo in facility.photos.all():
+        if photo.image:
+            photo.image.delete(save=False)
+        photo.delete()
+    facility.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
