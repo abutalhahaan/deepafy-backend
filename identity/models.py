@@ -387,6 +387,11 @@ class PersonalAccount(models.Model):
         blank=True,
     )
 
+    appearance_settings = models.JSONField(
+        default=dict,
+        blank=True,
+    )
+
     is_active = models.BooleanField(
         default=True,
     )

@@ -1661,6 +1661,9 @@ def serialize_personal_account(personal_account):
         "tab_colors":
         personal_account.tab_colors,
 
+        "appearance_settings":
+        personal_account.appearance_settings,
+
         "is_active": personal_account.is_active,
 
         "created_at":
@@ -2896,6 +2899,66 @@ def personal_tab_colors_update(
         }
     )
 
+
+
+@csrf_exempt
+@require_http_methods(["PATCH"])
+@require_authentication
+def personal_appearance_settings_update(request, identity_id):
+    personal_account, error_response = (
+        get_authenticated_personal_account(request, identity_id)
+    )
+    if error_response is not None:
+        return error_response
+
+    try:
+        data = json.loads(request.body or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"detail": "Invalid JSON."}, status=400)
+
+    settings = data.get("appearance_settings")
+    if not isinstance(settings, dict):
+        return JsonResponse(
+            {"detail": "appearance_settings must be an object."},
+            status=400,
+        )
+
+    allowed_keys = {
+        "basicInformationTransparent",
+        "presentAddressTransparent",
+        "permanentAddressTransparent",
+        "hobbiesTransparent",
+        "interestedCategoriesTransparent",
+        "freeTimePassingTransparent",
+        "experienceTransparent",
+        "personalResponsibilitiesTransparent",
+        "futureGoalsTransparent",
+        "skillsTransparent",
+        "academicBackgroundTransparent",
+        "jobInterestsTransparent",
+    }
+
+    if any(
+        key not in allowed_keys or not isinstance(value, bool)
+        for key, value in settings.items()
+    ):
+        return JsonResponse(
+            {"detail": "Invalid appearance_settings."},
+            status=400,
+        )
+
+    personal_account.appearance_settings = {
+        **(personal_account.appearance_settings or {}),
+        **settings,
+    }
+    personal_account.save(
+        update_fields=["appearance_settings", "updated_at"]
+    )
+
+    return JsonResponse({
+        "identity_id": personal_account.identity_id,
+        "appearance_settings": personal_account.appearance_settings,
+    })
 
 @csrf_exempt
 @require_http_methods(["POST"])
