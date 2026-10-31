@@ -28,6 +28,10 @@ from .models import (
     InstitutionDepartmentFacilityCategory,
     InstitutionDepartmentFacility,
     InstitutionDepartmentFacilityPhoto,
+    InstitutionDepartmentFacilityLike,
+    InstitutionDepartmentFacilityShare,
+    InstitutionDepartmentFacilityComment,
+
     InstitutionAuthority,
     InstitutionAcademicData,
     InstitutionAcademicLevel,
@@ -10829,3 +10833,179 @@ def institution_department_facilities(request, department_id):
     facility.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
 
+
+
+def _facility_social_author(identity):
+    personal = getattr(identity, "personal_account", None)
+    institution = getattr(identity, "institution_profile", None)
+    return {
+        "identity_id": identity.id,
+        "username": (
+            getattr(personal, "username", None)
+            or getattr(identity, "user_id", "")
+        ),
+        "display_name": (
+            getattr(personal, "display_name", "")
+            or getattr(institution, "institution_name", "")
+            or getattr(identity, "user_id", "")
+        ),
+    }
+
+
+def _facility_social_comment_data(comment):
+    return {
+        "id": comment.id,
+        "facility_id": comment.facility_id,
+        "parent_id": comment.parent_id,
+        "content": comment.content,
+        "author": _facility_social_author(comment.identity),
+        "created_at": comment.created_at,
+        "updated_at": comment.updated_at,
+        "replies": [
+            _facility_social_comment_data(reply)
+            for reply in comment.replies.select_related(
+                "identity",
+                "identity__personal_account",
+                "identity__institution_profile",
+            ).all()
+        ],
+    }
+
+
+def _facility_social_summary(facility, identity):
+    likes = InstitutionDepartmentFacilityLike.objects.filter(
+        facility=facility
+    )
+    comments = InstitutionDepartmentFacilityComment.objects.filter(
+        facility=facility
+    )
+    return {
+        "facility_id": facility.id,
+        "liked": likes.filter(identity=identity).exists(),
+        "like_count": likes.count(),
+        "share_count": InstitutionDepartmentFacilityShare.objects.filter(
+            facility=facility
+        ).count(),
+        "comment_count": comments.count(),
+        "top_level_comment_count": comments.filter(parent__isnull=True).count(),
+    }
+
+
+def _get_social_facility(department_id, facility_id):
+    return InstitutionDepartmentFacility.objects.filter(
+        department_id=department_id,
+        id=facility_id,
+        department__is_active=True,
+    ).select_related(
+        "category",
+        "department",
+        "institution",
+    ).first()
+
+
+@api_view(["GET"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_department_facility_social(request, department_id, facility_id):
+    facility = _get_social_facility(department_id, facility_id)
+    if facility is None:
+        return Response({"detail": "Facility not found."}, status=status.HTTP_404_NOT_FOUND)
+    return Response(_facility_social_summary(facility, request.user))
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_department_facility_like(request, department_id, facility_id):
+    facility = _get_social_facility(department_id, facility_id)
+    if facility is None:
+        return Response({"detail": "Facility not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    like = InstitutionDepartmentFacilityLike.objects.filter(
+        facility=facility,
+        identity=request.user,
+    ).first()
+    if like:
+        like.delete()
+        liked = False
+    else:
+        InstitutionDepartmentFacilityLike.objects.get_or_create(
+            facility=facility,
+            identity=request.user,
+        )
+        liked = True
+
+    result = _facility_social_summary(facility, request.user)
+    result["liked"] = liked
+    return Response(result)
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_department_facility_share(request, department_id, facility_id):
+    facility = _get_social_facility(department_id, facility_id)
+    if facility is None:
+        return Response({"detail": "Facility not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    InstitutionDepartmentFacilityShare.objects.create(
+        facility=facility,
+        identity=request.user,
+    )
+    return Response(_facility_social_summary(facility, request.user), status=status.HTTP_201_CREATED)
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_department_facility_comments(request, department_id, facility_id):
+    facility = _get_social_facility(department_id, facility_id)
+    if facility is None:
+        return Response({"detail": "Facility not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    comments = InstitutionDepartmentFacilityComment.objects.filter(
+        facility=facility,
+    ).select_related(
+        "identity",
+        "identity__personal_account",
+        "identity__institution_profile",
+    ).prefetch_related("replies")
+
+    if request.method == "GET":
+        roots = comments.filter(parent__isnull=True)
+        return Response({
+            "results": [_facility_social_comment_data(item) for item in roots],
+            **_facility_social_summary(facility, request.user),
+        })
+
+    content = request.data.get("content")
+    if not isinstance(content, str) or not content.strip():
+        return Response({"detail": "Comment content is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    parent_id = request.data.get("parent_id")
+    parent = None
+    if parent_id not in (None, ""):
+        try:
+            parent = InstitutionDepartmentFacilityComment.objects.get(
+                id=int(parent_id),
+                facility=facility,
+            )
+        except (InstitutionDepartmentFacilityComment.DoesNotExist, ValueError, TypeError):
+            return Response({"detail": "Parent comment not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    comment = InstitutionDepartmentFacilityComment.objects.create(
+        facility=facility,
+        identity=request.user,
+        parent=parent,
+        content=content.strip(),
+    )
+    comment = InstitutionDepartmentFacilityComment.objects.select_related(
+        "identity",
+        "identity__personal_account",
+        "identity__institution_profile",
+    ).get(id=comment.id)
+
+    return Response({
+        "comment": _facility_social_comment_data(comment),
+        **_facility_social_summary(facility, request.user),
+    }, status=status.HTTP_201_CREATED)
