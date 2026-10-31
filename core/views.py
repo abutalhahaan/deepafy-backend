@@ -1208,35 +1208,78 @@ def message_send(request):
             status=400,
         )
 
-    conversation = (
-        MessageConversation.objects
-        .filter(
-            Q(participant_one=identity, participant_two=receiver)
-            | Q(participant_one=receiver, participant_two=identity)
+    facility_share_data = request.data.get("facility_share")
+    shared_facility = None
+
+    if facility_share_data is not None:
+        if not isinstance(facility_share_data, dict):
+            return Response(
+                {"success": False, "detail": "Invalid facility share data."},
+                status=400,
+            )
+
+        try:
+            share_department_id = int(facility_share_data.get("department_id"))
+            share_facility_id = int(facility_share_data.get("facility_id"))
+        except (TypeError, ValueError):
+            return Response(
+                {"success": False, "detail": "Invalid facility share identifiers."},
+                status=400,
+            )
+
+        from institution.models import InstitutionDepartmentFacility
+
+        shared_facility = InstitutionDepartmentFacility.objects.filter(
+            id=share_facility_id,
+            department_id=share_department_id,
+        ).first()
+
+        if shared_facility is None:
+            return Response(
+                {"success": False, "detail": "Facility not found."},
+                status=404,
+            )
+
+    from django.db import transaction
+
+    with transaction.atomic():
+        conversation = (
+            MessageConversation.objects
+            .filter(
+                Q(participant_one=identity, participant_two=receiver)
+                | Q(participant_one=receiver, participant_two=identity)
+            )
+            .first()
         )
-        .first()
-    )
 
-    if conversation is None:
-        first, second = (
-            (identity, receiver)
-            if identity.pk < receiver.pk
-            else (receiver, identity)
+        if conversation is None:
+            first, second = (
+                (identity, receiver)
+                if identity.pk < receiver.pk
+                else (receiver, identity)
+            )
+
+            conversation = MessageConversation.objects.create(
+                participant_one=first,
+                participant_two=second,
+            )
+
+        message = Message.objects.create(
+            conversation=conversation,
+            sender=identity,
+            receiver=receiver,
+            body=body,
         )
 
-        conversation = MessageConversation.objects.create(
-            participant_one=first,
-            participant_two=second,
-        )
+        conversation.save(update_fields=["updated_at"])
 
-    message = Message.objects.create(
-        conversation=conversation,
-        sender=identity,
-        receiver=receiver,
-        body=body,
-    )
+        if shared_facility is not None:
+            from institution.models import InstitutionDepartmentFacilityShare
 
-    conversation.save(update_fields=["updated_at"])
+            InstitutionDepartmentFacilityShare.objects.create(
+                facility=shared_facility,
+                identity=identity,
+            )
 
     return Response(
         {

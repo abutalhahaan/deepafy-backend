@@ -46,6 +46,11 @@ from .views import (
     institution_department_history,
     institution_department_facility_categories,
     institution_department_facilities,
+    institution_department_facility_social,
+    institution_department_facility_like,
+    institution_department_facility_share,
+    institution_department_facility_comments,
+
     institution_department_detail,
     institution_result_period_settings,
     institution_academic_sessions,
@@ -381,6 +386,26 @@ urlpatterns = [
         "departments/<int:department_id>/facilities/",
         institution_department_facilities,
         name="institution-department-facilities",
+    ),
+    path(
+        "departments/<int:department_id>/facilities/<int:facility_id>/social/",
+        institution_department_facility_social,
+        name="institution-department-facility-social",
+    ),
+    path(
+        "departments/<int:department_id>/facilities/<int:facility_id>/like/",
+        institution_department_facility_like,
+        name="institution-department-facility-like",
+    ),
+    path(
+        "departments/<int:department_id>/facilities/<int:facility_id>/share/",
+        institution_department_facility_share,
+        name="institution-department-facility-share",
+    ),
+    path(
+        "departments/<int:department_id>/facilities/<int:facility_id>/comments/",
+        institution_department_facility_comments,
+        name="institution-department-facility-comments",
     ),
     path(
         "departments/<int:department_id>/",

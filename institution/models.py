@@ -2153,3 +2153,69 @@ class InstitutionDepartmentFacilityPhoto(models.Model):
 
     def __str__(self):
         return f"Facility {self.facility_id} photo"
+
+
+class InstitutionDepartmentFacilityLike(models.Model):
+    facility = models.ForeignKey(
+        InstitutionDepartmentFacility,
+        on_delete=models.CASCADE,
+        related_name="social_likes",
+    )
+    identity = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.CASCADE,
+        related_name="department_facility_likes",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["facility", "identity"],
+                name="unique_dept_facility_like_identity",
+            )
+        ]
+        ordering = ["-created_at"]
+
+
+class InstitutionDepartmentFacilityShare(models.Model):
+    facility = models.ForeignKey(
+        InstitutionDepartmentFacility,
+        on_delete=models.CASCADE,
+        related_name="social_shares",
+    )
+    identity = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.CASCADE,
+        related_name="department_facility_shares",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+
+class InstitutionDepartmentFacilityComment(models.Model):
+    facility = models.ForeignKey(
+        InstitutionDepartmentFacility,
+        on_delete=models.CASCADE,
+        related_name="social_comments",
+    )
+    identity = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.CASCADE,
+        related_name="department_facility_comments",
+    )
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="replies",
+    )
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["created_at"]
