@@ -524,6 +524,13 @@ class InstitutionResultsAPITests(APITestCase):
         )
 
         self.client.force_authenticate(user=admin)
+
+        response = self.client.get(
+            reverse("institution-department-settings", args=[department.id])
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertFalse(response.data["can_manage_students"])
+
         response = self.client.put(
             reverse("institution-department-settings", args=[department.id]),
             {"can_manage_marks": True},
@@ -2665,7 +2672,10 @@ class InstitutionResultsAPITests(APITestCase):
             {"year": 2026, "month": 10},
         )
         self.assertEqual(
-            monthly_response.status_code, 403, monthly_response.data
+            monthly_response.status_code, 200, monthly_response.data
+        )
+        self.assertFalse(
+            monthly_response.data["can_manage_attendance"]
         )
 
         save_response = self.client.post(

@@ -105,6 +105,44 @@ def get_institution_department_access(request):
     return assignment.institution, assignment.department, False
 
 
+def has_department_staff_management_permission(
+    institution,
+    identity,
+    department_name,
+):
+    department_name = str(department_name or "").strip()
+    if not department_name:
+        return False
+
+    assignments = (
+        InstitutionDepartmentAdmin.objects
+        .filter(
+            identity=identity,
+            institution=institution,
+            is_active=True,
+            department__is_active=True,
+            department__name=department_name,
+        )
+        .select_related("department")
+    )
+
+    for assignment in assignments:
+        if not institution.departments.filter(
+            id=assignment.department_id,
+            is_active=True,
+        ).exists():
+            continue
+
+        if InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=assignment.department,
+            can_manage_teachers_staff=True,
+        ).exists():
+            return True
+
+    return False
+
+
 def sync_staff_retirement_status(institution):
     """
     Automatically move staff whose retirement date has arrived
@@ -1258,7 +1296,7 @@ def institution_subject_detail(request, subject_id):
     })
 
 
-@api_view(["GET", "POST"])
+@api_view(["GET", "POST", "PATCH"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def institution_staff_services(request):
@@ -1268,15 +1306,13 @@ def institution_staff_services(request):
     The authenticated user must own the institution profile.
     """
 
-    try:
-        profile = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    profile, assigned_department, is_owner = (
+        get_institution_department_access(request)
+    )
+    if profile is None:
         return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
+            {"detail": "Institution profile not found or access denied."},
+            status=status.HTTP_403_FORBIDDEN,
         )
 
     if request.method == "GET":
@@ -1291,6 +1327,11 @@ def institution_staff_services(request):
             .select_related("identity", "identity__personal_account")
             .order_by("-joining_date", "identity_id")
         )
+
+        if not is_owner:
+            services = services.filter(
+                department=assigned_department.name
+            )
 
         results = [
             {
@@ -1362,7 +1403,136 @@ def institution_staff_services(request):
             "results": results,
         })
 
+    if request.method == "PATCH":
+        data = request.data
+        try:
+            staff_id = int(data.get("id"))
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "A valid staff id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        service = InstitutionStaffService.objects.filter(
+            id=staff_id,
+            institution=profile,
+            is_active=True,
+        ).first()
+
+        if service is None:
+            return Response(
+                {"detail": "Staff record not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not is_owner:
+            target_department = str(
+                data.get("department", service.department) or ""
+            ).strip()
+
+            if (
+                not has_department_staff_management_permission(
+                    profile, request.user, service.department
+                )
+                or not has_department_staff_management_permission(
+                    profile, request.user, target_department
+                )
+            ):
+                return Response(
+                    {"detail": "You do not have permission to manage staff in this department."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        allowed_fields = (
+            "designation", "department", "employment_type",
+            "joining_date", "retirement_date", "leaving_date",
+            "passing_date", "bio",
+        )
+        for field in allowed_fields:
+            if field in data:
+                setattr(service, field, data.get(field) or None if field in (
+                    "retirement_date", "leaving_date", "passing_date"
+                ) else data.get(field))
+
+        if "status" in data:
+            valid_statuses = {
+                choice[0] for choice in InstitutionStaffService.STATUS_CHOICES
+            }
+            if data["status"] not in valid_statuses:
+                return Response(
+                    {"detail": "Invalid staff status."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            service.status = data["status"]
+
+        if (
+            service.status == InstitutionStaffService.STATUS_FORMER
+            and not service.leaving_date
+        ) or (
+            service.status == InstitutionStaffService.STATUS_RETIRED
+            and not service.retirement_date
+        ) or (
+            service.status == InstitutionStaffService.STATUS_IN_MEMORY
+            and not service.passing_date
+        ):
+            return Response(
+                {"detail": "The date required for the selected staff status is missing."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        subjects = None
+        if "subject_ids" in data:
+            raw_ids = data.get("subject_ids") or []
+            if not isinstance(raw_ids, list):
+                return Response(
+                    {"detail": "subject_ids must be a list."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                subject_ids = list({int(value) for value in raw_ids})
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "Invalid subject IDs."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            subjects = Subject.objects.filter(id__in=subject_ids, is_active=True)
+            if subjects.count() != len(subject_ids):
+                return Response(
+                    {"detail": "One or more selected subjects are invalid."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        with transaction.atomic():
+            service.save()
+            if subjects is not None:
+                service.subjects.set(subjects)
+
+        return Response({
+            "id": service.id,
+            "identity_id": service.identity_id,
+            "username": service.identity.username,
+            "designation": service.designation,
+            "department": service.department,
+            "employment_type": service.employment_type,
+            "joining_date": service.joining_date,
+            "retirement_date": service.retirement_date,
+            "leaving_date": service.leaving_date,
+            "passing_date": service.passing_date,
+            "status": service.status,
+            "bio": service.bio,
+        })
+
     data = request.data
+
+    if not is_owner and not has_department_staff_management_permission(
+        profile,
+        request.user,
+        data.get("department"),
+    ):
+        return Response(
+            {"detail": "You do not have permission to manage staff in this department."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
 
     try:
         identity_id = int(data.get("identity_id"))
@@ -1554,7 +1724,7 @@ def institution_staff_services(request):
     )
 
 
-@api_view(["GET", "POST"])
+@api_view(["GET", "POST", "PATCH"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def institution_unclaimed_staff(request):
@@ -1565,15 +1735,13 @@ def institution_unclaimed_staff(request):
     Deepafy Identity. Cover photo and Deepafy identity are not used.
     """
 
-    try:
-        profile = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    profile, assigned_department, is_owner = (
+        get_institution_department_access(request)
+    )
+    if profile is None:
         return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
+            {"detail": "Institution profile not found or access denied."},
+            status=status.HTTP_403_FORBIDDEN,
         )
 
     if request.method == "GET":
@@ -1587,6 +1755,11 @@ def institution_unclaimed_staff(request):
             )
             .order_by("-joining_date", "full_name")
         )
+
+        if not is_owner:
+            people = people.filter(
+                department=assigned_department.name
+            )
 
         results = [
             {
@@ -1626,7 +1799,154 @@ def institution_unclaimed_staff(request):
             "results": results,
         })
 
+    if request.method == "PATCH":
+        data = request.data
+        try:
+            staff_id = int(data.get("id"))
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "A valid staff id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        person = UnclaimedPerson.objects.filter(
+            id=staff_id,
+            institution=profile,
+            is_active=True,
+        ).first()
+
+        if person is None:
+            return Response(
+                {"detail": "Staff record not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not is_owner:
+            target_department = str(
+                data.get("department", person.department) or ""
+            ).strip()
+
+            if (
+                not has_department_staff_management_permission(
+                    profile, request.user, person.department
+                )
+                or not has_department_staff_management_permission(
+                    profile, request.user, target_department
+                )
+            ):
+                return Response(
+                    {"detail": "You do not have permission to manage staff in this department."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        allowed_fields = (
+            "full_name", "designation", "department", "employment_type",
+            "joining_date", "retirement_date", "leaving_date",
+            "passing_date", "bio",
+        )
+        for field in allowed_fields:
+            if field in data:
+                setattr(person, field, data.get(field) or None if field in (
+                    "retirement_date", "leaving_date", "passing_date"
+                ) else data.get(field))
+
+        if "status" in data:
+            valid_statuses = {
+                choice[0] for choice in UnclaimedPerson.STATUS_CHOICES
+            }
+            if data["status"] not in valid_statuses:
+                return Response(
+                    {"detail": "Invalid staff status."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            person.status = data["status"]
+
+        if (
+            person.status == UnclaimedPerson.STATUS_FORMER
+            and not person.leaving_date
+        ) or (
+            person.status == UnclaimedPerson.STATUS_RETIRED
+            and not person.retirement_date
+        ) or (
+            person.status == UnclaimedPerson.STATUS_IN_MEMORY
+            and not person.passing_date
+        ):
+            return Response(
+                {"detail": "The date required for the selected staff status is missing."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        qualifications = None
+        if "educational_qualifications" in data:
+            qualifications = data.get("educational_qualifications") or []
+            if isinstance(qualifications, str):
+                try:
+                    qualifications = json.loads(qualifications)
+                except (TypeError, ValueError):
+                    return Response(
+                        {"detail": "Invalid educational qualifications."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            if not isinstance(qualifications, list):
+                return Response(
+                    {"detail": "Educational qualifications must be a list."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            prepared_qualifications = []
+            for item in qualifications:
+                if not isinstance(item, dict):
+                    continue
+                level = str(item.get("education_level") or "").strip()
+                degree = str(item.get("degree_certificate") or "").strip()
+                if not level or not degree:
+                    continue
+                prepared_qualifications.append({
+                    "education_level": level,
+                    "degree_certificate": degree,
+                    "field_of_study": str(item.get("field_of_study") or "").strip(),
+                    "specialization": str(item.get("specialization") or "").strip(),
+                    "start_year": item.get("start_year") or None,
+                    "end_year": item.get("end_year") or None,
+                })
+
+        with transaction.atomic():
+            person.save()
+
+            if qualifications is not None:
+                person.educational_qualifications.all().delete()
+                for item in prepared_qualifications:
+                    UnclaimedPersonQualification.objects.create(
+                        person=person,
+                        **item,
+                    )
+
+        return Response({
+            "id": person.id,
+            "full_name": person.full_name,
+            "designation": person.designation,
+            "department": person.department,
+            "employment_type": person.employment_type,
+            "joining_date": person.joining_date,
+            "retirement_date": person.retirement_date,
+            "leaving_date": person.leaving_date,
+            "passing_date": person.passing_date,
+            "status": person.status,
+            "bio": person.bio,
+        })
+
     data = request.data
+
+    if not is_owner and not has_department_staff_management_permission(
+        profile,
+        request.user,
+        data.get("department"),
+    ):
+        return Response(
+            {"detail": "You do not have permission to manage staff in this department."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
 
     full_name = str(data.get("full_name") or "").strip()
     designation = str(data.get("designation") or "").strip()
@@ -4721,16 +5041,18 @@ def institution_attendance_monthly(request):
             status=status.HTTP_403_FORBIDDEN,
         )
 
+    settings_obj = None
     if not is_owner:
         settings_obj = InstitutionDepartmentSettings.objects.filter(
             institution=institution,
             department=assigned_department,
         ).first()
-        if not settings_obj or not settings_obj.can_manage_attendance:
-            return Response(
-                {"detail": "You do not have permission to manage attendance."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+
+    can_manage_attendance = (
+        is_owner or bool(
+            settings_obj and settings_obj.can_manage_attendance
+        )
+    )
 
     try:
         year = int(request.query_params.get("year"))
@@ -5073,6 +5395,7 @@ def institution_attendance_monthly(request):
             "dates": dates,
             "students": students,
             "available_academic_periods": available_academic_periods,
+            "can_manage_attendance": can_manage_attendance,
             "count": len(students),
         }
     )
@@ -5217,15 +5540,45 @@ def institution_staff_attendance_save(request):
 
     from datetime import date
 
-    try:
-        institution = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    institution, assigned_department, is_owner = (
+        get_institution_department_access(request)
+    )
+
+    if institution is None:
         return Response(
             {"detail": "Institution profile not found."},
             status=status.HTTP_404_NOT_FOUND,
+        )
+
+    target_department = assigned_department
+
+    if is_owner:
+        department_id = request.data.get("department_id")
+        if department_id not in (None, ""):
+            try:
+                target_department = institution.departments.get(
+                    id=int(department_id),
+                    is_active=True,
+                )
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "Invalid department."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            except Department.DoesNotExist:
+                return Response(
+                    {"detail": "Department not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+    if not is_owner and not InstitutionDepartmentSettings.objects.filter(
+        institution=institution,
+        department=assigned_department,
+        can_manage_attendance=True,
+    ).exists():
+        return Response(
+            {"detail": "You do not have permission to manage attendance."},
+            status=status.HTTP_403_FORBIDDEN,
         )
 
     from institution.models import UnclaimedPerson
@@ -5291,6 +5644,18 @@ def institution_staff_attendance_save(request):
             {"detail": "Active running staff member not found."},
             status=status.HTTP_404_NOT_FOUND,
         )
+
+    if target_department is not None:
+        staff_department = (
+            staff_service.department
+            if staff_service is not None
+            else unclaimed_person.department
+        )
+        if staff_department != target_department.name:
+            return Response(
+                {"detail": "Staff member does not belong to this department."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
     try:
         attendance_date = date.fromisoformat(
@@ -5387,16 +5752,44 @@ def institution_staff_attendance_monthly(request):
     from calendar import monthrange
     from datetime import date, timedelta
 
-    try:
-        institution = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    institution, assigned_department, is_owner = (
+        get_institution_department_access(request)
+    )
+
+    if institution is None:
         return Response(
             {"detail": "Institution profile not found."},
             status=status.HTTP_404_NOT_FOUND,
         )
+
+    target_department = assigned_department
+
+    if is_owner:
+        department_id = request.query_params.get("department_id")
+        if department_id not in (None, ""):
+            try:
+                target_department = institution.departments.get(
+                    id=int(department_id),
+                    is_active=True,
+                )
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "Invalid department."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            except Department.DoesNotExist:
+                return Response(
+                    {"detail": "Department not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+    can_manage_attendance = is_owner or (
+        InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=assigned_department,
+            can_manage_attendance=True,
+        ).exists()
+    )
 
     sync_staff_retirement_status(institution)
 
@@ -5449,6 +5842,16 @@ def institution_staff_attendance_monthly(request):
             "id",
         )
     )
+
+    if target_department is not None:
+        staff_services = [
+            staff for staff in staff_services
+            if staff.department == target_department.name
+        ]
+        manual_staff = [
+            staff for staff in manual_staff
+            if staff.department == target_department.name
+        ]
 
     first_day = date(year, month, 1)
     last_day_number = monthrange(year, month)[1]
@@ -5645,6 +6048,7 @@ def institution_staff_attendance_monthly(request):
             "dates": dates,
             "teachers_staff": teachers_staff,
             "count": len(teachers_staff),
+            "can_manage_attendance": can_manage_attendance,
         }
     )
 
@@ -10187,15 +10591,12 @@ def institution_attendance_holidays_public(request, username):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def institution_department_settings(request, department_id):
-    """Read or update department permissions; only the institution owner may do so."""
-    institution = InstitutionProfile.objects.filter(
-        identity=request.user,
-        is_active=True,
-    ).first()
+    """Read department permissions for owners and assigned department admins; only owners may update."""
+    institution, assigned_department, is_owner = get_institution_department_access(request)
 
     if institution is None:
         return Response(
-            {"detail": "Only an institution owner can manage department settings."},
+            {"detail": "Institution access required."},
             status=status.HTTP_403_FORBIDDEN,
         )
 
@@ -10210,6 +10611,21 @@ def institution_department_settings(request, department_id):
             status=status.HTTP_404_NOT_FOUND,
         )
 
+    if not is_owner and (
+        assigned_department is None
+        or assigned_department.id != department_id
+    ):
+        return Response(
+            {"detail": "Department access denied."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method == "PUT" and not is_owner:
+        return Response(
+            {"detail": "Only the institution owner can update department settings."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     permission_fields = (
         "can_manage_students",
         "can_manage_subjects",
@@ -10218,6 +10634,7 @@ def institution_department_settings(request, department_id):
         "can_manage_results",
         "can_publish_results",
         "can_manage_profile",
+        "can_manage_teachers_staff",
     )
 
     settings_obj, _ = InstitutionDepartmentSettings.objects.get_or_create(
@@ -10254,6 +10671,7 @@ def institution_department_settings(request, department_id):
         **{field: getattr(settings_obj, field) for field in permission_fields},
         "updated_at": settings_obj.updated_at,
     })
+
 @api_view(["GET", "POST", "PUT", "DELETE"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])

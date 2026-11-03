@@ -1614,6 +1614,7 @@ class InstitutionDepartmentSettings(models.Model):
     can_manage_results = models.BooleanField(default=False)
     can_publish_results = models.BooleanField(default=False)
     can_manage_profile = models.BooleanField(default=False)
+    can_manage_teachers_staff = models.BooleanField(default=False)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
