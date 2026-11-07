@@ -835,6 +835,115 @@ class InstitutionResultsAPITests(APITestCase):
         response = self.client.get(reverse("institution-exams"))
         self.assertIn(response.status_code, (401, 403))
 
+    def test_department_admin_exam_dropdown_includes_shared_and_own_selected_types(self):
+        from institution.models import (
+            CentralExamType,
+            Department,
+            InstitutionDepartmentAdmin,
+            InstitutionDepartmentSettings,
+            InstitutionExam,
+            InstitutionExamTypeSelection,
+        )
+
+        department = Department.objects.create(
+            name="Shared Exam Dropdown Test Department"
+        )
+        self.institution.departments.add(department)
+
+        InstitutionDepartmentSettings.objects.create(
+            institution=self.institution,
+            department=department,
+            can_manage_exam_types=True,
+        )
+
+        admin = UserIdentity.objects.create(
+            email="shared-exam-dropdown-admin@example.com",
+            username="shared_exam_dropdown_admin",
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=department,
+            identity=admin,
+            assigned_by=self.owner,
+        )
+
+        shared_type = CentralExamType.objects.create(
+            name="Shared Annual Examination"
+        )
+        department_type = CentralExamType.objects.create(
+            name="Department Assessment"
+        )
+
+        InstitutionExamTypeSelection.objects.create(
+            institution=self.institution,
+            department=None,
+            exam_type=shared_type,
+        )
+        InstitutionExamTypeSelection.objects.create(
+            institution=self.institution,
+            department=department,
+            exam_type=shared_type,
+        )
+        InstitutionExamTypeSelection.objects.create(
+            institution=self.institution,
+            department=department,
+            exam_type=department_type,
+        )
+
+        url = (
+            f"{reverse('institution-exams')}?"
+            f"academic_session_id={self.session.id}"
+            f"&academic_level_id={self.level.id}"
+        )
+
+        self.client.force_authenticate(user=admin)
+        admin_response = self.client.get(url)
+
+        self.assertEqual(admin_response.status_code, 200, admin_response.data)
+        admin_results = admin_response.data["results"]
+        admin_type_ids = [item["exam_type_id"] for item in admin_results]
+
+        self.assertCountEqual(
+            admin_type_ids,
+            [shared_type.id, department_type.id],
+        )
+
+        shared_exam = InstitutionExam.objects.get(
+            institution=self.institution,
+            central_exam_type=shared_type,
+            academic_session=self.session,
+            academic_level=self.level,
+        )
+        self.assertIsNone(shared_exam.department)
+
+        department_exam = InstitutionExam.objects.get(
+            institution=self.institution,
+            central_exam_type=department_type,
+            academic_session=self.session,
+            academic_level=self.level,
+        )
+        self.assertEqual(department_exam.department, department)
+
+        self.assertEqual(
+            InstitutionExam.objects.filter(
+                institution=self.institution,
+                central_exam_type=shared_type,
+                academic_session=self.session,
+                academic_level=self.level,
+            ).count(),
+            1,
+        )
+
+        self.client.force_authenticate(user=self.owner)
+        owner_response = self.client.get(url)
+
+        self.assertEqual(owner_response.status_code, 200, owner_response.data)
+        owner_type_ids = [
+            item["exam_type_id"] for item in owner_response.data["results"]
+        ]
+        self.assertEqual(owner_type_ids, [shared_type.id])
+
+
     def _create_exam_subject_and_enrollment(self):
         from institution.models import (
             Student,
@@ -1140,6 +1249,218 @@ class InstitutionResultsAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, 403, response.data)
+    def test_department_subject_assignment_rejects_another_departments_subject(self):
+        from institution.models import (
+            Department,
+            InstitutionDepartmentAdmin,
+            InstitutionDepartmentSettings,
+            Subject,
+        )
+
+        own_department = Department.objects.create(name="Subject Validation Own")
+        other_department = Department.objects.create(name="Subject Validation Other")
+        self.institution.departments.add(own_department, other_department)
+
+        admin = UserIdentity.objects.create(
+            email="subject-validation-admin@example.com",
+            username="subject_validation_admin",
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=own_department,
+            identity=admin,
+            assigned_by=self.owner,
+        )
+        InstitutionDepartmentSettings.objects.create(
+            institution=self.institution,
+            department=own_department,
+            can_manage_subjects=True,
+        )
+        other_subject = Subject.objects.create(
+            name="Other Department Subject",
+            code="ODS",
+            department=other_department,
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=admin)
+        response = self.client.post(
+            reverse("institution-class-subjects"),
+            {
+                "academic_level_id": self.level.id,
+                "department_id": own_department.id,
+                "subjects": [
+                    {
+                        "subject_id": other_subject.id,
+                        "full_marks": 100,
+                        "pass_mark": 33,
+                    }
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(
+            response.data["detail"],
+            "This subject does not belong to the selected department.",
+        )
+
+    def test_department_subject_assignment_rejects_global_catalogue_subject(self):
+        from institution.models import (
+            Department,
+            InstitutionDepartmentAdmin,
+            InstitutionDepartmentSettings,
+        )
+
+        department = Department.objects.create(name="Global Subject Rejection")
+        self.institution.departments.add(department)
+
+        admin = UserIdentity.objects.create(
+            email="global-subject-admin@example.com",
+            username="global_subject_admin",
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=department,
+            identity=admin,
+            assigned_by=self.owner,
+        )
+        InstitutionDepartmentSettings.objects.create(
+            institution=self.institution,
+            department=department,
+            can_manage_subjects=True,
+        )
+
+        self.client.force_authenticate(user=admin)
+        response = self.client.post(
+            reverse("institution-class-subjects"),
+            {
+                "academic_level_id": self.level.id,
+                "department_id": department.id,
+                "subjects": [
+                    {
+                        "subject_id": self.subject.id,
+                        "full_marks": 100,
+                        "pass_mark": 33,
+                    }
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(
+            response.data["detail"],
+            "This subject does not belong to the selected department.",
+        )
+
+    def test_owner_can_create_department_specific_subject(self):
+        from institution.models import Department, Subject
+
+        department = Department.objects.create(
+            name="Owner Subject Creation Department"
+        )
+        self.institution.departments.add(department)
+
+        response = self.client.post(
+            reverse("institution-subjects"),
+            {
+                "name": "Owner Created Physics",
+                "code": "OCP",
+                "department_id": department.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        subject = Subject.objects.get(id=response.data["id"])
+        self.assertEqual(subject.department_id, department.id)
+        self.assertEqual(subject.name, "Owner Created Physics")
+
+    def test_department_admin_can_create_assigned_department_subject(self):
+        from institution.models import (
+            Department,
+            InstitutionDepartmentAdmin,
+            InstitutionDepartmentSettings,
+            Subject,
+        )
+
+        department = Department.objects.create(
+            name="Admin Subject Creation Department"
+        )
+        self.institution.departments.add(department)
+
+        admin = UserIdentity.objects.create(
+            email="subject-create-admin@example.com",
+            username="subject_create_admin",
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=department,
+            identity=admin,
+            assigned_by=self.owner,
+        )
+        InstitutionDepartmentSettings.objects.create(
+            institution=self.institution,
+            department=department,
+            can_manage_subjects=True,
+        )
+
+        self.client.force_authenticate(user=admin)
+        response = self.client.post(
+            reverse("institution-subjects"),
+            {
+                "name": "Admin Created Chemistry",
+                "code": "ACC",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        subject = Subject.objects.get(id=response.data["id"])
+        self.assertEqual(subject.department_id, department.id)
+
+    def test_department_admin_cannot_create_subject_without_permission(self):
+        from institution.models import (
+            Department,
+            InstitutionDepartmentAdmin,
+            InstitutionDepartmentSettings,
+        )
+
+        department = Department.objects.create(
+            name="No Subject Permission Department"
+        )
+        self.institution.departments.add(department)
+
+        admin = UserIdentity.objects.create(
+            email="subject-no-permission@example.com",
+            username="subject_no_permission",
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=department,
+            identity=admin,
+            assigned_by=self.owner,
+        )
+        InstitutionDepartmentSettings.objects.create(
+            institution=self.institution,
+            department=department,
+            can_manage_subjects=False,
+        )
+
+        self.client.force_authenticate(user=admin)
+        response = self.client.post(
+            reverse("institution-subjects"),
+            {
+                "name": "Unauthorized Subject",
+                "department_id": department.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403, response.data)
+
     def test_grade_scale_can_be_created_and_listed(self):
         response = self.client.post(
             reverse("institution-grade-scales"),
@@ -2801,6 +3122,172 @@ class InstitutionResultsAPITests(APITestCase):
         }
         self.assertIn(enrollment.id, returned_ids)
 
+    def test_department_grade_scales_are_isolated_from_owner(self):
+        from institution.models import (
+            Department,
+            InstitutionDepartmentAdmin,
+            InstitutionDepartmentSettings,
+        )
+
+        department = Department.objects.create(name="Grade Isolation Department")
+        self.institution.departments.add(department)
+        admin = UserIdentity.objects.create(
+            email="grade-isolation-admin@example.com",
+            username="grade_isolation_admin",
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=department,
+            identity=admin,
+            assigned_by=self.owner,
+        )
+        InstitutionDepartmentSettings.objects.create(
+            institution=self.institution,
+            department=department,
+            can_manage_grade=True,
+        )
+
+        owner_create = self.client.post(
+            reverse("institution-grade-scales"),
+            {"name": "Owner Only Scale", "is_default": True},
+            format="json",
+        )
+        self.assertEqual(owner_create.status_code, 201, owner_create.data)
+
+        self.client.force_authenticate(user=admin)
+        department_list = self.client.get(reverse("institution-grade-scales"))
+        self.assertEqual(department_list.status_code, 200, department_list.data)
+        self.assertFalse(
+            any(
+                item["name"] == "Owner Only Scale"
+                for item in department_list.data["results"]
+            )
+        )
+
+        department_create = self.client.post(
+            reverse("institution-grade-scales"),
+            {"name": "Department Only Scale", "is_default": True},
+            format="json",
+        )
+        self.assertEqual(
+            department_create.status_code, 201, department_create.data
+        )
+
+        self.client.force_authenticate(user=self.owner)
+        owner_list = self.client.get(reverse("institution-grade-scales"))
+        self.assertEqual(owner_list.status_code, 200, owner_list.data)
+        self.assertTrue(
+            any(
+                item["name"] == "Owner Only Scale"
+                for item in owner_list.data["results"]
+            )
+        )
+        self.assertFalse(
+            any(
+                item["name"] == "Department Only Scale"
+                for item in owner_list.data["results"]
+            )
+        )
+
+    def test_department_result_period_settings_respect_permission_and_scope(self):
+        from institution.models import (
+            Department,
+            InstitutionDepartmentAdmin,
+            InstitutionDepartmentSettings,
+        )
+
+        department = Department.objects.create(name="Period Isolation Department")
+        self.institution.departments.add(department)
+        admin = UserIdentity.objects.create(
+            email="period-isolation-admin@example.com",
+            username="period_isolation_admin",
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=department,
+            identity=admin,
+            assigned_by=self.owner,
+        )
+        settings = InstitutionDepartmentSettings.objects.create(
+            institution=self.institution,
+            department=department,
+            can_manage_academic_periods=False,
+        )
+        url = reverse("institution-result-period-settings")
+
+        owner_save = self.client.put(
+            url,
+            {"years": ["1st Year"], "semesters": ["1st Semester"]},
+            format="json",
+        )
+        self.assertEqual(owner_save.status_code, 200, owner_save.data)
+
+        self.client.force_authenticate(user=admin)
+        department_get = self.client.get(url)
+        self.assertEqual(department_get.status_code, 200, department_get.data)
+        self.assertEqual(department_get.data, {"years": [], "semesters": []})
+
+        denied_save = self.client.put(
+            url,
+            {"years": ["2nd Year"], "semesters": ["2nd Semester"]},
+            format="json",
+        )
+        self.assertEqual(denied_save.status_code, 403, denied_save.data)
+
+        settings.can_manage_academic_periods = True
+        settings.save(update_fields=["can_manage_academic_periods"])
+        department_save = self.client.put(
+            url,
+            {"years": ["2nd Year"], "semesters": ["2nd Semester"]},
+            format="json",
+        )
+        self.assertEqual(department_save.status_code, 200, department_save.data)
+
+        department_get = self.client.get(url)
+        self.assertEqual(department_get.status_code, 200, department_get.data)
+        self.assertEqual(department_get.data["years"], ["2nd Year"])
+        self.assertEqual(department_get.data["semesters"], ["2nd Semester"])
+
+        self.client.force_authenticate(user=self.owner)
+        owner_get = self.client.get(url)
+        self.assertEqual(owner_get.status_code, 200, owner_get.data)
+        self.assertEqual(owner_get.data["years"], ["1st Year"])
+        self.assertEqual(owner_get.data["semesters"], ["1st Semester"])
+
+    def test_department_admin_can_view_sessions_but_cannot_manage_them(self):
+        from institution.models import Department, InstitutionDepartmentAdmin
+
+        department = Department.objects.create(
+            name="Academic Sessions Access Department"
+        )
+        self.institution.departments.add(department)
+
+        admin = UserIdentity.objects.create(
+            email="academic-sessions-admin@example.com",
+            username="academic_sessions_admin",
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=department,
+            identity=admin,
+            assigned_by=self.owner,
+        )
+
+        url = reverse("institution-academic-sessions")
+
+        owner_response = self.client.get(url)
+        self.assertEqual(owner_response.status_code, 200, owner_response.data)
+        self.assertEqual(owner_response.data["count"], 1)
+
+        self.client.force_authenticate(user=admin)
+        admin_response = self.client.get(url)
+        self.assertEqual(admin_response.status_code, 200, admin_response.data)
+        self.assertEqual(admin_response.data["count"], 1)
+        self.assertEqual(admin_response.data["results"][0]["id"], self.session.id)
+
+        denied_create = self.client.post(url, {}, format="json")
+        self.assertEqual(denied_create.status_code, 403, denied_create.data)
+
     def _create_extra_department_for_access_test(self):
         from institution.models import Department
 
@@ -3207,6 +3694,150 @@ class InstitutionExamTypeAPITests(APITestCase):
         self.assertTrue(
             self.InstitutionExamTypeSelection.objects.filter(
                 institution=self.other_institution,
+                exam_type=exam_type,
+            ).exists()
+        )
+
+
+    def _create_department_admin(self, department, username):
+        from institution.models import InstitutionDepartmentAdmin
+
+        admin = UserIdentity.objects.create(
+            email=f"{username}@example.com",
+            username=username,
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=department,
+            identity=admin,
+            assigned_by=self.owner,
+        )
+        return admin
+
+    def test_department_exam_type_selections_are_isolated(self):
+        from institution.models import Department, InstitutionDepartmentSettings
+
+        department_one = Department.objects.create(name="Exam Isolation Department One")
+        department_two = Department.objects.create(name="Exam Isolation Department Two")
+        self.institution.departments.add(department_one, department_two)
+
+        InstitutionDepartmentSettings.objects.create(
+            institution=self.institution,
+            department=department_one,
+            can_manage_exam_types=True,
+        )
+        InstitutionDepartmentSettings.objects.create(
+            institution=self.institution,
+            department=department_two,
+            can_manage_exam_types=True,
+        )
+
+        admin_one = self._create_department_admin(department_one, "exam_admin_one")
+        admin_two = self._create_department_admin(department_two, "exam_admin_two")
+        exam_type = self.CentralExamType.objects.create(name="Department Isolation Exam")
+
+        self.client.force_authenticate(user=self.owner)
+        owner_response = self.client.post(
+            self.url, {"exam_type_id": exam_type.id}, format="json"
+        )
+        self.assertEqual(owner_response.status_code, 201, owner_response.data)
+
+        self.client.force_authenticate(user=admin_one)
+        response_one = self.client.post(
+            self.url, {"exam_type_id": exam_type.id}, format="json"
+        )
+        self.assertEqual(response_one.status_code, 201, response_one.data)
+
+        response_one = self.client.get(self.url)
+        item_one = next(
+            item for item in response_one.data["results"]
+            if item["id"] == exam_type.id
+        )
+        self.assertTrue(item_one["selected"])
+
+        self.client.force_authenticate(user=admin_two)
+        response_two = self.client.get(self.url)
+        item_two = next(
+            item for item in response_two.data["results"]
+            if item["id"] == exam_type.id
+        )
+        self.assertFalse(item_two["selected"])
+
+        self.assertEqual(
+            self.InstitutionExamTypeSelection.objects.filter(
+                institution=self.institution,
+                exam_type=exam_type,
+            ).count(),
+            2,
+        )
+
+    def test_department_admin_without_permission_cannot_select_or_remove_exam_type(self):
+        from institution.models import Department, InstitutionDepartmentSettings
+
+        department = Department.objects.create(name="Exam Permission Restricted Department")
+        self.institution.departments.add(department)
+        InstitutionDepartmentSettings.objects.create(
+            institution=self.institution,
+            department=department,
+            can_manage_exam_types=False,
+        )
+        admin = self._create_department_admin(department, "exam_permission_admin")
+        exam_type = self.CentralExamType.objects.create(name="Restricted Department Exam")
+        selection = self.InstitutionExamTypeSelection.objects.create(
+            institution=self.institution,
+            department=department,
+            exam_type=exam_type,
+        )
+
+        self.client.force_authenticate(user=admin)
+
+        post_response = self.client.post(
+            self.url, {"exam_type_id": exam_type.id}, format="json"
+        )
+        self.assertEqual(post_response.status_code, 403, post_response.data)
+
+        delete_response = self.client.delete(
+            f"{self.url}?exam_type_id={exam_type.id}"
+        )
+        self.assertEqual(delete_response.status_code, 403, delete_response.data)
+        self.assertTrue(
+            self.InstitutionExamTypeSelection.objects.filter(
+                pk=selection.pk
+            ).exists()
+        )
+
+    def test_department_admin_can_create_shared_exam_type_for_assigned_department(self):
+        from institution.models import Department, InstitutionDepartmentSettings
+
+        department = Department.objects.create(name="No Global Exam Creation Department")
+        self.institution.departments.add(department)
+        InstitutionDepartmentSettings.objects.create(
+            institution=self.institution,
+            department=department,
+            can_manage_exam_types=True,
+        )
+        admin = self._create_department_admin(department, "exam_no_global_create_admin")
+
+        self.client.force_authenticate(user=admin)
+        response = self.client.post(
+            self.url, {"name": "Department Created Global Exam"}, format="json"
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        exam_type = self.CentralExamType.objects.get(
+            name="Department Created Global Exam"
+        )
+        self.assertTrue(
+            self.InstitutionExamTypeSelection.objects.filter(
+                institution=self.institution,
+                department=department,
+                exam_type=exam_type,
+            ).exists()
+        )
+        self.assertFalse(
+            self.InstitutionExamTypeSelection.objects.filter(
+                institution=self.institution,
+                department__isnull=True,
                 exam_type=exam_type,
             ).exists()
         )

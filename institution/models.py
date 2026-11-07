@@ -13,7 +13,14 @@ class Subject(models.Model):
 
     name = models.CharField(
         max_length=255,
-        unique=True,
+    )
+
+    department = models.ForeignKey(
+        "Department",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="subjects",
     )
 
     code = models.CharField(
@@ -35,6 +42,18 @@ class Subject(models.Model):
 
     class Meta:
         ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["name"],
+                condition=models.Q(department__isnull=True),
+                name="uniq_global_subject_name",
+            ),
+            models.UniqueConstraint(
+                fields=["department", "name"],
+                condition=models.Q(department__isnull=False),
+                name="uniq_department_subject_name",
+            ),
+        ]
 
     def __str__(self):
         return self.name
@@ -1615,6 +1634,10 @@ class InstitutionDepartmentSettings(models.Model):
     can_publish_results = models.BooleanField(default=False)
     can_manage_profile = models.BooleanField(default=False)
     can_manage_teachers_staff = models.BooleanField(default=False)
+    can_manage_grade = models.BooleanField(default=False)
+    can_manage_exam_types = models.BooleanField(default=False)
+    can_manage_exams = models.BooleanField(default=False)
+    can_manage_academic_periods = models.BooleanField(default=False)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -1741,6 +1764,13 @@ class CentralExamType(models.Model):
 class InstitutionExamTypeSelection(models.Model):
     """An institution's selection of a shared central exam type."""
 
+    department = models.ForeignKey(
+        Department,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="department_exam_type_selections",
+    )
     institution = models.ForeignKey(
         InstitutionProfile,
         on_delete=models.CASCADE,
@@ -1757,7 +1787,13 @@ class InstitutionExamTypeSelection(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["institution", "exam_type"],
-                name="unique_inst_exam_type_selection",
+                condition=models.Q(department__isnull=True),
+                name="uniq_inst_exam_type_owner",
+            ),
+            models.UniqueConstraint(
+                fields=["institution", "department", "exam_type"],
+                condition=models.Q(department__isnull=False),
+                name="uniq_inst_dept_exam_type",
             ),
         ]
         ordering = ["exam_type__name"]
@@ -1769,15 +1805,36 @@ class InstitutionExamTypeSelection(models.Model):
 class InstitutionResultPeriodSettings(models.Model):
     """Store enabled result years and semesters for each institution."""
 
-    institution = models.OneToOneField(
+    institution = models.ForeignKey(
         InstitutionProfile,
         on_delete=models.CASCADE,
+        related_name="result_period_settings",
+    )
+    department = models.ForeignKey(
+        Department,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
         related_name="result_period_settings",
     )
     years = models.JSONField(default=list, blank=True)
     semesters = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["institution"],
+                condition=models.Q(department__isnull=True),
+                name="uniq_inst_result_period_owner",
+            ),
+            models.UniqueConstraint(
+                fields=["institution", "department"],
+                condition=models.Q(department__isnull=False),
+                name="uniq_inst_dept_result_period",
+            ),
+        ]
 
     def __str__(self):
         return f"Result periods - {self.institution}"
@@ -1799,6 +1856,13 @@ class InstitutionExam(models.Model):
         InstitutionProfile,
         on_delete=models.CASCADE,
         related_name="exams",
+    )
+    department = models.ForeignKey(
+        Department,
+        on_delete=models.PROTECT,
+        related_name="exams",
+        null=True,
+        blank=True,
     )
     academic_session = models.ForeignKey(
         InstitutionAcademicSession,
@@ -1845,14 +1909,14 @@ class InstitutionExam(models.Model):
         ordering = ["-exam_date", "-id"]
         constraints = [
             models.UniqueConstraint(
-                fields=[
-                    "institution",
-                    "academic_session",
-                    "academic_level",
-                    "academic_period",
-                    "name",
-                ],
-                name="unique_inst_exam_period_name",
+                fields=["institution", "academic_session", "academic_level", "academic_period", "name"],
+                condition=models.Q(department__isnull=True),
+                name="uniq_inst_exam_owner_period",
+            ),
+            models.UniqueConstraint(
+                fields=["institution", "department", "academic_session", "academic_level", "academic_period", "name"],
+                condition=models.Q(department__isnull=False),
+                name="uniq_inst_exam_dept_period",
             ),
         ]
         indexes = [
@@ -1943,6 +2007,13 @@ class InstitutionExamMark(models.Model):
 class InstitutionGradeScale(models.Model):
     """Institution-controlled grading configuration."""
 
+    department = models.ForeignKey(
+        Department,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="grade_scales",
+    )
     institution = models.ForeignKey(
         InstitutionProfile,
         on_delete=models.CASCADE,
@@ -1971,7 +2042,13 @@ class InstitutionGradeScale(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["institution", "name"],
-                name="unique_inst_grade_scale_name",
+                condition=models.Q(department__isnull=True),
+                name="uniq_inst_grade_owner_name",
+            ),
+            models.UniqueConstraint(
+                fields=["institution", "department", "name"],
+                condition=models.Q(department__isnull=False),
+                name="uniq_inst_dept_grade_name",
             ),
         ]
 

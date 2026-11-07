@@ -184,25 +184,48 @@ def sync_staff_retirement_status(institution):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def institution_result_period_settings(request):
-    """Read or save the authenticated institution's result period settings."""
-    try:
-        profile = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    """Read or save institution-wide or department-specific result periods."""
+    institution, department, is_owner = get_institution_department_access(request)
+
+    if institution is None:
         return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
+            {"detail": "Institution access required."},
+            status=status.HTTP_403_FORBIDDEN,
         )
 
-    if request.method == "GET":
-        settings = InstitutionResultPeriodSettings.objects.filter(
-            institution=profile
+    if not is_owner:
+        department_settings = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=department,
         ).first()
+
+        if request.method == "PUT" and not (
+            department_settings and department_settings.can_manage_academic_periods
+        ):
+            return Response(
+                {"detail": "You do not have permission to manage academic periods."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+    settings_filter = {
+        "institution": institution,
+        "department": department,
+    }
+
+    if request.method == "GET":
+        settings_obj = InstitutionResultPeriodSettings.objects.filter(
+            **settings_filter
+        ).first()
+
+        if settings_obj is None and not is_owner:
+            settings_obj = InstitutionResultPeriodSettings.objects.filter(
+                institution=institution,
+                department__isnull=True,
+            ).first()
+
         return Response({
-            "years": settings.years if settings else [],
-            "semesters": settings.semesters if settings else [],
+            "years": settings_obj.years if settings_obj else [],
+            "semesters": settings_obj.semesters if settings_obj else [],
         })
 
     data = request.data
@@ -236,18 +259,17 @@ def institution_result_period_settings(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    settings, _ = InstitutionResultPeriodSettings.objects.get_or_create(
-        institution=profile,
+    settings_obj, _ = InstitutionResultPeriodSettings.objects.get_or_create(
+        **settings_filter,
     )
-    settings.years = [v for v in allowed_years if v in years]
-    settings.semesters = [v for v in allowed_semesters if v in semesters]
-    settings.save(update_fields=["years", "semesters", "updated_at"])
+    settings_obj.years = [v for v in allowed_years if v in years]
+    settings_obj.semesters = [v for v in allowed_semesters if v in semesters]
+    settings_obj.save(update_fields=["years", "semesters", "updated_at"])
 
     return Response({
-        "years": settings.years,
-        "semesters": settings.semesters,
+        "years": settings_obj.years,
+        "semesters": settings_obj.semesters,
     })
-
 
 @api_view(["GET", "POST"])
 @authentication_classes([JWTAuthentication])
@@ -257,15 +279,17 @@ def institution_academic_sessions(request):
     List or create academic sessions for the authenticated institution.
     """
 
-    try:
-        profile = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    profile, department, is_owner = get_institution_department_access(request)
+    if profile is None:
         return Response(
             {"detail": "Institution profile not found."},
             status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if request.method != "GET" and not is_owner:
+        return Response(
+            {"detail": "Only the institution owner can manage academic sessions."},
+            status=status.HTTP_403_FORBIDDEN,
         )
 
     if request.method == "GET":
@@ -763,46 +787,68 @@ def institution_department_admins(request):
 @permission_classes([IsAuthenticated])
 def institution_selected_departments(request):
     """List or save the authenticated institution's selected global departments."""
-    try:
-        profile = InstitutionProfile.objects.get(
+    profile = InstitutionProfile.objects.filter(
+        identity=request.user,
+        is_active=True,
+    ).first()
+
+    if profile:
+        if request.method == "PUT":
+            department_ids = request.data.get("department_ids")
+            if not isinstance(department_ids, list):
+                return Response(
+                    {"detail": "department_ids must be a list."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            try:
+                department_ids = list({int(value) for value in department_ids})
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "Every department ID must be an integer."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            departments = Department.objects.filter(
+                id__in=department_ids,
+                is_active=True,
+            )
+            if departments.count() != len(department_ids):
+                return Response(
+                    {"detail": "One or more departments do not exist or are inactive."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            profile.departments.set(departments)
+
+        selected = profile.departments.filter(is_active=True).order_by("name")
+    else:
+        if request.method == "PUT":
+            return Response(
+                {"detail": "Department admins cannot change selected departments."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        assignments = InstitutionDepartmentAdmin.objects.filter(
             identity=request.user,
             is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
-        return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
-        )
+            institution__is_active=True,
+            department__is_active=True,
+        ).select_related("institution", "department")
 
-    if request.method == "PUT":
-        department_ids = request.data.get("department_ids")
-        if not isinstance(department_ids, list):
-            return Response(
-                {"detail": "department_ids must be a list."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            department_ids = list({int(value) for value in department_ids})
-        except (TypeError, ValueError):
-            return Response(
-                {"detail": "Every department ID must be an integer."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        departments = Department.objects.filter(
-            id__in=department_ids,
+        selected_ids = [
+            item.department_id
+            for item in assignments
+            if item.institution.departments.filter(
+                id=item.department_id,
+                is_active=True,
+            ).exists()
+        ]
+        selected = Department.objects.filter(
+            id__in=selected_ids,
             is_active=True,
-        )
-        if departments.count() != len(department_ids):
-            return Response(
-                {"detail": "One or more departments do not exist or are inactive."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        ).order_by("name")
 
-        profile.departments.set(departments)
-
-    selected = profile.departments.filter(is_active=True).order_by("name")
     return Response({
         "results": [
             {
@@ -813,6 +859,7 @@ def institution_selected_departments(request):
             for department in selected
         ],
     })
+
 
 
 @api_view(["GET", "POST"])
@@ -1146,24 +1193,18 @@ def institution_student_subject_detail(request, student_subject_id):
 @permission_classes([AllowAny])
 def institution_subjects(request):
     """
-    List active global subjects or create a new global subject.
-
-    An authenticated institution owner can create a subject.
-    Once created, the subject becomes available globally.
+    List the global subject catalogue or create a department-specific copy.
+    Only Deepafy Admin can create global catalogue subjects.
     """
 
     if request.method == "GET":
         query = str(request.query_params.get("q") or "").strip()
-
         subjects = Subject.objects.filter(
+            department__isnull=True,
             is_active=True,
         )
-
         if query:
-            subjects = subjects.filter(
-                name__icontains=query,
-            )
-
+            subjects = subjects.filter(name__icontains=query)
         subjects = subjects.order_by("name")
 
         return Response({
@@ -1179,50 +1220,145 @@ def institution_subjects(request):
         })
 
     is_deepafy_admin = IsDeepafyAdmin().has_permission(request, None)
+    data = request.data
 
-    is_institution_owner = (
-        request.user
-        and request.user.is_authenticated
-        and InstitutionProfile.objects.filter(
-            identity=request.user,
-            is_active=True,
-        ).exists()
-    )
+    # Global catalogue creation is restricted to Deepafy Admin.
+    if (
+        "central_subject_id" not in data
+        and is_deepafy_admin
+        and data.get("department_id") in (None, "")
+    ):
 
-    if not (is_deepafy_admin or is_institution_owner):
+        name = str(data.get("name") or "").strip()
+        code = str(data.get("code") or "").strip()
+
+        if not name:
+            return Response(
+                {"detail": "Subject name is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        existing = Subject.objects.filter(
+            name__iexact=name,
+            department__isnull=True,
+        ).first()
+
+        if existing:
+            return Response(
+                {
+                    "detail": "This subject already exists in the Central Subject List.",
+                    "subject": {
+                        "id": existing.id,
+                        "name": existing.name,
+                        "code": existing.code,
+                    },
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        subject = Subject.objects.create(name=name, code=code)
         return Response(
             {
-                "detail": (
-                    "An active institution profile or Deepafy Admin "
-                    "permission is required to create subjects."
-                )
+                "id": subject.id,
+                "name": subject.name,
+                "code": subject.code,
+                "department_id": None,
             },
+            status=status.HTTP_201_CREATED,
+        )
+
+    # Create a separate Subject record for the selected department.
+    institution, assigned_department, is_owner = (
+        get_institution_department_access(request)
+    )
+    if institution is None:
+        return Response(
+            {"detail": "Institution or department-admin access not found."},
             status=status.HTTP_403_FORBIDDEN,
         )
 
-    data = request.data
+    department_id = data.get("department_id")
+    if not is_owner:
+        if department_id not in (None, ""):
+            try:
+                if int(department_id) != assigned_department.id:
+                    return Response(
+                        {"detail": "You can only manage your assigned department."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "department_id must be a valid integer."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        department = assigned_department
+    else:
+        try:
+            department_id = int(department_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "A valid department_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        department = institution.departments.filter(
+            id=department_id,
+            is_active=True,
+        ).first()
+        if department is None:
+            return Response(
+                {"detail": "Select a department assigned to this institution."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-    name = str(data.get("name") or "").strip()
-    code = str(data.get("code") or "").strip()
-
-    if not name:
+    settings_obj = InstitutionDepartmentSettings.objects.filter(
+        institution=institution,
+        department=department,
+    ).first()
+    if not is_owner and (
+        not settings_obj or not settings_obj.can_manage_subjects
+    ):
         return Response(
-            {"detail": "Subject name is required."},
-            status=status.HTTP_400_BAD_REQUEST,
+            {"detail": "You do not have permission to manage subjects."},
+            status=status.HTTP_403_FORBIDDEN,
         )
 
+    if "central_subject_id" in data:
+        try:
+            central_subject_id = int(data.get("central_subject_id"))
+            central_subject = Subject.objects.get(
+                id=central_subject_id,
+                department__isnull=True,
+                is_active=True,
+            )
+        except (Subject.DoesNotExist, TypeError, ValueError):
+            return Response(
+                {"detail": "Active Central Subject not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        name = central_subject.name
+        code = central_subject.code
+    else:
+        name = str(data.get("name") or "").strip()
+        code = str(data.get("code") or "").strip()
+        if not name:
+            return Response(
+                {"detail": "Subject name is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
     existing = Subject.objects.filter(
+        department=department,
         name__iexact=name,
     ).first()
-
     if existing:
         return Response(
             {
-                "detail": "This subject already exists.",
+                "detail": "This subject already exists in the selected department.",
                 "subject": {
                     "id": existing.id,
                     "name": existing.name,
                     "code": existing.code,
+                    "department_id": department.id,
                 },
             },
             status=status.HTTP_409_CONFLICT,
@@ -1231,13 +1367,14 @@ def institution_subjects(request):
     subject = Subject.objects.create(
         name=name,
         code=code,
+        department=department,
     )
-
     return Response(
         {
             "id": subject.id,
             "name": subject.name,
             "code": subject.code,
+            "department_id": department.id,
         },
         status=status.HTTP_201_CREATED,
     )
@@ -1245,21 +1382,67 @@ def institution_subjects(request):
 
 @api_view(["PATCH"])
 @authentication_classes([JWTAuthentication])
-@permission_classes([IsDeepafyAdmin])
+@permission_classes([IsAuthenticated])
 def institution_subject_detail(request, subject_id):
     try:
-        subject = Subject.objects.get(id=subject_id)
+        subject = Subject.objects.select_related("department").get(
+            id=subject_id
+        )
     except Subject.DoesNotExist:
         return Response(
             {"detail": "Subject not found."},
             status=status.HTTP_404_NOT_FOUND,
         )
 
+    is_deepafy_admin = IsDeepafyAdmin().has_permission(request, None)
+
+    if subject.department_id is None:
+        if not is_deepafy_admin:
+            return Response(
+                {"detail": "Only Deepafy Admin can manage global catalogue subjects."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+    else:
+        institution, assigned_department, is_owner = (
+            get_institution_department_access(request)
+        )
+        if institution is None:
+            return Response(
+                {"detail": "Institution or department-admin access not found."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not institution.departments.filter(
+            id=subject.department_id,
+            is_active=True,
+        ).exists():
+            return Response(
+                {"detail": "Subject does not belong to your institution."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not is_owner and assigned_department.id != subject.department_id:
+            return Response(
+                {"detail": "You can only manage subjects in your assigned department."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        settings_obj = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=subject.department,
+        ).first()
+        if not is_owner and (
+            not settings_obj or not settings_obj.can_manage_subjects
+        ):
+            return Response(
+                {"detail": "You do not have permission to manage subjects."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
     data = request.data
 
     if "name" in data:
         name = str(data.get("name") or "").strip()
-
         if not name:
             return Response(
                 {"detail": "Subject name is required."},
@@ -1268,16 +1451,14 @@ def institution_subject_detail(request, subject_id):
 
         duplicate = Subject.objects.filter(
             name__iexact=name,
-        ).exclude(
-            id=subject.id,
-        ).exists()
+            department_id=subject.department_id,
+        ).exclude(id=subject.id).exists()
 
         if duplicate:
             return Response(
-                {"detail": "This subject already exists."},
+                {"detail": "This subject already exists in this catalogue or department."},
                 status=status.HTTP_409_CONFLICT,
             )
-
         subject.name = name
 
     if "code" in data:
@@ -1293,6 +1474,7 @@ def institution_subject_detail(request, subject_id):
         "name": subject.name,
         "code": subject.code,
         "is_active": subject.is_active,
+        "department_id": subject.department_id,
     })
 
 
@@ -4114,10 +4296,8 @@ def institution_academic_levels(request):
         Create a new academic level.
     """
 
-    institution = getattr(
-        request.user,
-        "institution_profile",
-        None,
+    institution, assigned_department, is_owner = (
+        get_institution_department_access(request)
     )
 
     if institution is None:
@@ -4142,6 +4322,12 @@ def institution_academic_levels(request):
                 for level in levels
             ],
             status=status.HTTP_200_OK,
+        )
+
+    if not is_owner:
+        return Response(
+            {"detail": "Only the institution owner can create academic levels."},
+            status=status.HTTP_403_FORBIDDEN,
         )
 
     level_type = str(
@@ -6059,21 +6245,36 @@ def institution_staff_attendance_monthly(request):
 @permission_classes([IsAuthenticated])
 def institution_class_student_roster(request):
     """List existing running students by academic session and level."""
-    try:
-        institution = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    institution, assigned_department, is_owner = get_institution_department_access(request)
+    if institution is None:
         return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
+            {"detail": "Institution or department-admin access not found."},
+            status=status.HTTP_403_FORBIDDEN,
         )
+
+    if not is_owner:
+        settings_obj = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=assigned_department,
+        ).first()
+        if not (settings_obj and settings_obj.can_manage_marks):
+            return Response(
+                {"detail": "You do not have permission to view student marks."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
     session_id = request.query_params.get("academic_session_id")
     level_id = request.query_params.get("academic_level_id")
     department_id = request.query_params.get("department_id")
     academic_period = request.query_params.get("academic_period")
+
+    if not is_owner:
+        if department_id not in (None, "") and str(department_id) != str(assigned_department.id):
+            return Response(
+                {"detail": "You can only access your assigned department."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        department_id = str(assigned_department.id)
 
     if not session_id or not level_id:
         return Response(
@@ -6163,9 +6364,17 @@ def institution_class_subjects(request):
             institution=institution,
             department=assigned_department,
         ).first()
-        if not settings_obj or not settings_obj.can_manage_subjects:
+
+        if request.method == "GET":
+            has_permission = settings_obj and (
+                settings_obj.can_manage_subjects or settings_obj.can_manage_marks
+            )
+        else:
+            has_permission = settings_obj and settings_obj.can_manage_subjects
+
+        if not has_permission:
             return Response(
-                {"detail": "You do not have permission to manage subjects."},
+                {"detail": "You do not have permission to access or manage subjects."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -6358,6 +6567,15 @@ def institution_class_subjects(request):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
+            if (
+                (department is not None and subject.department_id != department.id)
+                or (department is None and subject.department_id is not None)
+            ):
+                return Response(
+                    {"detail": "This subject does not belong to the selected department."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             validated_items.append((subject, full_marks, pass_mark))
 
         saved = []
@@ -6434,6 +6652,15 @@ def institution_class_subjects(request):
         return Response(
             {"detail": "Active central subject not found."},
             status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if (
+        (department is not None and subject.department_id != department.id)
+        or (department is None and subject.department_id is not None)
+    ):
+        return Response(
+            {"detail": "This subject does not belong to the selected department."},
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
     try:
@@ -6547,16 +6774,22 @@ def institution_class_subject_detail(request, assignment_id):
 @authentication_classes([JWTAuthentication])
 @permission_classes([AllowAny])
 def institution_exam_types(request):
-    """List central exam types and manage each institution's selections."""
+    """List central exam types and manage owner/department selections."""
 
     user = getattr(request, "user", None)
     institution = None
+    assigned_department = None
+    is_owner = False
 
     if user and user.is_authenticated:
-        institution = InstitutionProfile.objects.filter(
-            identity=user,
-            is_active=True,
-        ).first()
+        institution, assigned_department, is_owner = (
+            get_institution_department_access(request)
+        )
+        if institution is None:
+            return Response(
+                {"detail": "Institution profile not found or access denied."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
     if request.method == "GET":
         queryset = CentralExamType.objects.filter(is_active=True)
@@ -6571,9 +6804,28 @@ def institution_exam_types(request):
             selected_ids = set(
                 InstitutionExamTypeSelection.objects.filter(
                     institution=institution,
+                    department=assigned_department,
                     exam_type_id__in=[item["id"] for item in results],
                 ).values_list("exam_type_id", flat=True)
             )
+
+            if not is_owner and not selected_ids:
+                department_settings = InstitutionDepartmentSettings.objects.filter(
+                    institution=institution,
+                    department=assigned_department,
+                ).first()
+
+                if not (
+                    department_settings
+                    and department_settings.can_manage_exam_types
+                ):
+                    selected_ids = set(
+                        InstitutionExamTypeSelection.objects.filter(
+                            institution=institution,
+                            department__isnull=True,
+                            exam_type_id__in=[item["id"] for item in results],
+                        ).values_list("exam_type_id", flat=True)
+                    )
 
         for item in results:
             item["selected"] = item["id"] in selected_ids
@@ -6581,11 +6833,30 @@ def institution_exam_types(request):
         return Response({"count": len(results), "results": results})
 
     is_deepafy_admin = IsDeepafyAdmin().has_permission(request, None)
+
     if not (is_deepafy_admin or institution):
         return Response(
-            {"detail": "Only an institution owner or Deepafy admin can manage exam types."},
+            {"detail": "Only an institution owner, assigned Department Admin, or Deepafy admin can manage exam types."},
             status=status.HTTP_403_FORBIDDEN,
         )
+
+    if not is_owner and not is_deepafy_admin:
+        if institution is None or assigned_department is None:
+            return Response(
+                {"detail": "Institution owner or assigned Department Admin access is required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        department_settings = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=assigned_department,
+        ).first()
+
+        if not department_settings or not department_settings.can_manage_exam_types:
+            return Response(
+                {"detail": "You do not have permission to manage exam types for this department."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
     if request.method == "DELETE":
         if not institution:
@@ -6606,6 +6877,7 @@ def institution_exam_types(request):
 
         deleted, _ = InstitutionExamTypeSelection.objects.filter(
             institution=institution,
+            department=assigned_department,
             exam_type_id=exam_type_id,
         ).delete()
 
@@ -6614,7 +6886,7 @@ def institution_exam_types(request):
             "exam_type_id": exam_type_id,
         })
 
-    # POST with exam_type_id selects an existing central type.
+    # POST with exam_type_id selects an existing shared central type.
     exam_type_id = request.data.get("exam_type_id") or request.data.get("id")
     if exam_type_id:
         if not institution:
@@ -6622,6 +6894,7 @@ def institution_exam_types(request):
                 {"detail": "An active institution profile is required to save a selection."},
                 status=status.HTTP_403_FORBIDDEN,
             )
+
         try:
             exam_type = CentralExamType.objects.get(
                 pk=exam_type_id,
@@ -6635,6 +6908,7 @@ def institution_exam_types(request):
 
         selection, created = InstitutionExamTypeSelection.objects.get_or_create(
             institution=institution,
+            department=assigned_department,
             exam_type=exam_type,
         )
         return Response(
@@ -6646,14 +6920,6 @@ def institution_exam_types(request):
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
 
-    # Only an institution owner or Deepafy admin may create a shared exam type.
-    if not (is_deepafy_admin or institution):
-        return Response(
-            {"detail": "Only an institution owner or Deepafy admin can create exam types."},
-            status=status.HTTP_403_FORBIDDEN,
-        )
-
-    # POST with name creates a shared central type, then selects it for this institution.
     name = request.data.get("name", "")
     if not isinstance(name, str):
         return Response(
@@ -6685,6 +6951,7 @@ def institution_exam_types(request):
             if institution:
                 InstitutionExamTypeSelection.objects.get_or_create(
                     institution=institution,
+                    department=assigned_department if not is_owner else None,
                     exam_type=exam_type,
                 )
 
@@ -6695,6 +6962,7 @@ def institution_exam_types(request):
         if institution:
             InstitutionExamTypeSelection.objects.get_or_create(
                 institution=institution,
+                department=assigned_department if not is_owner else None,
                 exam_type=exam_type,
             )
 
@@ -6741,28 +7009,56 @@ def institution_exams(request):
             request.query_params.get("academic_period") or ""
         ).strip()
 
-        default_grade_scale = InstitutionGradeScale.objects.filter(
-            institution=institution,
-            is_active=True,
-            is_default=True,
-        ).first()
+        department_settings = None
+        can_manage_department_types = False
 
-        if default_grade_scale is None:
-            default_grade_scale = InstitutionGradeScale.objects.filter(
+        if not is_owner:
+            department_settings = InstitutionDepartmentSettings.objects.filter(
                 institution=institution,
-                is_active=True,
+                department=assigned_department,
+            ).first()
+            can_manage_department_types = bool(
+                department_settings and department_settings.can_manage_exam_types
+            )
+
+        owner_grade_scale_scope = {
+            "institution": institution,
+            "department": None,
+            "is_active": True,
+        }
+        owner_grade_scale = InstitutionGradeScale.objects.filter(
+            **owner_grade_scale_scope, is_default=True
+        ).first()
+        if owner_grade_scale is None:
+            owner_grade_scale = InstitutionGradeScale.objects.filter(
+                **owner_grade_scale_scope
             ).order_by("id").first()
 
-        # Only the institution owner may auto-create missing exams.
-        if is_owner and session_id and level_id:
-            selected_types = CentralExamType.objects.filter(
-                is_active=True,
-                institution_selections__institution=institution,
-            ).distinct()
+        department_grade_scale_scope = {
+            "institution": institution,
+            "department": assigned_department,
+            "is_active": True,
+        }
+        department_grade_scale = InstitutionGradeScale.objects.filter(
+            **department_grade_scale_scope, is_default=True
+        ).first()
+        if department_grade_scale is None:
+            department_grade_scale = InstitutionGradeScale.objects.filter(
+                **department_grade_scale_scope
+            ).order_by("id").first()
 
-            for exam_type in selected_types:
+        shared_types = CentralExamType.objects.filter(
+            is_active=True,
+            institution_selections__institution=institution,
+            institution_selections__department=None,
+        ).distinct()
+        shared_type_ids = list(shared_types.values_list("id", flat=True))
+
+        if session_id and level_id:
+            for exam_type in shared_types:
                 exam, created = InstitutionExam.objects.get_or_create(
                     institution=institution,
+                    department=None,
                     academic_session_id=session_id,
                     academic_level_id=level_id,
                     academic_period=academic_period,
@@ -6771,17 +7067,54 @@ def institution_exams(request):
                         "category": "INTERNAL",
                         "exam_type": exam_type.name,
                         "central_exam_type": exam_type,
-                        "grade_scale": default_grade_scale,
+                        "grade_scale": owner_grade_scale,
                     },
                 )
-                if exam.grade_scale_id is None and default_grade_scale is not None:
-                    exam.grade_scale = default_grade_scale
-                    exam.save(update_fields=["grade_scale", "updated_at"])
-
-                if not created and exam.central_exam_type_id is None:
+                updates = []
+                if exam.grade_scale_id is None and owner_grade_scale is not None:
+                    exam.grade_scale = owner_grade_scale
+                    updates.append("grade_scale")
+                if exam.central_exam_type_id is None:
                     exam.central_exam_type = exam_type
                     exam.exam_type = exam_type.name
-                    exam.save(update_fields=["central_exam_type", "exam_type"])
+                    updates.extend(["central_exam_type", "exam_type"])
+                if updates:
+                    exam.save(update_fields=list(dict.fromkeys(updates + ["updated_at"])))
+
+        department_types = CentralExamType.objects.none()
+        if not is_owner and can_manage_department_types:
+            department_types = CentralExamType.objects.filter(
+                is_active=True,
+                institution_selections__institution=institution,
+                institution_selections__department=assigned_department,
+            ).exclude(id__in=shared_type_ids).distinct()
+
+            if session_id and level_id:
+                for exam_type in department_types:
+                    exam, created = InstitutionExam.objects.get_or_create(
+                        institution=institution,
+                        department=assigned_department,
+                        academic_session_id=session_id,
+                        academic_level_id=level_id,
+                        academic_period=academic_period,
+                        name=exam_type.name,
+                        defaults={
+                            "category": "INTERNAL",
+                            "exam_type": exam_type.name,
+                            "central_exam_type": exam_type,
+                            "grade_scale": department_grade_scale,
+                        },
+                    )
+                    updates = []
+                    if exam.grade_scale_id is None and department_grade_scale is not None:
+                        exam.grade_scale = department_grade_scale
+                        updates.append("grade_scale")
+                    if exam.central_exam_type_id is None:
+                        exam.central_exam_type = exam_type
+                        exam.exam_type = exam_type.name
+                        updates.extend(["central_exam_type", "exam_type"])
+                    if updates:
+                        exam.save(update_fields=list(dict.fromkeys(updates + ["updated_at"])))
 
         exams = InstitutionExam.objects.filter(
             institution=institution,
@@ -6792,9 +7125,19 @@ def institution_exams(request):
             "central_exam_type",
         )
 
-        selected_exam_type_ids = InstitutionExamTypeSelection.objects.filter(
-            institution=institution,
-        ).values_list("exam_type_id", flat=True)
+        if is_owner:
+            selected_exam_type_ids = shared_type_ids
+            exams = exams.filter(department__isnull=True)
+        elif can_manage_department_types:
+            department_type_ids = list(department_types.values_list("id", flat=True))
+            selected_exam_type_ids = shared_type_ids + department_type_ids
+            exams = (
+                exams.filter(department__isnull=True)
+                | exams.filter(department=assigned_department)
+            )
+        else:
+            selected_exam_type_ids = shared_type_ids
+            exams = exams.filter(department__isnull=True)
 
         exams = exams.filter(
             central_exam_type_id__in=selected_exam_type_ids,
@@ -6871,7 +7214,8 @@ def institution_exams(request):
 
     if academic_period:
         period_settings = InstitutionResultPeriodSettings.objects.filter(
-            institution=institution
+            institution=institution,
+            department=None,
         ).first()
         enabled_periods = set(
             (period_settings.years or []) + (period_settings.semesters or [])
@@ -6950,6 +7294,7 @@ def institution_exams(request):
             grade_scale = InstitutionGradeScale.objects.get(
                 id=grade_scale_id,
                 institution=institution,
+                department=None,
                 is_active=True,
             )
         except (
@@ -7096,16 +7441,23 @@ def institution_exam_students(request, exam_id):
 @permission_classes([IsAuthenticated])
 def institution_exam_subjects(request, exam_id):
     """List or add subjects to an institution-owned examination."""
-    try:
-        institution = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    institution, assigned_department, is_owner = get_institution_department_access(request)
+    if institution is None:
         return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
+            {"detail": "Institution or department-admin access not found."},
+            status=status.HTTP_403_FORBIDDEN,
         )
+
+    if not is_owner:
+        settings_obj = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=assigned_department,
+        ).first()
+        if not settings_obj or not settings_obj.can_manage_marks:
+            return Response(
+                {"detail": "You do not have permission to manage marks."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
     try:
         exam = InstitutionExam.objects.get(
@@ -7476,21 +7828,34 @@ def institution_exam_marks(request, exam_subject_id):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def institution_grade_scales(request):
-    """List or create grading scales owned by the authenticated institution."""
-    try:
-        institution = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    """List or manage grading scales for the owner or assigned department."""
+    institution, department, is_owner = get_institution_department_access(request)
+
+    if institution is None:
         return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
+            {"detail": "Institution access required."},
+            status=status.HTTP_403_FORBIDDEN,
         )
+
+    scope = {"institution": institution, "department": department}
+
+    if not is_owner:
+        department_settings = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=department,
+        ).first()
+
+        if request.method != "GET" and not (
+            department_settings and department_settings.can_manage_grade
+        ):
+            return Response(
+                {"detail": "You do not have permission to manage grade scales."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
     if request.method == "GET":
         scales = InstitutionGradeScale.objects.filter(
-            institution=institution,
+            **scope,
         ).prefetch_related("ranges")
 
         return Response({
@@ -7528,11 +7893,11 @@ def institution_grade_scales(request):
             scale_id = int(request.data.get("id"))
             scale = InstitutionGradeScale.objects.get(
                 id=scale_id,
-                institution=institution,
+                **scope,
             )
         except (TypeError, ValueError, InstitutionGradeScale.DoesNotExist):
             return Response(
-                {"detail": "Grading scale not found for this institution."},
+                {"detail": "Grading scale not found for this institution or department."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
@@ -7558,7 +7923,7 @@ def institution_grade_scales(request):
             )
 
         if InstitutionGradeScale.objects.filter(
-            institution=institution,
+            **scope,
             name__iexact=name,
         ).exclude(id=scale.id).exists():
             return Response(
@@ -7604,8 +7969,8 @@ def institution_grade_scales(request):
     try:
         with transaction.atomic():
             if InstitutionGradeScale.objects.filter(
-                institution=institution,
-                name=name,
+                **scope,
+                name__iexact=name,
             ).exists():
                 return Response(
                     {"detail": "A grading scale with this name already exists."},
@@ -7616,12 +7981,12 @@ def institution_grade_scales(request):
 
             if make_default:
                 InstitutionGradeScale.objects.filter(
-                    institution=institution,
+                    **scope,
                     is_default=True,
                 ).update(is_default=False)
 
             scale = InstitutionGradeScale.objects.create(
-                institution=institution,
+                **scope,
                 name=name,
                 maximum_gpa=maximum_gpa,
                 is_default=make_default,
@@ -7650,24 +8015,33 @@ def institution_grade_scales(request):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def institution_grade_range_detail(request, scale_id, range_id):
-    """Update or delete a grade range belonging to an institution-owned scale."""
+    """Update or delete a grade range within the owner's or assigned department's scale."""
     from decimal import Decimal, InvalidOperation
 
-    try:
-        institution = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    institution, department, is_owner = get_institution_department_access(request)
+
+    if institution is None:
         return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
+            {"detail": "Institution access required."},
+            status=status.HTTP_403_FORBIDDEN,
         )
+
+    if not is_owner:
+        department_settings = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=department,
+        ).first()
+        if not (department_settings and department_settings.can_manage_grade):
+            return Response(
+                {"detail": "You do not have permission to manage grade scales."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
     try:
         scale = InstitutionGradeScale.objects.get(
             id=scale_id,
             institution=institution,
+            department=department,
         )
         item = InstitutionGradeRange.objects.get(
             id=range_id,
@@ -7675,7 +8049,7 @@ def institution_grade_range_detail(request, scale_id, range_id):
         )
     except (InstitutionGradeScale.DoesNotExist, InstitutionGradeRange.DoesNotExist, ValueError, TypeError):
         return Response(
-            {"detail": "Grading scale or grade range not found for this institution."},
+            {"detail": "Grading scale or grade range not found for this institution or department."},
             status=status.HTTP_404_NOT_FOUND,
         )
 
@@ -7764,30 +8138,42 @@ def institution_grade_range_detail(request, scale_id, range_id):
         "grade_point": str(item.grade_point) if item.grade_point is not None else None,
     })
 
+
 @api_view(["GET", "POST"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def institution_grade_ranges(request, scale_id):
-    """List or add percentage ranges to an institution-owned grading scale."""
-    try:
-        institution = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
-        )
-    except InstitutionProfile.DoesNotExist:
+    """List or add percentage ranges within the owner's or assigned department's scale."""
+    institution, department, is_owner = get_institution_department_access(request)
+
+    if institution is None:
         return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
+            {"detail": "Institution access required."},
+            status=status.HTTP_403_FORBIDDEN,
         )
+
+    if not is_owner:
+        department_settings = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=department,
+        ).first()
+        if request.method == "POST" and not (
+            department_settings and department_settings.can_manage_grade
+        ):
+            return Response(
+                {"detail": "You do not have permission to manage grade scales."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
     try:
         scale = InstitutionGradeScale.objects.get(
             id=scale_id,
             institution=institution,
+            department=department,
         )
     except (InstitutionGradeScale.DoesNotExist, ValueError, TypeError):
         return Response(
-            {"detail": "Grading scale not found for this institution."},
+            {"detail": "Grading scale not found for this institution or department."},
             status=status.HTTP_404_NOT_FOUND,
         )
 
@@ -9192,23 +9578,38 @@ def institution_grade_scale_versions(request, scale_id):
     """List immutable grading versions or save a new version when config changes."""
     from decimal import Decimal, InvalidOperation
 
-    try:
-        institution = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
+    institution, department, is_owner = get_institution_department_access(request)
+
+    if institution is None:
+        return Response(
+            {"detail": "Institution access required."},
+            status=status.HTTP_403_FORBIDDEN,
         )
+
+    scope = {"institution": institution, "department": department}
+
+    if not is_owner:
+        department_settings = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=department,
+        ).first()
+
+        if request.method != "GET" and not (
+            department_settings and department_settings.can_manage_grade
+        ):
+            return Response(
+                {"detail": "You do not have permission to manage grade scales."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+    try:
         scale = InstitutionGradeScale.objects.get(
             id=scale_id,
-            institution=institution,
-        )
-    except InstitutionProfile.DoesNotExist:
-        return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
+            **scope,
         )
     except InstitutionGradeScale.DoesNotExist:
         return Response(
-            {"detail": "Grading scale not found for this institution."},
+            {"detail": "Grading scale not found for this institution or department."},
             status=status.HTTP_404_NOT_FOUND,
         )
 
@@ -9328,7 +9729,7 @@ def institution_grade_scale_versions(request, scale_id):
     with transaction.atomic():
         scale = InstitutionGradeScale.objects.select_for_update().get(
             id=scale.id,
-            institution=institution,
+            **scope,
         )
         latest = scale.versions.order_by("-version_number").first()
 
@@ -9414,23 +9815,38 @@ def institution_grade_scale_activate_version(request, scale_id, version_id):
     """Activate a saved grading version and restore its ranges atomically."""
     from decimal import Decimal
 
-    try:
-        institution = InstitutionProfile.objects.get(
-            identity=request.user,
-            is_active=True,
+    institution, department, is_owner = get_institution_department_access(request)
+
+    if institution is None:
+        return Response(
+            {"detail": "Institution access required."},
+            status=status.HTTP_403_FORBIDDEN,
         )
+
+    scope = {"institution": institution, "department": department}
+
+    if not is_owner:
+        department_settings = InstitutionDepartmentSettings.objects.filter(
+            institution=institution,
+            department=department,
+        ).first()
+
+        if not (
+            department_settings and department_settings.can_manage_grade
+        ):
+            return Response(
+                {"detail": "You do not have permission to manage grade scales."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+    try:
         scale = InstitutionGradeScale.objects.get(
             id=scale_id,
-            institution=institution,
+            **scope,
         )
         version = InstitutionGradeScaleVersion.objects.get(
             id=version_id,
             grade_scale=scale,
-        )
-    except InstitutionProfile.DoesNotExist:
-        return Response(
-            {"detail": "Institution profile not found."},
-            status=status.HTTP_404_NOT_FOUND,
         )
     except (
         InstitutionGradeScale.DoesNotExist,
@@ -9444,7 +9860,7 @@ def institution_grade_scale_activate_version(request, scale_id, version_id):
     with transaction.atomic():
         scale = InstitutionGradeScale.objects.select_for_update().get(
             id=scale.id,
-            institution=institution,
+            **scope,
         )
         version = InstitutionGradeScaleVersion.objects.get(
             id=version.id,
@@ -10635,6 +11051,10 @@ def institution_department_settings(request, department_id):
         "can_publish_results",
         "can_manage_profile",
         "can_manage_teachers_staff",
+        "can_manage_grade",
+        "can_manage_exam_types",
+        "can_manage_exams",
+        "can_manage_academic_periods",
     )
 
     settings_obj, _ = InstitutionDepartmentSettings.objects.get_or_create(
