@@ -217,12 +217,6 @@ def institution_result_period_settings(request):
             **settings_filter
         ).first()
 
-        if settings_obj is None and not is_owner:
-            settings_obj = InstitutionResultPeriodSettings.objects.filter(
-                institution=institution,
-                department__isnull=True,
-            ).first()
-
         return Response({
             "years": settings_obj.years if settings_obj else [],
             "semesters": settings_obj.semesters if settings_obj else [],
@@ -7046,6 +7040,8 @@ def institution_exams(request):
             department_grade_scale = InstitutionGradeScale.objects.filter(
                 **department_grade_scale_scope
             ).order_by("id").first()
+        if department_grade_scale is None:
+            department_grade_scale = owner_grade_scale
 
         shared_types = CentralExamType.objects.filter(
             is_active=True,
@@ -7071,7 +7067,11 @@ def institution_exams(request):
                     },
                 )
                 updates = []
-                if exam.grade_scale_id is None and owner_grade_scale is not None:
+                if (
+                    not exam.is_published
+                    and not exam.has_been_published
+                    and exam.grade_scale_id != (owner_grade_scale.id if owner_grade_scale else None)
+                ):
                     exam.grade_scale = owner_grade_scale
                     updates.append("grade_scale")
                 if exam.central_exam_type_id is None:
@@ -7106,7 +7106,11 @@ def institution_exams(request):
                         },
                     )
                     updates = []
-                    if exam.grade_scale_id is None and department_grade_scale is not None:
+                    if (
+                        not exam.is_published
+                        and not exam.has_been_published
+                        and exam.grade_scale_id != (department_grade_scale.id if department_grade_scale else None)
+                    ):
                         exam.grade_scale = department_grade_scale
                         updates.append("grade_scale")
                     if exam.central_exam_type_id is None:
@@ -7839,6 +7843,28 @@ def institution_grade_scales(request):
 
     scope = {"institution": institution, "department": department}
 
+    if is_owner and request.method == "GET" and request.query_params.get("department_id"):
+        try:
+            requested_department_id = int(request.query_params.get("department_id"))
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Invalid department_id."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not InstitutionDepartmentProfile.objects.filter(
+            institution=institution,
+            department_id=requested_department_id,
+            department__is_active=True,
+        ).exists():
+            return Response(
+                {"detail": "Department not found for this institution."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        scope.pop("department", None)
+        scope["department_id"] = requested_department_id
+
     if not is_owner:
         department_settings = InstitutionDepartmentSettings.objects.filter(
             institution=institution,
@@ -7854,36 +7880,55 @@ def institution_grade_scales(request):
             )
 
     if request.method == "GET":
-        scales = InstitutionGradeScale.objects.filter(
-            **scope,
-        ).prefetch_related("ranges")
+        scales = list(
+            InstitutionGradeScale.objects.filter(
+                **scope,
+            ).prefetch_related("ranges")
+        )
+
+        def grade_scale_payload(scale, is_inherited=False):
+            return {
+                "id": scale.id,
+                "name": scale.name,
+                "maximum_gpa": str(scale.maximum_gpa),
+                "is_default": scale.is_default,
+                "is_active": scale.is_active,
+                "is_inherited": is_inherited,
+                "ranges": [
+                    {
+                        "id": item.id,
+                        "grade_name": item.grade_name,
+                        "min_percentage": str(item.min_percentage),
+                        "max_percentage": str(item.max_percentage),
+                        "grade_point": (
+                            str(item.grade_point)
+                            if item.grade_point is not None
+                            else None
+                        ),
+                    }
+                    for item in scale.ranges.all()
+                ],
+            }
+
+        results = [grade_scale_payload(scale) for scale in scales]
+
+        if not is_owner and not any(scale.is_active and scale.is_default for scale in scales):
+            owner_scales = InstitutionGradeScale.objects.filter(
+                institution=institution,
+                department=None,
+                is_active=True,
+            ).prefetch_related("ranges")
+
+            owner_default = owner_scales.filter(is_default=True).first()
+            if owner_default is None:
+                owner_default = owner_scales.order_by("id").first()
+
+            if owner_default is not None:
+                results.insert(0, grade_scale_payload(owner_default, True))
 
         return Response({
-            "count": scales.count(),
-            "results": [
-                {
-                    "id": scale.id,
-                    "name": scale.name,
-                    "maximum_gpa": str(scale.maximum_gpa),
-                    "is_default": scale.is_default,
-                    "is_active": scale.is_active,
-                    "ranges": [
-                        {
-                            "id": item.id,
-                            "grade_name": item.grade_name,
-                            "min_percentage": str(item.min_percentage),
-                            "max_percentage": str(item.max_percentage),
-                            "grade_point": (
-                                str(item.grade_point)
-                                if item.grade_point is not None
-                                else None
-                            ),
-                        }
-                        for item in scale.ranges.all()
-                    ],
-                }
-                for scale in scales
-            ],
+            "count": len(results),
+            "results": results,
         })
 
     if request.method == "PATCH":
@@ -8009,6 +8054,59 @@ def institution_grade_scales(request):
         },
         status=status.HTTP_201_CREATED,
     )
+
+
+@api_view(["POST"])
+@authentication_classes([JWTAuthentication])
+@permission_classes([IsAuthenticated])
+def institution_grade_scales_reset(request):
+    """Reset department grading to the owner default while preserving history."""
+    institution, department, is_owner = get_institution_department_access(request)
+
+    if institution is None or is_owner or department is None:
+        return Response(
+            {"detail": "Only a department administrator can reset to the owner default."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    settings = InstitutionDepartmentSettings.objects.filter(
+        institution=institution,
+        department=department,
+    ).first()
+
+    if not (settings and settings.can_manage_grade):
+        return Response(
+            {"detail": "You do not have permission to manage grade scales."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    owner_scales = InstitutionGradeScale.objects.filter(
+        institution=institution,
+        department=None,
+        is_active=True,
+    )
+    owner_default = owner_scales.filter(is_default=True).first()
+    if owner_default is None:
+        owner_default = owner_scales.order_by("id").first()
+
+    with transaction.atomic():
+        InstitutionGradeScale.objects.filter(
+            institution=institution,
+            department=department,
+        ).update(is_active=False, is_default=False)
+
+        InstitutionExam.objects.filter(
+            institution=institution,
+            department=department,
+            is_published=False,
+            has_been_published=False,
+        ).update(grade_scale=owner_default)
+
+    return Response({
+        "detail": "Department grading scale reset to owner default.",
+        "inherited": True,
+        "owner_grade_scale_id": owner_default.id if owner_default else None,
+    })
 
 
 @api_view(["PUT", "PATCH", "DELETE"])
@@ -9588,6 +9686,34 @@ def institution_grade_scale_versions(request, scale_id):
 
     scope = {"institution": institution, "department": department}
 
+    if is_owner and request.method == "GET" and request.query_params.get("department_id"):
+        try:
+            requested_department_id = int(request.query_params.get("department_id"))
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Invalid department_id."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not InstitutionDepartmentProfile.objects.filter(
+            institution=institution,
+            department_id=requested_department_id,
+            department__is_active=True,
+        ).exists():
+            return Response(
+                {"detail": "Department not found for this institution."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        scope.pop("department", None)
+        scope["department_id"] = requested_department_id
+
+    if is_owner and request.method != "GET" and request.query_params.get("department_id"):
+        return Response(
+            {"detail": "Owner access to department grade versions is read-only."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     if not is_owner:
         department_settings = InstitutionDepartmentSettings.objects.filter(
             institution=institution,
@@ -9764,6 +9890,13 @@ def institution_grade_scale_versions(request, scale_id):
         if current_config == requested_config and latest is not None:
             version = latest
             created = False
+            scale.is_active = True
+            if not is_owner:
+                InstitutionGradeScale.objects.filter(
+                    **scope, is_default=True
+                ).exclude(id=scale.id).update(is_default=False)
+                scale.is_default = True
+            scale.save(update_fields=["is_active", "is_default", "updated_at"])
         else:
             version = InstitutionGradeScaleVersion.objects.create(
                 grade_scale=scale,
@@ -9778,9 +9911,17 @@ def institution_grade_scale_versions(request, scale_id):
             scale.name = name
             scale.maximum_gpa = maximum_gpa
             scale.active_version = version
-            scale.save(update_fields=[
-                "name", "maximum_gpa", "active_version", "updated_at"
-            ])
+            scale.is_active = True
+            update_fields = [
+                "name", "maximum_gpa", "active_version", "is_active", "updated_at"
+            ]
+            if not is_owner:
+                InstitutionGradeScale.objects.filter(
+                    **scope, is_default=True
+                ).exclude(id=scale.id).update(is_default=False)
+                scale.is_default = True
+                update_fields.append("is_default")
+            scale.save(update_fields=update_fields)
 
             scale.ranges.all().delete()
             InstitutionGradeRange.objects.bulk_create([
@@ -9874,9 +10015,15 @@ def institution_grade_scale_activate_version(request, scale_id, version_id):
         scale.name = version.name
         scale.maximum_gpa = version.maximum_gpa
         scale.active_version = version
-        scale.save(update_fields=[
-            "name", "maximum_gpa", "active_version", "updated_at"
-        ])
+        scale.is_active = True
+        update_fields = ["name", "maximum_gpa", "active_version", "is_active", "updated_at"]
+        if not is_owner:
+            InstitutionGradeScale.objects.filter(
+                **scope, is_default=True
+            ).exclude(id=scale.id).update(is_default=False)
+            scale.is_default = True
+            update_fields.append("is_default")
+        scale.save(update_fields=update_fields)
 
         scale.ranges.all().delete()
         InstitutionGradeRange.objects.bulk_create([

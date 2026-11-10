@@ -3127,6 +3127,8 @@ class InstitutionResultsAPITests(APITestCase):
             Department,
             InstitutionDepartmentAdmin,
             InstitutionDepartmentSettings,
+            InstitutionGradeScale,
+            InstitutionGradeScaleVersion,
         )
 
         department = Department.objects.create(name="Grade Isolation Department")
@@ -3153,16 +3155,39 @@ class InstitutionResultsAPITests(APITestCase):
             format="json",
         )
         self.assertEqual(owner_create.status_code, 201, owner_create.data)
+        owner_scale_id = owner_create.data["id"]
+        owner_scale = InstitutionGradeScale.objects.get(id=owner_scale_id)
+        owner_active_version_id = owner_scale.active_version_id
+
+        owner_ranges_v1 = [
+            {"grade_name": "A", "min_percentage": "80.00", "max_percentage": "100.00", "grade_point": "5.00"},
+            {"grade_name": "B", "min_percentage": "60.00", "max_percentage": "79.99", "grade_point": "4.00"},
+            {"grade_name": "F", "min_percentage": "0.00", "max_percentage": "59.99", "grade_point": "0.00"},
+        ]
+        owner_version1_response = self.client.post(
+            reverse("institution-grade-scale-versions", args=[owner_scale_id]),
+            {
+                "name": "Owner Only Scale",
+                "maximum_gpa": "5.00",
+                "ranges": owner_ranges_v1,
+            },
+            format="json",
+        )
+        self.assertEqual(
+            owner_version1_response.status_code, 201, owner_version1_response.data
+        )
+        owner_version1_id = owner_version1_response.data["version"]["id"]
+        owner_scale.refresh_from_db()
+        owner_active_version_id = owner_scale.active_version_id
 
         self.client.force_authenticate(user=admin)
         department_list = self.client.get(reverse("institution-grade-scales"))
         self.assertEqual(department_list.status_code, 200, department_list.data)
-        self.assertFalse(
-            any(
-                item["name"] == "Owner Only Scale"
-                for item in department_list.data["results"]
-            )
+        inherited_owner_scale = next(
+            item for item in department_list.data["results"]
+            if item["name"] == "Owner Only Scale"
         )
+        self.assertTrue(inherited_owner_scale["is_inherited"])
 
         department_create = self.client.post(
             reverse("institution-grade-scales"),
@@ -3172,6 +3197,186 @@ class InstitutionResultsAPITests(APITestCase):
         self.assertEqual(
             department_create.status_code, 201, department_create.data
         )
+        department_scale_id = department_create.data["id"]
+
+        version_response = self.client.post(
+            reverse(
+                "institution-grade-scale-versions",
+                args=[department_scale_id],
+            ),
+            {
+                "name": "Department Only Scale",
+                "maximum_gpa": "5.00",
+                "ranges": [
+                    {
+                        "grade_name": "A",
+                        "min_percentage": "80.00",
+                        "max_percentage": "100.00",
+                        "grade_point": "5.00",
+                    },
+                    {
+                        "grade_name": "B",
+                        "min_percentage": "60.00",
+                        "max_percentage": "79.99",
+                        "grade_point": "4.00",
+                    },
+                    {
+                        "grade_name": "F",
+                        "min_percentage": "0.00",
+                        "max_percentage": "59.99",
+                        "grade_point": "0.00",
+                    },
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(version_response.status_code, 201, version_response.data)
+        version1_id = version_response.data["version"]["id"]
+        self.assertEqual(version_response.data["version"]["version_number"], 1)
+
+        changed_ranges = [
+            {
+                "grade_name": "A",
+                "min_percentage": "80.00",
+                "max_percentage": "100.00",
+                "grade_point": "5.00",
+            },
+            {
+                "grade_name": "B",
+                "min_percentage": "60.00",
+                "max_percentage": "79.99",
+                "grade_point": "4.50",
+            },
+            {
+                "grade_name": "F",
+                "min_percentage": "0.00",
+                "max_percentage": "59.99",
+                "grade_point": "0.00",
+            },
+        ]
+        version2_response = self.client.post(
+            reverse(
+                "institution-grade-scale-versions",
+                args=[department_scale_id],
+            ),
+            {
+                "name": "Department Only Scale",
+                "maximum_gpa": "5.00",
+                "ranges": changed_ranges,
+            },
+            format="json",
+        )
+        self.assertEqual(
+            version2_response.status_code, 201, version2_response.data
+        )
+        version2_id = version2_response.data["version"]["id"]
+        self.assertEqual(version2_response.data["version"]["version_number"], 2)
+
+        activate_response = self.client.post(
+            reverse(
+                "institution-grade-scale-activate-version",
+                args=[department_scale_id, version1_id],
+            ),
+            format="json",
+        )
+        self.assertEqual(activate_response.status_code, 200, activate_response.data)
+
+        department_scale = InstitutionGradeScale.objects.get(id=department_scale_id)
+        self.assertEqual(department_scale.active_version_id, version1_id)
+        self.assertEqual(
+            InstitutionGradeScaleVersion.objects.filter(
+                grade_scale_id=department_scale_id
+            ).count(),
+            2,
+        )
+        self.assertTrue(
+            InstitutionGradeScaleVersion.objects.get(id=version1_id).is_active
+        )
+        self.assertFalse(
+            InstitutionGradeScaleVersion.objects.get(id=version2_id).is_active
+        )
+
+        owner_scale.refresh_from_db()
+        self.assertEqual(owner_scale.name, "Owner Only Scale")
+        self.assertEqual(owner_scale.active_version_id, owner_active_version_id)
+        self.assertEqual(
+            InstitutionGradeScaleVersion.objects.filter(
+                grade_scale=owner_scale
+            ).count(),
+            1,
+        )
+        self.assertTrue(
+            InstitutionGradeScaleVersion.objects.get(
+                id=owner_version1_id
+            ).is_active
+        )
+
+        self.client.force_authenticate(user=self.owner)
+        owner_version2_ranges = [
+            {"grade_name": "A", "min_percentage": "80.00", "max_percentage": "100.00", "grade_point": "5.00"},
+            {"grade_name": "B", "min_percentage": "60.00", "max_percentage": "79.99", "grade_point": "4.50"},
+            {"grade_name": "F", "min_percentage": "0.00", "max_percentage": "59.99", "grade_point": "0.00"},
+        ]
+        owner_version2_response = self.client.post(
+            reverse("institution-grade-scale-versions", args=[owner_scale_id]),
+            {
+                "name": "Owner Only Scale",
+                "maximum_gpa": "5.00",
+                "ranges": owner_version2_ranges,
+            },
+            format="json",
+        )
+        self.assertEqual(
+            owner_version2_response.status_code, 201, owner_version2_response.data
+        )
+        self.assertEqual(
+            owner_version2_response.data["version"]["version_number"], 2
+        )
+        owner_scale.refresh_from_db()
+        self.assertNotEqual(owner_scale.active_version_id, owner_version1_id)
+
+        self.client.force_authenticate(user=admin)
+        own_department_list = self.client.get(reverse("institution-grade-scales"))
+        self.assertEqual(own_department_list.status_code, 200, own_department_list.data)
+        own_scale_payload = next(
+            item for item in own_department_list.data["results"]
+            if item["name"] == "Department Only Scale"
+        )
+        self.assertFalse(own_scale_payload["is_inherited"])
+        own_b_grade = next(
+            item for item in own_scale_payload["ranges"]
+            if item["grade_name"] == "B"
+        )
+        self.assertEqual(own_b_grade["grade_point"], "4.00")
+
+        fallback_department = Department.objects.create(
+            name="Grade Fallback Department"
+        )
+        self.institution.departments.add(fallback_department)
+        fallback_admin = UserIdentity.objects.create(
+            email="grade-fallback-admin@example.com",
+            username="grade_fallback_admin",
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=fallback_department,
+            identity=fallback_admin,
+            assigned_by=self.owner,
+        )
+
+        self.client.force_authenticate(user=fallback_admin)
+        fallback_list = self.client.get(reverse("institution-grade-scales"))
+        self.assertEqual(fallback_list.status_code, 200, fallback_list.data)
+        fallback_scale = next(
+            item for item in fallback_list.data["results"]
+            if item["name"] == "Owner Only Scale"
+        )
+        self.assertTrue(fallback_scale["is_inherited"])
+        fallback_b_grade = next(
+            item for item in fallback_scale["ranges"]
+            if item["grade_name"] == "B"
+        )
+        self.assertEqual(fallback_b_grade["grade_point"], "4.50")
 
         self.client.force_authenticate(user=self.owner)
         owner_list = self.client.get(reverse("institution-grade-scales"))
@@ -3188,6 +3393,142 @@ class InstitutionResultsAPITests(APITestCase):
                 for item in owner_list.data["results"]
             )
         )
+
+    def test_department_grade_scale_reset_preserves_history_and_inherits_owner(self):
+        from institution.models import (
+            Department,
+            InstitutionDepartmentAdmin,
+            InstitutionDepartmentSettings,
+            InstitutionGradeScale,
+            InstitutionGradeScaleVersion,
+        )
+
+        department = Department.objects.create(name="Grade Reset Department")
+        self.institution.departments.add(department)
+        admin = UserIdentity.objects.create(
+            email="grade-reset-admin@example.com",
+            username="grade_reset_admin",
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=department,
+            identity=admin,
+            assigned_by=self.owner,
+        )
+        settings = InstitutionDepartmentSettings.objects.create(
+            institution=self.institution,
+            department=department,
+            can_manage_grade=False,
+        )
+
+        owner_create = self.client.post(
+            reverse("institution-grade-scales"),
+            {"name": "Reset Owner Default", "is_default": True},
+            format="json",
+        )
+        self.assertEqual(owner_create.status_code, 201, owner_create.data)
+        owner_scale = InstitutionGradeScale.objects.get(id=owner_create.data["id"])
+
+        ranges_v1 = [
+            {"grade_name": "A", "min_percentage": "80.00", "max_percentage": "100.00", "grade_point": "5.00"},
+            {"grade_name": "B", "min_percentage": "60.00", "max_percentage": "79.99", "grade_point": "4.00"},
+            {"grade_name": "F", "min_percentage": "0.00", "max_percentage": "59.99", "grade_point": "0.00"},
+        ]
+        owner_version = self.client.post(
+            reverse("institution-grade-scale-versions", args=[owner_scale.id]),
+            {
+                "name": "Reset Owner Default",
+                "maximum_gpa": "5.00",
+                "ranges": ranges_v1,
+            },
+            format="json",
+        )
+        self.assertEqual(owner_version.status_code, 201, owner_version.data)
+
+        self.client.force_authenticate(user=admin)
+        denied = self.client.post(
+            reverse("institution-grade-scales-reset"),
+            {},
+            format="json",
+        )
+        self.assertEqual(denied.status_code, 403, denied.data)
+
+        settings.can_manage_grade = True
+        settings.save(update_fields=["can_manage_grade"])
+
+        department_create = self.client.post(
+            reverse("institution-grade-scales"),
+            {"name": "Reset Department Custom", "is_default": True},
+            format="json",
+        )
+        self.assertEqual(department_create.status_code, 201, department_create.data)
+        department_scale = InstitutionGradeScale.objects.get(id=department_create.data["id"])
+
+        first_version = self.client.post(
+            reverse("institution-grade-scale-versions", args=[department_scale.id]),
+            {
+                "name": "Reset Department Custom",
+                "maximum_gpa": "5.00",
+                "ranges": ranges_v1,
+            },
+            format="json",
+        )
+        self.assertEqual(first_version.status_code, 201, first_version.data)
+
+        ranges_v2 = [
+            {"grade_name": "A", "min_percentage": "80.00", "max_percentage": "100.00", "grade_point": "5.00"},
+            {"grade_name": "B", "min_percentage": "60.00", "max_percentage": "79.99", "grade_point": "4.50"},
+            {"grade_name": "F", "min_percentage": "0.00", "max_percentage": "59.99", "grade_point": "0.00"},
+        ]
+        second_version = self.client.post(
+            reverse("institution-grade-scale-versions", args=[department_scale.id]),
+            {
+                "name": "Reset Department Custom",
+                "maximum_gpa": "5.00",
+                "ranges": ranges_v2,
+            },
+            format="json",
+        )
+        self.assertEqual(second_version.status_code, 201, second_version.data)
+
+        reset_response = self.client.post(
+            reverse("institution-grade-scales-reset"),
+            {},
+            format="json",
+        )
+        self.assertEqual(reset_response.status_code, 200, reset_response.data)
+        self.assertTrue(reset_response.data["inherited"])
+        self.assertEqual(reset_response.data["owner_grade_scale_id"], owner_scale.id)
+
+        department_scale.refresh_from_db()
+        self.assertFalse(department_scale.is_active)
+        self.assertFalse(department_scale.is_default)
+        self.assertEqual(
+            InstitutionGradeScaleVersion.objects.filter(
+                grade_scale=department_scale
+            ).count(),
+            2,
+        )
+        self.assertEqual(
+            InstitutionGradeScaleVersion.objects.filter(
+                grade_scale=department_scale,
+                version_number__in=[1, 2],
+            ).count(),
+            2,
+        )
+
+        department_list = self.client.get(reverse("institution-grade-scales"))
+        self.assertEqual(department_list.status_code, 200, department_list.data)
+        inherited = next(
+            item for item in department_list.data["results"]
+            if item["id"] == owner_scale.id
+        )
+        self.assertTrue(inherited["is_inherited"])
+
+        owner_scale.refresh_from_db()
+        self.assertTrue(owner_scale.is_active)
+        self.assertTrue(owner_scale.is_default)
+        self.assertEqual(owner_scale.active_version_id, owner_version.data["active_version_id"])
 
     def test_department_result_period_settings_respect_permission_and_scope(self):
         from institution.models import (

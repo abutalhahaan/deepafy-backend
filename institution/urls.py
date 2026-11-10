@@ -69,6 +69,7 @@ from .views import (
     institution_exam_results_send_email,
     institution_exam_publish,
     institution_grade_scales,
+    institution_grade_scales_reset,
     institution_grade_ranges,
     institution_grade_range_detail,
     institution_grade_scale_versions,
@@ -276,6 +277,11 @@ urlpatterns = [
         "results/grade-scales/",
         institution_grade_scales,
         name="institution-grade-scales",
+    ),
+    path(
+        "results/grade-scales/reset/",
+        institution_grade_scales_reset,
+        name="institution-grade-scales-reset",
     ),
     path(
         "results/grade-scales/<int:scale_id>/ranges/",
