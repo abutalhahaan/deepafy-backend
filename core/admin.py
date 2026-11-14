@@ -650,7 +650,8 @@ class CentralPopupSettingForm(forms.ModelForm):
 
             "border": "Popup border style, width, and color. Example: 2px solid #0A66C2.",
             "border_radius": "Popup-এর চারটি corner কতটা গোল হবে তা নির্ধারণ করে।",
-            "box_shadow": "Popup-এর চারপাশে প্রদর্শিত shadow বা ছায়া।",
+            "box_shadow": "Legacy shadow value; retained for backward compatibility.",
+            "box_shadows": "Build up to 5 popup shadows with color, opacity, offsets, blur, spread and inset.",
 
             "backdrop_enabled": "Popup-এর পেছনে অন্ধকার বা blur করা overlay চালু/বন্ধ করে।",
             "backdrop_color": "Popup-এর পেছনের overlay-এর রং নির্ধারণ করে।",
@@ -1079,7 +1080,8 @@ class CentralPopupSettingAdmin(admin.ModelAdmin):
                     "border_style",
                     "border_color",
                     "border_radius",
-                    "box_shadow",
+                    "box_shadow_radius",
+                    "box_shadows",
                 )
             },
         ),

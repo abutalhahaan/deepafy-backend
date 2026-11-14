@@ -15,6 +15,7 @@ from institution.models import (
     InstitutionAttendanceSettings,
     InstitutionHoliday,
     Department,
+    Subject,
     InstitutionDepartmentAdmin,
     InstitutionDepartmentSettings,
     InstitutionDepartmentProfile,
@@ -676,6 +677,58 @@ class InstitutionResultsAPITests(APITestCase):
                 for item in listed.data["results"]
             )
         )
+
+    def test_class_subject_listing_without_department_excludes_department_assignments(self):
+        from institution.models import Department, InstitutionClassSubject
+
+        global_response = self.client.post(
+            reverse("institution-class-subjects"),
+            {"academic_level_id": self.level.id, "subject_id": self.subject.id},
+            format="json",
+        )
+        self.assertEqual(global_response.status_code, 201, global_response.data)
+
+        department = Department.objects.create(name="Results Listing Department")
+        self.institution.departments.add(department)
+
+        department_subject = Subject.objects.create(
+            name="Department Only Subject",
+            code="DOS",
+            department=department,
+            is_active=True,
+        )
+        InstitutionClassSubject.objects.create(
+            institution=self.institution,
+            academic_level=self.level,
+            department=department,
+            academic_period="",
+            subject=department_subject,
+            full_marks=100,
+            pass_mark=33,
+            is_active=True,
+        )
+
+        listed = self.client.get(
+            reverse("institution-class-subjects"),
+            {"academic_level_id": self.level.id},
+        )
+        self.assertEqual(listed.status_code, 200, listed.data)
+        returned_ids = {item["subject_id"] for item in listed.data["results"]}
+        self.assertIn(self.subject.id, returned_ids)
+        self.assertNotIn(department_subject.id, returned_ids)
+
+    def test_class_subject_owner_must_select_department_when_active_departments_exist(self):
+        from institution.models import Department
+
+        department = Department.objects.create(name="Results Required Department")
+        self.institution.departments.add(department)
+
+        response = self.client.post(
+            reverse("institution-class-subjects"),
+            {"academic_level_id": self.level.id, "subject_id": self.subject.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
 
     def test_class_subject_cannot_be_assigned_to_another_institutions_level(self):
         response = self.client.post(
@@ -2870,6 +2923,88 @@ class InstitutionResultsAPITests(APITestCase):
         )
         return admin, department
 
+    def test_owner_can_create_student_without_department(self):
+        from institution.models import Student, StudentInstitutionIdentity
+
+        response = self.client.post(
+            reverse("institution-student-create"),
+            {"name": "Departmentless Student"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        student_data = response.data["student"]
+        self.assertTrue(student_data["global_student_id"].startswith("RST-"))
+        self.assertTrue(
+            Student.objects.filter(
+                global_student_id=student_data["global_student_id"],
+                name="Departmentless Student",
+            ).exists()
+        )
+        self.assertTrue(
+            StudentInstitutionIdentity.objects.filter(
+                institution=self.institution,
+                global_student_id=student_data["global_student_id"],
+            ).exists()
+        )
+
+    def test_owner_can_enroll_student_without_department(self):
+        from institution.models import (
+            Student,
+            StudentEnrollment,
+            StudentInstitutionIdentity,
+            StudentEnrollmentAcademicValue,
+        )
+
+        student = Student.objects.create(
+            global_student_id="RST-DEPTLESS-001",
+            name="Departmentless Enrollment Student",
+        )
+        StudentInstitutionIdentity.objects.create(
+            student=student,
+            institution=self.institution,
+            global_student_id=student.global_student_id,
+        )
+
+        response = self.client.post(
+            reverse("institution-student-enrollment"),
+            {
+                "global_student_id": student.global_student_id,
+                "academic_session_id": self.session.id,
+                "class_name": self.level.name,
+                "academic_values": [
+                    {
+                        "academic_level_id": self.level.id,
+                        "value": self.level.name,
+                    }
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertIsNone(response.data["enrollment"]["department"])
+        self.assertEqual(
+            response.data["enrollment"]["class_name"],
+            self.level.name,
+        )
+        self.assertTrue(
+            StudentEnrollment.objects.filter(
+                student=student,
+                institution=self.institution,
+                academic_session=self.session,
+                department__isnull=True,
+                class_name=self.level.name,
+            ).exists()
+        )
+        self.assertTrue(
+            StudentEnrollmentAcademicValue.objects.filter(
+                enrollment__student=student,
+                academic_level=self.level,
+                value=self.level.name,
+            ).exists()
+        )
+
     def test_department_admin_student_endpoints_require_permission(self):
         admin, _department = self._create_department_admin_for_access_test()
         self.client.force_authenticate(user=admin)
@@ -4292,3 +4427,146 @@ class InstitutionDepartmentEstablishedDatePermissionTests(APITestCase):
             department=self.department,
         )
         self.assertEqual(profile.established_date.isoformat(), "2001-02-03")
+
+class OptionalDepartmentSubjectAPITests(APITestCase):
+    def setUp(self):
+        country_model = apps.get_model("organization", "Country")
+        region_model = country_model._meta.get_field(
+            "region"
+        ).remote_field.model
+
+        region = region_model.objects.create(name="Subject Test Region")
+        country = country_model.objects.create(
+            region=region,
+            name="Subject Test Country",
+            code="SUB",
+        )
+
+        group = InstitutionTypeGroup.objects.create(
+            name="Subject Test Group"
+        )
+        institution_type = InstitutionType.objects.create(
+            group=group,
+            name="Subject Test Institution Type",
+        )
+
+        self.owner = UserIdentity.objects.create(
+            email="subject-owner@example.com",
+            username="subject_owner",
+        )
+        self.admin = UserIdentity.objects.create(
+            email="subject-admin@example.com",
+            username="subject_admin",
+        )
+
+        self.institution = InstitutionProfile.objects.create(
+            identity=self.owner,
+            institution_name="Subject Test Institution",
+            institution_type=institution_type,
+            country=country,
+        )
+
+        self.department = Department.objects.create(
+            name="Subject Test Department"
+        )
+        self.other_department = Department.objects.create(
+            name="Subject Other Department"
+        )
+
+        self.url = reverse("institution-subjects")
+        self.client.force_authenticate(user=self.owner)
+
+    def test_owner_can_create_subject_without_department(self):
+        response = self.client.post(
+            self.url,
+            {"name": "Institution Level Mathematics"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertIsNone(response.data["department_id"])
+
+        subject = Subject.objects.get(id=response.data["id"])
+        self.assertIsNone(subject.department_id)
+
+    def test_owner_must_select_department_when_active_departments_exist(self):
+        self.institution.departments.add(self.department)
+
+        response = self.client.post(
+            self.url,
+            {"name": "Department Mathematics"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(
+            Subject.objects.filter(
+                name="Department Mathematics"
+            ).exists()
+        )
+
+    def test_owner_can_create_subject_in_selected_department(self):
+        self.institution.departments.add(self.department)
+
+        response = self.client.post(
+            self.url,
+            {
+                "name": "Department Physics",
+                "department_id": self.department.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            response.data["department_id"],
+            self.department.id,
+        )
+
+    def test_department_admin_can_only_use_assigned_department(self):
+        self.institution.departments.add(
+            self.department,
+            self.other_department,
+        )
+        InstitutionDepartmentAdmin.objects.create(
+            institution=self.institution,
+            department=self.department,
+            identity=self.admin,
+            assigned_by=self.owner,
+        )
+        InstitutionDepartmentSettings.objects.create(
+            institution=self.institution,
+            department=self.department,
+            can_manage_subjects=True,
+        )
+
+        central_subject = Subject.objects.create(
+            name="Central Subject for Department Admin"
+        )
+        self.client.force_authenticate(user=self.admin)
+
+        valid_response = self.client.post(
+            self.url,
+            {
+                "central_subject_id": central_subject.id,
+                "department_id": self.department.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(valid_response.status_code, 201)
+        self.assertEqual(
+            valid_response.data["department_id"],
+            self.department.id,
+        )
+
+        invalid_response = self.client.post(
+            self.url,
+            {
+                "central_subject_id": central_subject.id,
+                "department_id": self.other_department.id,
+            },
+            format="json",
+        )
+
+        self.assertEqual(invalid_response.status_code, 403)

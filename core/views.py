@@ -906,6 +906,63 @@ def _popup_schedule_is_active(setting, now):
     return True
 
 
+def _central_popup_box_shadow_css(setting):
+    shadows = setting.box_shadows or []
+
+    if not isinstance(shadows, list) or not shadows:
+        return setting.box_shadow or ""
+
+    css_shadows = []
+
+    for shadow in shadows[:5]:
+        if not isinstance(shadow, dict):
+            continue
+
+        color = str(shadow.get("color", "#000000")).strip()
+
+        if color.startswith("#"):
+            hex_color = color[1:]
+            if len(hex_color) == 3:
+                hex_color = "".join(char * 2 for char in hex_color)
+            if len(hex_color) != 6:
+                continue
+            try:
+                red = int(hex_color[0:2], 16)
+                green = int(hex_color[2:4], 16)
+                blue = int(hex_color[4:6], 16)
+            except ValueError:
+                continue
+        else:
+            continue
+
+        try:
+            opacity = max(0, min(100, float(shadow.get("opacity", 25)))) / 100
+            x_offset = float(shadow.get("x", 0))
+            y_offset = float(shadow.get("y", 8))
+            blur = max(0, float(shadow.get("blur", 20)))
+            spread = float(shadow.get("spread", 0))
+        except (TypeError, ValueError):
+            continue
+
+        inset = bool(shadow.get("inset"))
+
+        if not inset and blur > 0:
+            edge_opacity = opacity * 0.20
+            css_shadows.append(
+                f"{x_offset:g}px {y_offset:g}px 0px {spread:g}px "
+                f"rgba({red}, {green}, {blue}, {edge_opacity:g})"
+            )
+
+        inset_prefix = "inset " if inset else ""
+        css_shadows.append(
+            f"{inset_prefix}{x_offset:g}px {y_offset:g}px "
+            f"{blur:g}px {spread:g}px "
+            f"rgba({red}, {green}, {blue}, {opacity:g})"
+        )
+
+    return ", ".join(css_shadows) if css_shadows else (setting.box_shadow or "")
+
+
 def _serialize_popup_setting(setting, popup):
     background_image = ""
 
@@ -943,7 +1000,7 @@ def _serialize_popup_setting(setting, popup):
         "border": {
             "value": setting.border,
             "radius": setting.border_radius,
-            "shadow": setting.box_shadow,
+            "shadow": _central_popup_box_shadow_css(setting),
         },
 
         "backdrop": {
