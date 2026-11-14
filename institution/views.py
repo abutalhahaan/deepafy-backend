@@ -1287,22 +1287,30 @@ def institution_subjects(request):
                 )
         department = assigned_department
     else:
-        try:
-            department_id = int(department_id)
-        except (TypeError, ValueError):
-            return Response(
-                {"detail": "A valid department_id is required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        department = institution.departments.filter(
-            id=department_id,
-            is_active=True,
-        ).first()
-        if department is None:
-            return Response(
-                {"detail": "Select a department assigned to this institution."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        if department_id in (None, ""):
+            if institution.departments.filter(is_active=True).exists():
+                return Response(
+                    {"detail": "Select a department assigned to this institution."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            department = None
+        else:
+            try:
+                department_id = int(department_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "A valid department_id is required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            department = institution.departments.filter(
+                id=department_id,
+                is_active=True,
+            ).first()
+            if department is None:
+                return Response(
+                    {"detail": "Select a department assigned to this institution."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
     settings_obj = InstitutionDepartmentSettings.objects.filter(
         institution=institution,
@@ -1352,7 +1360,7 @@ def institution_subjects(request):
                     "id": existing.id,
                     "name": existing.name,
                     "code": existing.code,
-                    "department_id": department.id,
+                    "department_id": department.id if department else None,
                 },
             },
             status=status.HTTP_409_CONFLICT,
@@ -1368,7 +1376,7 @@ def institution_subjects(request):
             "id": subject.id,
             "name": subject.name,
             "code": subject.code,
-            "department_id": department.id,
+            "department_id": department.id if department else None,
         },
         status=status.HTTP_201_CREATED,
     )
@@ -6431,6 +6439,8 @@ def institution_class_subjects(request):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             assignments = assignments.filter(department_id=department_id)
+        else:
+            assignments = assignments.filter(department__isnull=True)
 
         assignments = assignments.select_related("academic_level", "subject", "department")
 
@@ -6496,6 +6506,16 @@ def institution_class_subjects(request):
                 {"detail": "Select a department assigned to this institution."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+    if (
+        is_owner
+        and department is None
+        and institution.departments.filter(is_active=True).exists()
+    ):
+        return Response(
+            {"detail": "Select a department assigned to this institution."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     items = request.data.get("subjects")
 
     # Batch mode: {"academic_level_id": 1, "subjects": [

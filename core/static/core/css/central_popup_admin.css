@@ -48,3 +48,171 @@
 .central-popup-border-style {
     min-width: 220px !important;
 }
+
+/* Multi Shadow Builder */
+.multi-shadow-json-field {
+    display: none !important;
+}
+
+.multi-shadow-builder {
+    max-width: 900px;
+    margin: 12px 0 20px;
+    padding: 20px;
+    border: 1px solid #dbe3ee;
+    border-radius: 14px;
+    background: #f8fafc;
+    box-sizing: border-box;
+}
+
+.multi-shadow-heading {
+    font-size: 18px;
+    font-weight: 700;
+    color: #172554;
+}
+
+.multi-shadow-description,
+.multi-shadow-help {
+    color: #64748b;
+    font-size: 13px;
+}
+
+.multi-shadow-list {
+    display: grid;
+    gap: 14px;
+    margin: 16px 0;
+}
+
+.multi-shadow-card {
+    padding: 16px;
+    border: 1px solid #dbe3ee;
+    border-radius: 12px;
+    background: #fff;
+}
+
+.multi-shadow-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+}
+
+.multi-shadow-card-top strong {
+    color: #0f172a;
+    font-size: 14px;
+}
+
+.multi-shadow-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(130px, 1fr));
+    gap: 14px;
+}
+
+.multi-shadow-control {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    color: #475569;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.multi-shadow-control input:not([type="checkbox"]) {
+    width: 100%;
+    min-height: 36px;
+    padding: 6px 9px;
+    border: 1px solid #cbd5e1;
+    border-radius: 7px;
+    box-sizing: border-box;
+}
+
+.multi-shadow-control input[type="color"] {
+    min-height: 40px;
+    padding: 3px;
+    cursor: pointer;
+}
+
+.multi-shadow-inset {
+    justify-content: center;
+}
+
+.multi-shadow-inset input {
+    width: 20px;
+    height: 20px;
+}
+
+.multi-shadow-add {
+    margin: 4px 0 18px;
+}
+
+.multi-shadow-remove {
+    color: #b91c1c !important;
+}
+
+.multi-shadow-preview-label {
+    margin-bottom: 8px;
+    color: #334155;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.multi-shadow-preview-stage {
+    display: flex;
+    min-height: 150px;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    border: 1px dashed #cbd5e1;
+    border-radius: 10px;
+    background:
+        linear-gradient(45deg, #f1f5f9 25%, transparent 25%),
+        linear-gradient(-45deg, #f1f5f9 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #f1f5f9 75%),
+        linear-gradient(-45deg, transparent 75%, #f1f5f9 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+}
+
+.multi-shadow-preview-box {
+    display: flex;
+    width: 210px;
+    min-height: 75px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    background: #fff;
+    color: #334155;
+    font-weight: 600;
+}
+
+@media (max-width: 767px) {
+    .multi-shadow-grid {
+        grid-template-columns: repeat(2, minmax(110px, 1fr));
+    }
+}
+
+
+/* Global Shadow Radius */
+.multi-shadow-global-radius {
+    max-width: 420px;
+    margin: 16px 0 20px;
+    padding: 14px 16px;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    background: #fff;
+}
+
+.multi-shadow-global-radius input[type="range"] {
+    width: 100%;
+    cursor: pointer;
+}
+
+.multi-shadow-radius-value {
+    color: #0A66C2;
+    font-size: 14px;
+}
+
+
+.multi-shadow-radius-json-field {
+    display: none !important;
+}

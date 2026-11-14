@@ -1,4 +1,5 @@
 from django.db import models
+from django.core.validators import MinValueValidator, MaxValueValidator
 
 
 class TimeStampedModel(models.Model):
@@ -591,6 +592,16 @@ class CentralPopupSetting(TimeStampedModel):
         max_length=255,
         blank=True,
         default="",
+    )
+
+    box_shadows = models.JSONField(
+        default=list,
+        blank=True,
+    )
+
+    box_shadow_radius = models.PositiveSmallIntegerField(
+        default=0,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
     )
 
     # Backdrop
