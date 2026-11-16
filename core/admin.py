@@ -1374,3 +1374,245 @@ class UserCalendarFavoriteAdmin(admin.ModelAdmin):
         "created_at",
         "id",
     )
+
+
+from .models import AnimationGlobalSetting, AnimationAccountSetting, AnimationUserPreference
+
+
+@admin.register(AnimationGlobalSetting)
+class AnimationGlobalSettingAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "user_customization_enabled",
+        "updated_at",
+    )
+
+    fields = (
+        "user_customization_enabled",
+        "global_default",
+        "created_at",
+        "updated_at",
+    )
+
+    readonly_fields = (
+        "created_at",
+        "updated_at",
+    )
+
+    def has_add_permission(self, request):
+        return (
+            not AnimationGlobalSetting.objects.exists()
+            and super().has_add_permission(request)
+        )
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+from core.animation_registry.registry import get_all_animations
+
+
+from .services.animation import DEFAULT_ANIMATION_SETTINGS
+
+
+class AnimationAccountSettingAdminForm(forms.ModelForm):
+    animation_type = forms.ChoiceField(
+        label="Animation Type",
+        choices=(),
+    )
+
+    duration = forms.IntegerField(
+        label="Duration (ms)",
+        min_value=0,
+        max_value=2000,
+        initial=180,
+    )
+
+    easing = forms.ChoiceField(
+        label="Easing",
+        choices=[
+            ("linear", "Linear"),
+            ("ease", "Ease"),
+            ("ease-in", "Ease In"),
+            ("ease-out", "Ease Out"),
+            ("ease-in-out", "Ease In Out"),
+            ("spring", "Spring"),
+        ],
+    )
+
+    intensity = forms.DecimalField(
+        label="Intensity",
+        min_value=0,
+        max_value=2,
+        max_digits=3,
+        decimal_places=2,
+        initial=1,
+    )
+
+    enabled = forms.BooleanField(
+        label="Enabled",
+        required=False,
+        initial=True,
+    )
+
+    class Meta:
+        model = AnimationAccountSetting
+        fields = "__all__"
+        exclude = ("settings", "created_at", "updated_at")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.fields["animation_type"].choices = [
+            (item["id"], item["label"])
+            for item in get_all_animations(active_only=True)
+        ]
+
+        settings = dict(DEFAULT_ANIMATION_SETTINGS)
+        if self.instance and self.instance.pk:
+            settings.update(self.instance.settings or {})
+
+        self.fields["animation_type"].initial = settings["preset"]
+        self.fields["duration"].initial = settings["duration"]
+        self.fields["easing"].initial = settings["easing"]
+        self.fields["intensity"].initial = settings["intensity"]
+        self.fields["enabled"].initial = settings["enabled"]
+
+    def save(self, commit=True):
+        instance = super().save(commit=False)
+        data = self.cleaned_data
+
+        instance.settings = {
+            "enabled": data["enabled"],
+            "preset": data["animation_type"],
+            "duration": data["duration"],
+            "easing": data["easing"],
+            "intensity": float(data["intensity"]),
+        }
+
+        if commit:
+            instance.save()
+            self.save_m2m()
+
+        return instance
+
+
+@admin.register(AnimationAccountSetting)
+class AnimationAccountSettingAdmin(admin.ModelAdmin):
+    form = AnimationAccountSettingAdminForm
+
+    list_display = (
+        "account_type",
+        "updated_at",
+    )
+
+    search_fields = (
+        "account_type",
+    )
+
+    ordering = (
+        "account_type",
+    )
+
+
+@admin.register(AnimationUserPreference)
+class AnimationUserPreferenceAdmin(admin.ModelAdmin):
+    list_display = (
+        "identity",
+        "account_type",
+        "updated_at",
+    )
+
+    list_filter = (
+        "account_type",
+    )
+
+    search_fields = (
+        "identity__username",
+        "identity__email",
+        "identity__user_id",
+    )
+
+    ordering = (
+        "account_type",
+        "identity",
+    )
+
+
+from .models import AnimationRegistry
+
+
+@admin.register(AnimationRegistry)
+class AnimationRegistryAdmin(admin.ModelAdmin):
+    list_display = (
+        "label",
+        "id",
+        "engine",
+        "category",
+        "default_duration",
+        "default_easing",
+        "active",
+        "updated_at",
+    )
+
+    list_filter = (
+        "engine",
+        "category",
+        "active",
+    )
+
+    search_fields = (
+        "id",
+        "label",
+        "description",
+    )
+
+    list_editable = (
+        "active",
+        "default_duration",
+        "default_easing",
+    )
+
+    ordering = (
+        "category",
+        "label",
+    )
+
+    readonly_fields = (
+        "created_at",
+        "updated_at",
+    )
+
+    fieldsets = (
+        (
+            "Animation Identity",
+            {
+                "fields": (
+                    "id",
+                    "label",
+                    "description",
+                )
+            },
+        ),
+        (
+            "Animation Configuration",
+            {
+                "fields": (
+                    "engine",
+                    "category",
+                    "default_duration",
+                    "default_easing",
+                    "active",
+                )
+            },
+        ),
+        (
+            "System Information",
+            {
+                "fields": (
+                    "created_at",
+                    "updated_at",
+                )
+            },
+        ),
+    )

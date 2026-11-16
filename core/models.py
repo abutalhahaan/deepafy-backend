@@ -1,5 +1,6 @@
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
+from identity.models import AccountType
 
 
 class TimeStampedModel(models.Model):
@@ -971,6 +972,71 @@ class MessagingAppearance(TimeStampedModel):
         return f"{self.identity_id} - {self.account_type} Messaging Appearance"
 
 
+class AnimationGlobalSetting(TimeStampedModel):
+    id = models.PositiveSmallIntegerField(
+        primary_key=True,
+        default=1,
+        editable=False,
+    )
+    user_customization_enabled = models.BooleanField(default=False)
+    global_default = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(id=1),
+                name="animation_global_setting_singleton",
+            )
+        ]
+        verbose_name = "Animation Global Setting"
+        verbose_name_plural = "Animation Global Settings"
+
+    def __str__(self):
+        return "Global Animation Settings"
+
+
+class AnimationAccountSetting(TimeStampedModel):
+    account_type = models.CharField(
+        max_length=30,
+        choices=AccountType.Type.choices,
+        unique=True,
+    )
+    settings = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["account_type"]
+        verbose_name = "Animation Account Setting"
+        verbose_name_plural = "Animation Account Settings"
+
+    def __str__(self):
+        return f"{self.account_type} Animation Settings"
+
+
+class AnimationUserPreference(TimeStampedModel):
+    identity = models.ForeignKey(
+        "identity.UserIdentity",
+        on_delete=models.CASCADE,
+        related_name="animation_preferences",
+    )
+    account_type = models.CharField(max_length=30)
+    global_override = models.JSONField(default=dict, blank=True)
+    component_overrides = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["identity", "account_type"],
+                name="unique_animation_preference_per_account",
+            )
+        ]
+        ordering = ["account_type"]
+        verbose_name = "Animation User Preference"
+        verbose_name_plural = "Animation User Preferences"
+
+    def __str__(self):
+        return f"{self.identity_id} - {self.account_type} Animation"
+
+
 class MessageConversation(TimeStampedModel):
     participant_one = models.ForeignKey(
         "identity.UserIdentity",
@@ -1217,3 +1283,49 @@ class UserCalendarFavorite(TimeStampedModel):
     def __str__(self):
         return f"{self.user} - {self.calendar.name}"
 
+
+
+class AnimationRegistry(TimeStampedModel):
+    ENGINE_CHOICES = [
+        ("native", "Native"),
+        ("motion", "Motion"),
+        ("gsap", "GSAP"),
+    ]
+
+    CATEGORY_CHOICES = [
+        ("basic", "Basic"),
+        ("transform", "Transform"),
+        ("directional", "Directional"),
+        ("advanced", "Advanced"),
+        ("special", "Special"),
+    ]
+
+    EASING_CHOICES = [
+        ("linear", "Linear"),
+        ("ease", "Ease"),
+        ("ease-in", "Ease In"),
+        ("ease-out", "Ease Out"),
+        ("ease-in-out", "Ease In Out"),
+        ("spring", "Spring"),
+    ]
+
+    id = models.SlugField(max_length=50, primary_key=True)
+    label = models.CharField(max_length=100)
+    engine = models.CharField(max_length=20, choices=ENGINE_CHOICES)
+    category = models.CharField(max_length=30, choices=CATEGORY_CHOICES)
+    default_duration = models.PositiveSmallIntegerField(default=220)
+    default_easing = models.CharField(
+        max_length=20,
+        choices=EASING_CHOICES,
+        default="ease-out",
+    )
+    active = models.BooleanField(default=True)
+    description = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["category", "label"]
+        verbose_name = "Animation Registry"
+        verbose_name_plural = "Animation Registry"
+
+    def __str__(self):
+        return f"{self.label} ({self.id})"

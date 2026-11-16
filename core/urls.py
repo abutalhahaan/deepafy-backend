@@ -1,6 +1,6 @@
 from django.urls import path
 
-from .views import central_popup_settings, feature_access_controls, update_feature_access, start_feature_trial, check_feature_access, premium_packages, premium_status, activate_premium, payment_methods, create_payment_transaction, review_payment_transaction, personal_font_styles, personal_font_favorites, editor_image_upload, messaging_appearance, messaging_appearance_update, messaging_appearance_image_update, dmail_inbox, dmail_mailbox_move, dmail_mailbox_list, dmail_send, dmail_reply, dmail_thread, dmail_sent, dmail_draft_save, dmail_draft_list, dmail_draft_update, dmail_draft_delete, dmail_draft_send, message_conversations, message_send, message_conversation_detail, message_send, calendar_list, calendar_favorites
+from .views import central_popup_settings, feature_access_controls, update_feature_access, start_feature_trial, check_feature_access, premium_packages, premium_status, activate_premium, payment_methods, create_payment_transaction, review_payment_transaction, personal_font_styles, personal_font_favorites, editor_image_upload, messaging_appearance, messaging_appearance_update, messaging_appearance_image_update, dmail_inbox, dmail_mailbox_move, dmail_mailbox_list, dmail_send, dmail_reply, dmail_thread, dmail_sent, dmail_draft_save, dmail_draft_list, dmail_draft_update, dmail_draft_delete, dmail_draft_send, message_conversations, message_send, message_conversation_detail, message_send, calendar_list, calendar_favorites, animation_registry_list, animation_user_settings, animation_user_preferences_update, animation_admin_settings, animation_admin_account_settings
 
 urlpatterns = [
     path("messages/conversations/", message_conversations, name="message-conversations"),
@@ -19,6 +19,12 @@ urlpatterns = [
     path("messaging/draft/<int:draft_id>/", dmail_draft_update, name="dmail-draft-update"),
     path("messaging/draft/<int:draft_id>/delete/", dmail_draft_delete, name="dmail-draft-delete"),
     path("messaging/draft/<int:draft_id>/send/", dmail_draft_send, name="dmail-draft-send"),
+
+    path("animation/registry/", animation_registry_list, name="animation-registry-list"),
+    path("animation/settings/", animation_user_settings, name="animation-user-settings"),
+    path("animation/preferences/", animation_user_preferences_update, name="animation-user-preferences-update"),
+    path("admin/animation/settings/", animation_admin_settings, name="animation-admin-settings"),
+    path("admin/animation/account-settings/", animation_admin_account_settings, name="animation-admin-account-settings"),
     path("popup-settings/", central_popup_settings, name="central-popup-settings"),
     path("calendars/", calendar_list, name="calendar-list"),
     path("calendars/favorites/", calendar_favorites, name="calendar-favorites"),

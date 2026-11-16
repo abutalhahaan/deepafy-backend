@@ -1,4 +1,5 @@
 from django.db import models
+from django.core.exceptions import ValidationError
 import uuid
 
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
@@ -22,9 +23,18 @@ from .models import (
     Calendar,
     CalendarCountry,
     UserCalendarFavorite,
+    AnimationGlobalSetting,
+    AnimationAccountSetting,
+    AnimationUserPreference,
 )
 from core.services.feature_access import get_current_feature, get_feature_access, start_feature_trial_for_user
 from core.services.image_processor import process_image
+from core.animation_registry.registry import get_all_animations
+from core.services.animation import (
+    resolve_animation_settings,
+    validate_animation_settings,
+    validate_component_overrides,
+)
 from identity.permissions import get_authenticated_identity, get_current_account_type
 from notifications.services import create_notification
 
@@ -2616,3 +2626,246 @@ def dmail_draft_send(request, draft_id):
         },
         status=200,
     )
+
+# ---------------------------------------------------------------------------
+# Animation Settings API
+# ---------------------------------------------------------------------------
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def animation_registry_list(request):
+    animations = get_all_animations(active_only=True)
+    return Response({
+        "success": True,
+        "count": len(animations),
+        "animations": animations,
+    })
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def animation_user_settings(request):
+    account = get_current_account_type(request)
+
+    if account is None:
+        return Response({"detail": "Active account type not found."}, status=400)
+
+    identity = account.identity
+
+    global_setting = AnimationGlobalSetting.objects.filter(pk=1).first()
+    account_setting = AnimationAccountSetting.objects.filter(
+        account_type=account.account_type
+    ).first()
+
+    preference = AnimationUserPreference.objects.filter(
+        identity=identity,
+        account_type=account.account_type,
+    ).first()
+
+    user_preference = None
+    if preference:
+        user_preference = {
+            "global_override": preference.global_override,
+            "component_overrides": preference.component_overrides,
+        }
+
+    try:
+        effective_settings = resolve_animation_settings(
+            global_default=(
+                global_setting.global_default if global_setting else {}
+            ),
+            account_default=(
+                account_setting.settings if account_setting else {}
+            ),
+            user_preference=user_preference,
+            component_type=request.query_params.get("component_type"),
+            component_id=request.query_params.get("component_id"),
+            user_customization_enabled=(
+                global_setting.user_customization_enabled
+                if global_setting else False
+            ),
+        )
+    except ValidationError as error:
+        return Response({"detail": str(error)}, status=400)
+
+    return Response({
+        "success": True,
+        "account_type": account.account_type,
+        "user_customization_enabled": (
+            global_setting.user_customization_enabled
+            if global_setting else False
+        ),
+        "settings": effective_settings,
+        "preferences": user_preference or {
+            "global_override": {},
+            "component_overrides": [],
+        },
+    })
+
+
+@api_view(["PATCH"])
+@permission_classes([IsAuthenticated])
+def animation_user_preferences_update(request):
+    account = get_current_account_type(request)
+
+    if account is None:
+        return Response({"detail": "Active account type not found."}, status=400)
+
+    global_setting = AnimationGlobalSetting.objects.filter(pk=1).first()
+
+    if not global_setting or not global_setting.user_customization_enabled:
+        return Response(
+            {"detail": "User animation customization is disabled by admin."},
+            status=403,
+        )
+
+    allowed_fields = {"global_override", "component_overrides"}
+    unknown_fields = set(request.data.keys()) - allowed_fields
+
+    if unknown_fields:
+        return Response(
+            {"detail": f"Unknown fields: {sorted(unknown_fields)}"},
+            status=400,
+        )
+
+    if not request.data:
+        return Response({"detail": "No preference fields provided."}, status=400)
+
+    identity = account.identity
+
+    preference, _ = AnimationUserPreference.objects.get_or_create(
+        identity=identity,
+        account_type=account.account_type,
+    )
+
+    try:
+        if "global_override" in request.data:
+            preference.global_override = validate_animation_settings(
+                request.data["global_override"]
+            )
+
+        if "component_overrides" in request.data:
+            preference.component_overrides = validate_component_overrides(
+                request.data["component_overrides"]
+            )
+    except ValidationError as error:
+        return Response({"detail": str(error)}, status=400)
+
+    preference.save()
+
+    return Response({
+        "success": True,
+        "account_type": account.account_type,
+        "global_override": preference.global_override,
+        "component_overrides": preference.component_overrides,
+    })
+
+
+@api_view(["GET", "PATCH"])
+@permission_classes([IsDeepafyAdmin])
+def animation_admin_settings(request):
+    setting = AnimationGlobalSetting.objects.filter(pk=1).first()
+
+    if request.method == "GET":
+        return Response({
+            "success": True,
+            "global_default": (
+                setting.global_default if setting else {}
+            ),
+            "user_customization_enabled": (
+                setting.user_customization_enabled if setting else False
+            ),
+        })
+
+    allowed_fields = {"global_default", "user_customization_enabled"}
+    unknown_fields = set(request.data.keys()) - allowed_fields
+
+    if unknown_fields:
+        return Response(
+            {"detail": f"Unknown fields: {sorted(unknown_fields)}"},
+            status=400,
+        )
+
+    if not request.data:
+        return Response({"detail": "No settings provided."}, status=400)
+
+    setting, _ = AnimationGlobalSetting.objects.get_or_create(pk=1)
+
+    try:
+        if "global_default" in request.data:
+            setting.global_default = validate_animation_settings(
+                request.data["global_default"]
+            )
+    except ValidationError as error:
+        return Response({"detail": str(error)}, status=400)
+
+    if "user_customization_enabled" in request.data:
+        value = request.data["user_customization_enabled"]
+        if not isinstance(value, bool):
+            return Response(
+                {"detail": "user_customization_enabled must be a boolean."},
+                status=400,
+            )
+        setting.user_customization_enabled = value
+
+    setting.save()
+
+    return Response({
+        "success": True,
+        "global_default": setting.global_default,
+        "user_customization_enabled": setting.user_customization_enabled,
+    })
+
+
+@api_view(["GET", "PATCH"])
+@permission_classes([IsDeepafyAdmin])
+def animation_admin_account_settings(request):
+    if request.method == "GET":
+        settings = AnimationAccountSetting.objects.all()
+
+        return Response({
+            "success": True,
+            "account_settings": [
+                {
+                    "account_type": item.account_type,
+                    "settings": item.settings,
+                }
+                for item in settings
+            ],
+        })
+
+    account_type = request.data.get("account_type")
+    settings = request.data.get("settings")
+
+    if (
+        not isinstance(account_type, str)
+        or not account_type.strip()
+        or len(account_type) > 30
+    ):
+        return Response({"detail": "A valid account_type is required."}, status=400)
+
+    from identity.models import AccountType
+
+    account_type = account_type.strip()
+
+    if account_type not in AccountType.Type.values:
+        return Response({"detail": "Invalid account_type."}, status=400)
+
+    if not isinstance(settings, dict):
+        return Response({"detail": "settings must be an object."}, status=400)
+
+    try:
+        validated_settings = validate_animation_settings(settings)
+    except ValidationError as error:
+        return Response({"detail": str(error)}, status=400)
+
+    account_setting, _ = AnimationAccountSetting.objects.update_or_create(
+        account_type=account_type.strip(),
+        defaults={"settings": validated_settings},
+    )
+
+    return Response({
+        "success": True,
+        "account_type": account_setting.account_type,
+        "settings": account_setting.settings,
+    })
