@@ -13,6 +13,8 @@ ANIMATIONS = [
     ("blur", "Blur", "motion", "advanced", 250),
     ("liquid", "Liquid", "gsap", "advanced", 350),
     ("genie", "Genie", "gsap", "special", 450),
+    ("jitter", "Jitter", "gsap", "special", 320),
+    ("raindrop", "Raindrop", "gsap", "special", 700),
 ]
 
 

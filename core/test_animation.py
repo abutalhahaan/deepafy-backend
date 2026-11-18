@@ -7,6 +7,7 @@ from core.models import (
     AnimationGlobalSetting,
     AnimationAccountSetting,
     AnimationUserPreference,
+    AnimationRegistry,
 )
 
 
@@ -264,8 +265,8 @@ class AnimationAPITests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.data["success"])
-        self.assertEqual(response.data["count"], 11)
-        self.assertEqual(len(response.data["animations"]), 11)
+        self.assertEqual(response.data["count"], 13)
+        self.assertEqual(len(response.data["animations"]), 13)
 
         required_fields = {
             "id",
@@ -280,3 +281,60 @@ class AnimationAPITests(TestCase):
             with self.subTest(animation=animation["id"]):
                 self.assertTrue(required_fields.issubset(animation.keys()))
                 self.assertTrue(animation["active"])
+
+    def test_registry_defaults_are_used_for_selected_preset(self):
+        AnimationRegistry.objects.filter(pk="zoom").update(
+            default_duration=480,
+            default_easing="spring",
+        )
+        AnimationAccountSetting.objects.update_or_create(
+            account_type="personal",
+            defaults={"settings": {"preset": "zoom"}},
+        )
+
+        response = self.client.get("/api/core/animation/settings/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["settings"]["preset"], "zoom")
+        self.assertEqual(response.data["settings"]["duration"], 480)
+        self.assertEqual(response.data["settings"]["easing"], "spring")
+
+    def test_explicit_duration_and_easing_override_registry_defaults(self):
+        AnimationRegistry.objects.filter(pk="zoom").update(
+            default_duration=480,
+            default_easing="spring",
+        )
+        AnimationAccountSetting.objects.update_or_create(
+            account_type="personal",
+            defaults={
+                "settings": {
+                    "preset": "zoom",
+                    "duration": 350,
+                    "easing": "linear",
+                }
+            },
+        )
+
+        response = self.client.get("/api/core/animation/settings/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["settings"]["duration"], 350)
+        self.assertEqual(response.data["settings"]["easing"], "linear")
+
+    def test_user_preset_override_uses_registry_defaults(self):
+        AnimationRegistry.objects.filter(pk="liquid").update(
+            default_duration=620,
+            default_easing="ease-in-out",
+        )
+        AnimationUserPreference.objects.create(
+            identity=self.user,
+            account_type="personal",
+            global_override={"preset": "liquid"},
+        )
+
+        response = self.client.get("/api/core/animation/settings/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["settings"]["preset"], "liquid")
+        self.assertEqual(response.data["settings"]["duration"], 620)
+        self.assertEqual(response.data["settings"]["easing"], "ease-in-out")

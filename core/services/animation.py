@@ -3,7 +3,7 @@ from django.core.exceptions import ValidationError
 
 DEFAULT_ANIMATION_SETTINGS = {
     "enabled": True,
-    "preset": "scale",
+    "preset": "slide-down",
     "duration": 180,
     "easing": "ease-out",
     "intensity": 1,
@@ -13,7 +13,7 @@ ALLOWED_COMPONENT_TYPES = {
     "button", "popup", "tab", "dropdown", "modal", "card", "menu", "menu_button",
 }
 
-from core.animation_registry.registry import get_animation_ids
+from core.animation_registry.registry import get_animation_ids, get_animation
 
 
 ALLOWED_EASINGS = {
@@ -41,7 +41,7 @@ def validate_animation_settings(settings):
     if "enabled" in validated and not isinstance(validated["enabled"], bool):
         raise ValidationError("enabled must be a boolean.")
 
-    if "preset" in validated and validated["preset"] not in get_animation_ids(active_only=True):
+    if "preset" in validated and validated["preset"] not in get_animation_ids(active_only=False):
         raise ValidationError("Invalid animation preset.")
 
     if "duration" in validated:
@@ -100,6 +100,18 @@ def validate_component_overrides(overrides):
     return validated
 
 
+def _apply_animation_settings(resolved, settings):
+    validated = validate_animation_settings(settings or {})
+
+    if "preset" in validated:
+        animation = get_animation(validated["preset"])
+        if animation:
+            resolved["duration"] = animation["default_duration"]
+            resolved["easing"] = animation["default_easing"]
+
+    resolved.update(validated)
+
+
 def resolve_animation_settings(
     global_default=None,
     account_default=None,
@@ -109,18 +121,18 @@ def resolve_animation_settings(
     user_customization_enabled=False,
 ):
     resolved = dict(DEFAULT_ANIMATION_SETTINGS)
+    _apply_animation_settings(resolved, {"preset": resolved["preset"]})
 
-    resolved.update(validate_animation_settings(global_default or {}))
-    resolved.update(validate_animation_settings(account_default or {}))
+    _apply_animation_settings(resolved, global_default)
+    _apply_animation_settings(resolved, account_default)
 
     if user_customization_enabled and user_preference:
         if not isinstance(user_preference, dict):
             raise ValidationError("User preference must be an object.")
 
-        resolved.update(
-            validate_animation_settings(
-                user_preference.get("global_override", {})
-            )
+        _apply_animation_settings(
+            resolved,
+            user_preference.get("global_override", {}),
         )
 
         overrides = validate_component_overrides(
@@ -136,7 +148,7 @@ def resolve_animation_settings(
                     item["componentType"] == component_type
                     and "componentId" not in item
                 ):
-                    resolved.update(item["settings"])
+                    _apply_animation_settings(resolved, item["settings"])
 
             if component_id is not None:
                 for item in overrides:
@@ -144,6 +156,6 @@ def resolve_animation_settings(
                         item["componentType"] == component_type
                         and item.get("componentId") == component_id
                     ):
-                        resolved.update(item["settings"])
+                        _apply_animation_settings(resolved, item["settings"])
 
     return resolved
