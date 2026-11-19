@@ -12,6 +12,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import Q
 import re
 import json
+from django.core.files.storage import default_storage
 from django.utils import timezone
 from django.core.mail import send_mail
 
@@ -2566,12 +2567,14 @@ def institution_profile_by_username(request, username):
             if profile.featured_image
             else None,
             "background_color": profile.background_color,
+            "background_image_opacity": profile.background_image_opacity,
             "background_image": (
                 request.build_absolute_uri(profile.background_image.url)
                 if profile.background_image
                 else None
             ),
             "tab_colors": profile.tab_colors,
+            "tab_backgrounds": serialize_institution_tab_backgrounds(request, profile.tab_backgrounds),
             "is_verified": profile.is_verified,
         }
     )
@@ -2698,6 +2701,46 @@ def institution_global_identity_check(request):
     })
 
 
+INSTITUTION_PROFILE_BACKGROUND_TABS = (
+    "Overview",
+    "About",
+    "Mission & Vision",
+    "Academic",
+    "Attendance",
+    "Department",
+    "Students",
+    "Teachers & Staff",
+    "Alumni",
+    "Results",
+    "Student Subjects",
+    "Facilities",
+    "Activities",
+    "Ujjol Mukh",
+    "Gallery",
+    "Contact",
+)
+
+
+def serialize_institution_tab_backgrounds(request, backgrounds):
+    serialized = {}
+
+    for tab_name, settings in (backgrounds or {}).items():
+        if not isinstance(settings, dict):
+            continue
+
+        item = dict(settings)
+        image_path = item.get("background_image")
+
+        if image_path:
+            item["background_image"] = request.build_absolute_uri(
+                default_storage.url(image_path)
+            )
+
+        serialized[tab_name] = item
+
+    return serialized
+
+
 @api_view(["GET", "PUT"])
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -2716,24 +2759,140 @@ def institution_appearance_update(request):
     if request.method == "GET":
         return Response({
             "background_color": profile.background_color,
+            "background_image_opacity": profile.background_image_opacity,
             "background_image": (
                 request.build_absolute_uri(profile.background_image.url)
                 if profile.background_image
                 else None
             ),
+            "tab_backgrounds": serialize_institution_tab_backgrounds(request, profile.tab_backgrounds),
+        })
+
+    tab_name = request.data.get("tab_name")
+    tab_image = request.FILES.get("tab_background_image")
+
+    if tab_name is not None or tab_image is not None:
+        if tab_name not in INSTITUTION_PROFILE_BACKGROUND_TABS:
+            return Response(
+                {"detail": "Invalid institution profile tab."},
+                status=400,
+            )
+
+        backgrounds = dict(profile.tab_backgrounds or {})
+        tab_settings = dict(backgrounds.get(tab_name) or {})
+
+        tab_color = request.data.get("tab_background_color")
+        tab_opacity = request.data.get("tab_background_image_opacity")
+
+        if tab_color is not None:
+            color_access = get_feature_access(
+                request,
+                "institution_background_color",
+                account_type="institution",
+            )
+            if color_access["access"] not in ["free", "premium", "trial"]:
+                return Response(
+                    {"detail": "Premium access required for Background Color."},
+                    status=403,
+                )
+
+            if not re.fullmatch(r"#[0-9a-fA-F]{6}", str(tab_color)):
+                return Response(
+                    {"detail": "Background color must be a valid 6-digit HEX color."},
+                    status=400,
+                )
+
+            tab_settings["background_color"] = tab_color
+            tab_settings.pop("background_image", None)
+
+        if tab_opacity is not None:
+            try:
+                opacity_value = int(tab_opacity)
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "Background image transparency must be an integer between 0 and 100."},
+                    status=400,
+                )
+
+            if isinstance(tab_opacity, bool) or not 0 <= opacity_value <= 100:
+                return Response(
+                    {"detail": "Background image transparency must be between 0 and 100."},
+                    status=400,
+                )
+
+            tab_settings["background_image_opacity"] = opacity_value
+
+        if tab_image:
+            image_access = get_feature_access(
+                request,
+                "institution_background_image",
+                account_type="institution",
+            )
+            if image_access["access"] not in ["free", "premium", "trial"]:
+                return Response(
+                    {"detail": "Premium access required for Background Image."},
+                    status=403,
+                )
+
+            try:
+                processed_image = process_image(tab_image, preset="background")
+            except ValueError as error:
+                return Response(
+                    {"detail": str(error)},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            file_path = default_storage.save(
+                f"institution_tab_backgrounds/{profile.pk}/{processed_image.name}",
+                processed_image,
+            )
+            tab_settings["background_image"] = file_path
+            tab_settings.pop("background_color", None)
+
+        if not any(
+            key in request.data
+            for key in ("tab_background_color", "tab_background_image_opacity")
+        ) and not tab_image:
+            return Response(
+                {"detail": "No tab background settings were provided."},
+                status=400,
+            )
+
+        backgrounds[tab_name] = tab_settings
+        profile.tab_backgrounds = backgrounds
+        profile.save(update_fields=["tab_backgrounds"])
+
+        return Response({
+            "tab_name": tab_name,
+            "tab_backgrounds": serialize_institution_tab_backgrounds(
+                request,
+                profile.tab_backgrounds,
+            ),
         })
 
     color_access = get_feature_access(
         request,
-        "activity_background_color",
+        "institution_background_color",
+        account_type="institution",
     )
 
     image_access = get_feature_access(
         request,
-        "activity_wallpaper",
+        "institution_background_image",
+        account_type="institution",
     )
 
     background_color = request.data.get("background_color")
+    background_image_opacity = request.data.get("background_image_opacity")
+
+    if background_image_opacity is not None:
+        try:
+            opacity_value = int(background_image_opacity)
+        except (TypeError, ValueError):
+            return Response({"detail": "Background image transparency must be an integer between 0 and 100."}, status=400)
+        if isinstance(background_image_opacity, bool) or not 0 <= opacity_value <= 100:
+            return Response({"detail": "Background image transparency must be between 0 and 100."}, status=400)
+        profile.background_image_opacity = opacity_value
 
     if background_color is not None:
         if color_access["access"] not in ["free", "premium", "trial"]:
@@ -2756,6 +2915,7 @@ def institution_appearance_update(request):
     update_fields = [
         "background_color",
         "background_image",
+        "background_image_opacity",
     ]
 
     if "cover_photo" in request.FILES:
@@ -2774,6 +2934,7 @@ def institution_appearance_update(request):
 
     return Response({
         "background_color": profile.background_color,
+        "background_image_opacity": profile.background_image_opacity,
         "background_image": (
             request.build_absolute_uri(profile.background_image.url)
             if profile.background_image

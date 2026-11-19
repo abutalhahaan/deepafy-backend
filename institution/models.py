@@ -524,7 +524,16 @@ class InstitutionProfile(models.Model):
         blank=True,
     )
 
+    background_image_opacity = models.PositiveSmallIntegerField(
+        default=0,
+    )
+
     tab_colors = models.JSONField(
+        default=dict,
+        blank=True,
+    )
+
+    tab_backgrounds = models.JSONField(
         default=dict,
         blank=True,
     )

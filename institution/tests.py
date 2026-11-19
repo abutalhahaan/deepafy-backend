@@ -1,4 +1,8 @@
 from datetime import date
+from io import BytesIO
+from PIL import Image
+from django.core.files.uploadedfile import SimpleUploadedFile
+from unittest.mock import patch
 
 from django.apps import apps
 from django.urls import reverse
@@ -4570,3 +4574,272 @@ class OptionalDepartmentSubjectAPITests(APITestCase):
         )
 
         self.assertEqual(invalid_response.status_code, 403)
+
+
+class InstitutionAppearanceTransparencyAPITests(APITestCase):
+    def setUp(self):
+        country_model = apps.get_model("organization", "Country")
+        region_model = country_model._meta.get_field(
+            "region"
+        ).remote_field.model
+
+        region = region_model.objects.create(name="Appearance Test Region")
+        country = country_model.objects.create(
+            region=region,
+            name="Appearance Test Country",
+            code="APT",
+        )
+
+        group = InstitutionTypeGroup.objects.create(
+            name="Appearance Test Group"
+        )
+        institution_type = InstitutionType.objects.create(
+            group=group,
+            name="Appearance Test Type",
+        )
+
+        self.owner = UserIdentity.objects.create(
+            email="appearance-owner@example.com",
+            username="appearance_owner",
+        )
+        self.institution = InstitutionProfile.objects.create(
+            identity=self.owner,
+            institution_name="Appearance Test Institution",
+            institution_type=institution_type,
+            country=country,
+        )
+
+        self.client.force_authenticate(user=self.owner)
+        self.url = reverse("institution-appearance-update")
+
+    def test_default_background_image_opacity_is_zero(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["background_image_opacity"], 0)
+
+    @patch("institution.views.get_feature_access", return_value={"access": "free"})
+    def test_background_image_opacity_can_be_saved(self, mocked_access):
+        response = self.client.put(
+            self.url,
+            {"background_image_opacity": 63},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["background_image_opacity"], 63)
+
+        self.institution.refresh_from_db()
+        self.assertEqual(self.institution.background_image_opacity, 63)
+
+        get_response = self.client.get(self.url)
+        self.assertEqual(get_response.data["background_image_opacity"], 63)
+
+    @patch("institution.views.get_feature_access", return_value={"access": "free"})
+    def test_out_of_range_background_image_opacity_is_rejected(
+        self, mocked_access
+    ):
+        for value in (-1, 101):
+            response = self.client.put(
+                self.url,
+                {"background_image_opacity": value},
+                format="json",
+            )
+            self.assertEqual(response.status_code, 400)
+
+        self.institution.refresh_from_db()
+        self.assertEqual(self.institution.background_image_opacity, 0)
+
+    @patch("institution.views.get_feature_access", return_value={"access": "free"})
+    def test_non_integer_background_image_opacity_is_rejected(
+        self, mocked_access
+    ):
+        response = self.client.put(
+            self.url,
+            {"background_image_opacity": "invalid"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.institution.refresh_from_db()
+        self.assertEqual(self.institution.background_image_opacity, 0)
+
+
+class InstitutionTabBackgroundAPITests(APITestCase):
+    def setUp(self):
+        country_model = apps.get_model("organization", "Country")
+        region_model = country_model._meta.get_field(
+            "region"
+        ).remote_field.model
+
+        region = region_model.objects.create(name="Tab Background Test Region")
+        country = country_model.objects.create(
+            region=region,
+            name="Tab Background Test Country",
+            code="TBG",
+        )
+
+        group = InstitutionTypeGroup.objects.create(
+            name="Tab Background Test Group"
+        )
+        institution_type = InstitutionType.objects.create(
+            group=group,
+            name="Tab Background Test Type",
+        )
+
+        self.owner = UserIdentity.objects.create(
+            email="tab-background-owner@example.com",
+            username="tab_background_owner",
+        )
+        self.institution = InstitutionProfile.objects.create(
+            identity=self.owner,
+            institution_name="Tab Background Test Institution",
+            institution_type=institution_type,
+            country=country,
+        )
+
+        self.client.force_authenticate(user=self.owner)
+        self.url = reverse("institution-appearance-update")
+
+    @patch("institution.views.get_feature_access", return_value={"access": "free"})
+    def test_tab_background_color_can_be_saved(self, mocked_access):
+        response = self.client.put(
+            self.url,
+            {
+                "tab_name": "Overview",
+                "tab_background_color": "#123456",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+
+        self.institution.refresh_from_db()
+        self.assertEqual(
+            self.institution.tab_backgrounds["Overview"]["background_color"],
+            "#123456",
+        )
+
+    @patch("institution.views.get_feature_access", return_value={"access": "free"})
+    def test_saving_one_tab_preserves_other_tab_settings(self, mocked_access):
+        self.institution.tab_backgrounds = {
+            "About": {
+                "background_color": "#AABBCC",
+                "background_image_opacity": 35,
+            }
+        }
+        self.institution.save(update_fields=["tab_backgrounds"])
+
+        response = self.client.put(
+            self.url,
+            {
+                "tab_name": "Overview",
+                "tab_background_color": "#123456",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+
+        self.institution.refresh_from_db()
+        self.assertEqual(
+            self.institution.tab_backgrounds["About"]["background_color"],
+            "#AABBCC",
+        )
+        self.assertEqual(
+            self.institution.tab_backgrounds["About"]["background_image_opacity"],
+            35,
+        )
+        self.assertEqual(
+            self.institution.tab_backgrounds["Overview"]["background_color"],
+            "#123456",
+        )
+
+    def test_invalid_tab_name_is_rejected(self):
+        response = self.client.put(
+            self.url,
+            {
+                "tab_name": "Unknown Tab",
+                "tab_background_color": "#123456",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+        self.institution.refresh_from_db()
+        self.assertEqual(self.institution.tab_backgrounds, {})
+
+    def test_out_of_range_tab_background_opacity_is_rejected(self):
+        for value in (-1, 101):
+            response = self.client.put(
+                self.url,
+                {
+                    "tab_name": "Overview",
+                    "tab_background_image_opacity": value,
+                },
+                format="json",
+            )
+            self.assertEqual(response.status_code, 400)
+
+        self.institution.refresh_from_db()
+        self.assertEqual(self.institution.tab_backgrounds, {})
+
+    @patch("institution.views.get_feature_access", return_value={"access": "free"})
+    def test_saving_color_removes_previous_tab_image(self, mocked_access):
+        self.institution.tab_backgrounds = {
+            "Overview": {
+                "background_image": "institution_tab_backgrounds/old.png",
+                "background_image_opacity": 35,
+            }
+        }
+        self.institution.save(update_fields=["tab_backgrounds"])
+
+        response = self.client.put(
+            self.url,
+            {
+                "tab_name": "Overview",
+                "tab_background_color": "#123456",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.institution.refresh_from_db()
+        settings = self.institution.tab_backgrounds["Overview"]
+        self.assertEqual(settings["background_color"], "#123456")
+        self.assertNotIn("background_image", settings)
+
+    @patch("institution.views.get_feature_access", return_value={"access": "free"})
+    def test_uploading_image_removes_previous_tab_color(self, mocked_access):
+        self.institution.tab_backgrounds = {
+            "Overview": {
+                "background_color": "#123456",
+                "background_image_opacity": 35,
+            }
+        }
+        self.institution.save(update_fields=["tab_backgrounds"])
+
+        image_buffer = BytesIO()
+        Image.new("RGB", (100, 100), color="blue").save(image_buffer, format="PNG")
+        image_buffer.seek(0)
+        uploaded_image = SimpleUploadedFile(
+            "tab-background.png",
+            image_buffer.read(),
+            content_type="image/png",
+        )
+
+        response = self.client.put(
+            self.url,
+            {
+                "tab_name": "Overview",
+                "tab_background_image": uploaded_image,
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.institution.refresh_from_db()
+        settings = self.institution.tab_backgrounds["Overview"]
+        self.assertTrue(settings.get("background_image"))
+        self.assertNotIn("background_color", settings)
