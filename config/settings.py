@@ -17,12 +17,31 @@ from datetime import timedelta
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Load local .env values without overriding existing environment variables.
+def load_env_file(env_path):
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip("\"").strip("\\'")
+        if key:
+            os.environ.setdefault(key, value)
+
+
+load_env_file(BASE_DIR / ".env")
+
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = '***COMPROMISED_SECRET_REMOVED***'
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY is missing from environment configuration.")
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -43,6 +62,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'core',
     'identity',
+    'security',
     "companies.apps.CompaniesConfig",
     "institution",
     "category_engine",
@@ -132,22 +152,7 @@ USE_TZ = True
 STATIC_URL = 'static/'
 
 
-# Load local .env values without overriding existing environment variables.
-def load_env_file(env_path):
-    if not env_path.exists():
-        return
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip("\"").strip("\\'")
-        if key:
-            os.environ.setdefault(key, value)
 
-
-load_env_file(BASE_DIR / ".env")
 
 # Email
 # Local development defaults to the console backend.
