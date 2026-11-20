@@ -9,3 +9,7 @@ djangorestframework-simplejwt==5.5.1
 bleach==6.4.0
 tinycss2==1.5.1
 webencodings==0.5.1
+
+cryptography==50.0.2
+pyotp==2.12.1
+qrcode[pil]==8.2
