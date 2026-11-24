@@ -1,7 +1,17 @@
 from django.test import TestCase
 
+from datetime import timedelta
+
+from django.utils import timezone
+
+from security.models import TrustedLocationVerification
+from security.trusted_location_verification import (
+    issue_trusted_location_verification,
+    consume_trusted_location_verification,
+)
+
 from identity.models import UserIdentity
-from security.models import SecurityProfile
+from security.models import SecurityProfile, SecurityPreference, TrustedLocation
 
 
 class SecurityProfileSignalTests(TestCase):
@@ -53,6 +63,19 @@ class SecurityProfileSignalTests(TestCase):
             first.security_profile.pk,
             second.security_profile.pk,
         )
+
+
+    def test_security_preference_is_created_with_new_identity(self):
+        identity = UserIdentity.objects.create(
+            email="security-preference-test@example.com",
+            mobile_number="01800000005",
+        )
+
+        preference = SecurityPreference.objects.get(
+            profile__identity=identity,
+        )
+
+        self.assertFalse(preference.trusted_location_enabled)
 
 
 from companies.models import (
@@ -350,4 +373,182 @@ class AccountContextResolverTests(TestCase):
         self.assertEqual(
             get_available_account_contexts(self.identity),
             [],
+        )
+
+
+class TrustedLocationTokenTests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="trusted-token-test@example.com",
+            mobile_number="01800000991",
+        )
+
+    def test_valid_token_can_only_be_consumed_once(self):
+        token = issue_trusted_location_verification(self.identity)
+
+        self.assertTrue(
+            consume_trusted_location_verification(self.identity, token)
+        )
+        self.assertFalse(
+            consume_trusted_location_verification(self.identity, token)
+        )
+
+    def test_expired_token_is_rejected(self):
+        token = issue_trusted_location_verification(self.identity)
+
+        TrustedLocationVerification.objects.filter(
+            profile=self.identity.security_profile,
+        ).update(
+            expires_at=timezone.now() - timedelta(seconds=1)
+        )
+
+        self.assertFalse(
+            consume_trusted_location_verification(self.identity, token)
+        )
+
+    def test_empty_token_is_rejected(self):
+        self.assertFalse(
+            consume_trusted_location_verification(self.identity, "")
+        )
+
+
+class TrustedLocationStateSyncTests(TestCase):
+    def setUp(self):
+        from rest_framework.test import APIRequestFactory, force_authenticate
+
+        from security.views import (
+            trusted_location_settings,
+            trusted_location_detail,
+        )
+
+        self.factory = APIRequestFactory()
+        self.force_authenticate = force_authenticate
+        self.settings_view = trusted_location_settings
+        self.detail_view = trusted_location_detail
+
+        self.identity = UserIdentity.objects.create(
+            email="location-sync@example.com",
+            mobile_number="01800000999",
+        )
+        self.profile = SecurityProfile.objects.get(identity=self.identity)
+        self.preference = SecurityPreference.objects.get(profile=self.profile)
+
+    def call_settings(self, enabled):
+        request = self.factory.patch(
+            "/trusted-location-settings/",
+            {"restriction_enabled": enabled},
+            format="json",
+        )
+        self.force_authenticate(request, user=self.identity)
+        return self.settings_view(request)
+
+    def call_location_update(self, location, enabled):
+        request = self.factory.patch(
+            f"/trusted-locations/{location.id}/",
+            {"is_enabled": enabled},
+            format="json",
+        )
+        self.force_authenticate(request, user=self.identity)
+        return self.detail_view(request, location_id=location.id)
+
+    def create_location(self, name, active=True):
+        return TrustedLocation.objects.create(
+            profile=self.profile,
+            name=name,
+            latitude="23.810300",
+            longitude="90.412500",
+            radius_meters=10000,
+            is_active=active,
+        )
+
+    def test_main_security_can_be_enabled_before_first_location(self):
+        response = self.call_settings(True)
+
+        self.preference.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(self.preference.trusted_location_enabled)
+
+    def test_enabling_one_location_enables_main_security(self):
+        location = self.create_location("Home", active=False)
+
+        response = self.call_location_update(location, True)
+
+        self.preference.refresh_from_db()
+        location.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(location.is_active)
+        self.assertTrue(self.preference.trusted_location_enabled)
+
+    def test_main_security_stays_enabled_while_any_location_is_enabled(self):
+        first = self.create_location("Home", active=True)
+        second = self.create_location("Office", active=True)
+        self.preference.trusted_location_enabled = True
+        self.preference.save()
+
+        self.call_location_update(first, False)
+
+        self.preference.refresh_from_db()
+        self.assertTrue(self.preference.trusted_location_enabled)
+        self.assertTrue(second.is_active)
+
+    def test_all_locations_off_turns_main_security_off(self):
+        first = self.create_location("Home", active=True)
+        second = self.create_location("Office", active=True)
+        self.preference.trusted_location_enabled = True
+        self.preference.save()
+
+        self.call_location_update(first, False)
+        self.call_location_update(second, False)
+
+        self.preference.refresh_from_db()
+        self.assertFalse(self.preference.trusted_location_enabled)
+
+    def test_final_main_off_disables_all_locations_without_deleting(self):
+        first = self.create_location("Home", active=True)
+        second = self.create_location("Office", active=True)
+        self.preference.trusted_location_enabled = True
+        self.preference.save()
+
+        response = self.call_settings(False)
+
+        self.preference.refresh_from_db()
+        first.refresh_from_db()
+        second.refresh_from_db()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self.preference.trusted_location_enabled)
+        self.assertFalse(first.is_active)
+        self.assertFalse(second.is_active)
+        self.assertEqual(
+            TrustedLocation.objects.filter(profile=self.profile).count(),
+            2,
+        )
+
+    def test_main_security_becomes_pending_when_saved_locations_are_all_off(self):
+        self.create_location("Home", active=False)
+
+        response = self.call_settings(True)
+
+        self.preference.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(self.preference.trusted_location_enabled)
+        self.assertTrue(self.preference.trusted_location_pending)
+        self.assertTrue(response.data["trusted_location_pending"])
+
+    def test_deleting_last_enabled_location_turns_main_security_off(self):
+        location = self.create_location("Home", active=True)
+        self.preference.trusted_location_enabled = True
+        self.preference.save()
+
+        request = self.factory.delete(
+            f"/trusted-locations/{location.id}/"
+        )
+        self.force_authenticate(request, user=self.identity)
+        response = self.detail_view(request, location_id=location.id)
+
+        self.preference.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self.preference.trusted_location_enabled)
+        self.assertFalse(
+            TrustedLocation.objects.filter(pk=location.pk).exists()
         )

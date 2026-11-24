@@ -5,6 +5,7 @@ from .models import (
     SecurityPreference,
     SecurityPolicy,
     SecurityMethod,
+    TrustedLocation,
 )
 
 
@@ -140,3 +141,39 @@ class SecurityPreferenceAdmin(admin.ModelAdmin):
         "created_at",
         "updated_at",
     )
+
+
+@admin.register(TrustedLocation)
+class TrustedLocationAdmin(admin.ModelAdmin):
+    list_display = (
+        "name",
+        "profile",
+        "radius_meters",
+        "is_active",
+        "created_at",
+    )
+    list_filter = ("is_active",)
+    search_fields = (
+        "name",
+        "profile__identity__email",
+        "profile__identity__username",
+    )
+    exclude = ("latitude", "longitude")
+    readonly_fields = (
+        "location_id",
+        "profile",
+        "name",
+        "radius_meters",
+        "is_active",
+        "created_at",
+        "updated_at",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

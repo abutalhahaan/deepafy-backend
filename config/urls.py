@@ -51,6 +51,11 @@ urlpatterns = [
         "api/activity/",
         include("activity.urls"),
     ),
+
+    path(
+        "api/security/",
+        include("security.urls"),
+    ),
 ]
 
 

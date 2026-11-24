@@ -2,7 +2,7 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 
 from identity.models import UserIdentity
-from security.models import SecurityProfile
+from security.models import SecurityProfile, SecurityPreference
 
 
 @receiver(
@@ -12,6 +12,10 @@ from security.models import SecurityProfile
 )
 def create_security_profile(sender, instance, created, **kwargs):
     if created:
-        SecurityProfile.objects.get_or_create(
+        profile, _ = SecurityProfile.objects.get_or_create(
             identity=instance,
+        )
+
+        SecurityPreference.objects.get_or_create(
+            profile=profile,
         )

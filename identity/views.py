@@ -5,6 +5,8 @@ from datetime import date, timedelta
 from core.services.image_processor import process_image
 from core.models import ColleagueSetting
 from notifications.services import create_notification
+from security.models import SecurityProfile, SecurityPreference, TrustedLocation
+from security.trusted_location_verification import consume_trusted_location_verification
 
 from django.http.multipartparser import (
     MultiPartParser,
@@ -5732,6 +5734,41 @@ def login(request):
                 },
                 status=403,
             )
+
+        security_profile = SecurityProfile.objects.filter(
+            identity=identity,
+        ).first()
+
+        if security_profile:
+            security_preference = SecurityPreference.objects.filter(
+                profile=security_profile,
+            ).first()
+
+            if (
+                security_preference
+                and security_preference.trusted_location_enabled
+                and TrustedLocation.objects.filter(
+                    profile=security_profile,
+                    is_active=True,
+                ).exists()
+            ):
+                location_token = data.get(
+                    "location_verification_token"
+                )
+
+                if not consume_trusted_location_verification(
+                    identity,
+                    location_token,
+                ):
+                    return JsonResponse(
+                        {
+                            "detail": (
+                                "Trusted location verification required."
+                            ),
+                            "code": "trusted_location_verification_required",
+                        },
+                        status=403,
+                    )
 
         identity.last_login = timezone.now()
         identity.save(

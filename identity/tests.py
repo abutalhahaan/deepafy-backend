@@ -3180,3 +3180,99 @@ class FollowAPITests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["already_removed"])
+
+
+class TrustedLocationLoginTests(TestCase):
+    def setUp(self):
+        from security.models import SecurityPreference, TrustedLocation
+        from security.trusted_location_verification import (
+            issue_trusted_location_verification,
+        )
+
+        self.identity = UserIdentity.objects.create(
+            email="trusted-login@example.com",
+            username="trusted-login",
+            mobile_number="01900000000",
+            status=UserIdentity.Status.ACTIVE,
+            is_active=True,
+        )
+        self.identity.set_password("SecureTestPass123!")
+        self.identity.save(update_fields=["password"])
+
+        self.preference = SecurityPreference.objects.get(
+            profile__identity=self.identity,
+        )
+        self.location = TrustedLocation.objects.create(
+            profile=self.preference.profile,
+            name="Home",
+            latitude="23.810300",
+            longitude="90.412500",
+            radius_meters=10000,
+            is_active=True,
+        )
+        self.issue_token = issue_trusted_location_verification
+
+    def login(self, token=None):
+        payload = {
+            "identifier": self.identity.username,
+            "password": "SecureTestPass123!",
+        }
+        if token is not None:
+            payload["location_verification_token"] = token
+
+        return self.client.post(
+            "/api/identity/login/",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+    def test_restriction_on_valid_token_allows_login(self):
+        self.preference.trusted_location_enabled = True
+        self.preference.save(update_fields=["trusted_location_enabled"])
+
+        token = self.issue_token(self.identity)
+        response = self.login(token)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("access", response.json())
+
+    def test_restriction_on_missing_token_blocks_login(self):
+        self.preference.trusted_location_enabled = True
+        self.preference.save(update_fields=["trusted_location_enabled"])
+
+        response = self.login()
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json()["code"],
+            "trusted_location_verification_required",
+        )
+
+    def test_restriction_on_invalid_token_blocks_login(self):
+        self.preference.trusted_location_enabled = True
+        self.preference.save(update_fields=["trusted_location_enabled"])
+
+        response = self.login("invalid-token")
+
+        self.assertEqual(response.status_code, 403)
+
+
+    def test_restriction_on_without_active_location_allows_login(self):
+        self.preference.trusted_location_enabled = True
+        self.preference.save(update_fields=["trusted_location_enabled"])
+        self.location.is_active = False
+        self.location.save(update_fields=["is_active"])
+
+        response = self.login()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("access", response.json())
+
+    def test_restriction_off_allows_login_without_token(self):
+        self.preference.trusted_location_enabled = False
+        self.preference.save(update_fields=["trusted_location_enabled"])
+
+        response = self.login()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("access", response.json())

@@ -1,6 +1,7 @@
 import uuid
 
 from django.conf import settings
+from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
 from django.db.models import Q
 
@@ -207,6 +208,19 @@ class SecurityPreference(models.Model):
         default=False,
     )
 
+    trusted_location_enabled = models.BooleanField(
+        default=False,
+    )
+
+    trusted_location_pending = models.BooleanField(
+        default=False,
+    )
+
+    trusted_location_enabled_since = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
     login_alerts_enabled = models.BooleanField(
         default=True,
     )
@@ -227,3 +241,93 @@ class SecurityPreference(models.Model):
 
     def __str__(self):
         return f"Security Preferences: {self.profile.identity}"
+
+
+class TrustedLocation(models.Model):
+    location_id = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        editable=False,
+    )
+
+    profile = models.ForeignKey(
+        SecurityProfile,
+        on_delete=models.CASCADE,
+        related_name="trusted_locations",
+    )
+
+    name = models.CharField(max_length=100)
+
+    map_url = models.URLField(blank=True, default="")
+
+    accuracy_meters = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1), MaxValueValidator(1000)],
+    )
+
+    latitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        validators=[MinValueValidator(-90), MaxValueValidator(90)],
+    )
+
+    longitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        validators=[MinValueValidator(-180), MaxValueValidator(180)],
+    )
+
+    radius_meters = models.PositiveIntegerField(
+        validators=[MinValueValidator(1)],
+    )
+
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(latitude__gte=-90, latitude__lte=90),
+                name="trusted_location_latitude_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(longitude__gte=-180, longitude__lte=180),
+                name="trusted_location_longitude_valid",
+            ),
+            models.CheckConstraint(
+                condition=Q(radius_meters__gt=0),
+                name="trusted_location_radius_positive",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.profile.identity})"
+
+
+class TrustedLocationVerification(models.Model):
+    profile = models.ForeignKey(
+        SecurityProfile,
+        on_delete=models.CASCADE,
+        related_name="trusted_location_verifications",
+    )
+
+    token_hash = models.CharField(max_length=64, unique=True)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["profile", "expires_at"],
+                name="trust_verify_prof_exp_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Location Verification: {self.profile.identity}"
