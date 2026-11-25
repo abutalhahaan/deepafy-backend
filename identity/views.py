@@ -1,12 +1,28 @@
 import json
 import secrets
+import hashlib
 
 from datetime import date, timedelta
 from core.services.image_processor import process_image
 from core.models import ColleagueSetting
 from notifications.services import create_notification
-from security.models import SecurityProfile, SecurityPreference, TrustedLocation
+from security.models import (
+    SecurityProfile,
+    SecurityPreference,
+    TrustedLocation,
+    SecurityMethod,
+    TwoFactorLoginChallenge,
+)
 from security.trusted_location_verification import consume_trusted_location_verification
+from security.two_factor import (
+    get_active_totp_method,
+    decrypt_totp_secret,
+    verify_totp_code,
+    consume_recovery_code,
+    check_two_factor_lockout,
+    register_failed_two_factor_attempt,
+    reset_two_factor_attempts,
+)
 
 from django.http.multipartparser import (
     MultiPartParser,
@@ -5769,6 +5785,48 @@ def login(request):
                         },
                         status=403,
                     )
+
+        if security_profile and security_profile.two_factor_enabled:
+            locked, locked_until = check_two_factor_lockout(security_profile)
+            if locked:
+                return JsonResponse(
+                    {
+                        "detail": "Too many failed 2FA attempts. Try again after 15 minutes.",
+                        "code": "two_factor_locked",
+                        "locked_until": locked_until.isoformat(),
+                    },
+                    status=429,
+                )
+
+            active_method = get_active_totp_method(security_profile)
+            if not active_method or not active_method.encrypted_secret:
+                return JsonResponse(
+                    {
+                        "detail": "Two-factor authentication is enabled but not properly configured.",
+                        "code": "two_factor_configuration_error",
+                    },
+                    status=403,
+                )
+
+            challenge_token = secrets.token_urlsafe(32)
+            TwoFactorLoginChallenge.objects.create(
+                profile=security_profile,
+                token_hash=hashlib.sha256(
+                    challenge_token.encode()
+                ).hexdigest(),
+                expires_at=timezone.now() + timedelta(minutes=5),
+            )
+
+            return JsonResponse(
+                {
+                    "message": "Two-factor verification required.",
+                    "two_factor_required": True,
+                    "challenge_token": challenge_token,
+                    "expires_in": 300,
+                    "methods": ["totp", "recovery_code"],
+                },
+                status=200,
+            )
 
         identity.last_login = timezone.now()
         identity.save(

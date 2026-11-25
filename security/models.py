@@ -14,6 +14,8 @@ class SecurityProfile(models.Model):
     )
 
     two_factor_enabled = models.BooleanField(default=False)
+    two_factor_verification_attempts = models.PositiveSmallIntegerField(default=0)
+    two_factor_locked_until = models.DateTimeField(null=True, blank=True)
 
     password_changed_at = models.DateTimeField(
         null=True,
@@ -176,6 +178,9 @@ class SecurityMethod(models.Model):
         blank=True,
     )
 
+    encrypted_secret = models.TextField(blank=True, default="")
+    last_totp_step = models.BigIntegerField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -331,3 +336,52 @@ class TrustedLocationVerification(models.Model):
 
     def __str__(self):
         return f"Location Verification: {self.profile.identity}"
+
+
+class RecoveryCode(models.Model):
+    profile = models.ForeignKey(
+        SecurityProfile,
+        on_delete=models.CASCADE,
+        related_name="recovery_codes",
+    )
+    batch_id = models.UUIDField(default=uuid.uuid4, db_index=True)
+    code_hash = models.CharField(max_length=128)
+    used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["profile", "used_at"],
+                name="recovery_profile_used_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Recovery Code: {self.profile.identity}"
+
+
+class TwoFactorLoginChallenge(models.Model):
+    profile = models.ForeignKey(
+        SecurityProfile,
+        on_delete=models.CASCADE,
+        related_name="two_factor_challenges",
+    )
+    token_hash = models.CharField(max_length=64, unique=True)
+    expires_at = models.DateTimeField()
+    attempts = models.PositiveSmallIntegerField(default=0)
+    consumed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["profile", "expires_at"],
+                name="twofactor_prof_exp_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"2FA Login Challenge: {self.profile.identity}"

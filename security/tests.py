@@ -552,3 +552,273 @@ class TrustedLocationStateSyncTests(TestCase):
         self.assertFalse(
             TrustedLocation.objects.filter(pk=location.pk).exists()
         )
+
+
+class TwoFactorServiceTests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="twofactor-test@example.com",
+            mobile_number="01700000001",
+        )
+        self.profile = SecurityProfile.objects.get(identity=self.identity)
+
+    def test_generates_ten_unique_recovery_codes(self):
+        from security.two_factor import replace_recovery_codes
+
+        codes = replace_recovery_codes(self.profile)
+
+        self.assertEqual(len(codes), 10)
+        self.assertEqual(len(set(codes)), 10)
+        self.assertEqual(
+            self.profile.recovery_codes.filter(used_at__isnull=True).count(),
+            10,
+        )
+
+    def test_recovery_code_can_only_be_used_once(self):
+        from security.two_factor import (
+            replace_recovery_codes,
+            consume_recovery_code,
+        )
+
+        codes = replace_recovery_codes(self.profile)
+        code = codes[0]
+
+        self.assertTrue(consume_recovery_code(self.profile, code))
+        self.assertFalse(consume_recovery_code(self.profile, code))
+
+    def test_regeneration_invalidates_previous_codes(self):
+        from security.two_factor import (
+            replace_recovery_codes,
+            consume_recovery_code,
+        )
+
+        old_codes = replace_recovery_codes(self.profile)
+        new_codes = replace_recovery_codes(self.profile)
+
+        self.assertFalse(consume_recovery_code(self.profile, old_codes[0]))
+        self.assertTrue(consume_recovery_code(self.profile, new_codes[0]))
+
+    def test_totp_generation_and_verification(self):
+        import pyotp
+        from security.two_factor import verify_totp_code
+
+        secret = pyotp.random_base32()
+        code = pyotp.TOTP(secret).now()
+
+        self.assertTrue(verify_totp_code(secret, code))
+        self.assertFalse(verify_totp_code(secret, "12345"))
+
+    def test_totp_secret_encryption_and_decryption(self):
+        from security.two_factor import (
+            generate_totp_secret,
+            encrypt_totp_secret,
+            decrypt_totp_secret,
+        )
+
+        secret = generate_totp_secret()
+        encrypted = encrypt_totp_secret(secret)
+
+        self.assertNotEqual(encrypted, secret)
+        self.assertEqual(decrypt_totp_secret(encrypted), secret)
+
+
+
+class TotpReplayProtectionTests(TestCase):
+    def setUp(self):
+        import pyotp
+        from security.models import SecurityMethod
+
+        self.identity = UserIdentity.objects.create(
+            email="totp-replay@example.com",
+            mobile_number="01700000009",
+        )
+        self.profile = SecurityProfile.objects.get(identity=self.identity)
+        self.secret = pyotp.random_base32()
+        self.method = SecurityMethod.objects.create(
+            profile=self.profile,
+            method=SecurityMethod.Method.TOTP,
+            status=SecurityMethod.Status.ACTIVE,
+            encrypted_secret="test-encrypted-secret",
+        )
+        self.totp = pyotp.TOTP(self.secret)
+
+    def test_valid_totp_is_accepted_once_only(self):
+        from security.two_factor import verify_and_consume_totp_code
+
+        now = timezone.now()
+        code = self.totp.at(now)
+
+        self.assertTrue(
+            verify_and_consume_totp_code(self.method, self.secret, code, now)
+        )
+        self.assertFalse(
+            verify_and_consume_totp_code(self.method, self.secret, code, now)
+        )
+        self.method.refresh_from_db()
+        self.assertEqual(self.method.last_totp_step, self.totp.timecode(now))
+
+    def test_previously_consumed_step_is_rejected_in_valid_window(self):
+        from datetime import datetime, timezone as datetime_timezone
+        from security.two_factor import verify_and_consume_totp_code
+
+        first_step = self.totp.timecode(timezone.now())
+        first_time = datetime.fromtimestamp(
+            first_step * 30 + 1, tz=datetime_timezone.utc
+        )
+        first_code = self.totp.generate_otp(first_step)
+        self.assertTrue(
+            verify_and_consume_totp_code(
+                self.method, self.secret, first_code, first_time
+            )
+        )
+
+        next_step_time = datetime.fromtimestamp(
+            (first_step + 1) * 30 + 1, tz=datetime_timezone.utc
+        )
+        self.assertFalse(
+            verify_and_consume_totp_code(
+                self.method, self.secret, first_code, next_step_time
+            )
+        )
+
+    def test_new_totp_step_is_accepted(self):
+        from datetime import datetime, timezone as datetime_timezone
+        from security.two_factor import verify_and_consume_totp_code
+
+        first_step = self.totp.timecode(timezone.now())
+        first_time = datetime.fromtimestamp(
+            first_step * 30 + 1, tz=datetime_timezone.utc
+        )
+        self.assertTrue(
+            verify_and_consume_totp_code(
+                self.method, self.secret,
+                self.totp.generate_otp(first_step), first_time
+            )
+        )
+
+        next_step = first_step + 1
+        next_time = datetime.fromtimestamp(
+            next_step * 30 + 1, tz=datetime_timezone.utc
+        )
+        self.assertTrue(
+            verify_and_consume_totp_code(
+                self.method, self.secret,
+                self.totp.generate_otp(next_step), next_time
+            )
+        )
+
+    def test_invalid_totp_is_rejected_without_consuming_step(self):
+        from security.two_factor import verify_and_consume_totp_code
+
+        now = timezone.now()
+        self.assertFalse(
+            verify_and_consume_totp_code(
+                self.method, self.secret, "000000", now
+            )
+        )
+        self.method.refresh_from_db()
+        self.assertIsNone(self.method.last_totp_step)
+
+
+class TotpSetupReplayIntegrationTests(TestCase):
+    def setUp(self):
+        from rest_framework.test import APIRequestFactory, force_authenticate
+        from security.two_factor_views import setup_totp, verify_totp_setup
+
+        self.factory = APIRequestFactory()
+        self.force_authenticate = force_authenticate
+        self.setup_view = setup_totp
+        self.verify_view = verify_totp_setup
+        self.identity = UserIdentity.objects.create(
+            email="totp-setup-replay@example.com",
+            mobile_number="01700000010",
+        )
+        self.profile = SecurityProfile.objects.get(identity=self.identity)
+
+    def call_view(self, view, data=None):
+        request = self.factory.post("/two-factor-test/", data or {}, format="json")
+        self.force_authenticate(request, user=self.identity)
+        return view(request)
+
+    def test_successful_setup_consumes_totp_step(self):
+        import pyotp
+        from security.models import SecurityMethod
+
+        setup_response = self.call_view(self.setup_view)
+        self.assertEqual(setup_response.status_code, 200)
+        secret = setup_response.data["secret"]
+        code = pyotp.TOTP(secret).now()
+
+        response = self.call_view(self.verify_view, {"code": code})
+
+        self.assertEqual(response.status_code, 200)
+        self.profile.refresh_from_db()
+        method = SecurityMethod.objects.get(
+            profile=self.profile,
+            method=SecurityMethod.Method.TOTP,
+        )
+        self.assertTrue(self.profile.two_factor_enabled)
+        self.assertIsNotNone(method.last_totp_step)
+
+    def test_invalid_setup_code_does_not_consume_totp_step(self):
+        from security.models import SecurityMethod
+
+        setup_response = self.call_view(self.setup_view)
+        self.assertEqual(setup_response.status_code, 200)
+
+        response = self.call_view(self.verify_view, {"code": "000000"})
+
+        self.assertEqual(response.status_code, 400)
+        method = SecurityMethod.objects.get(
+            profile=self.profile,
+            method=SecurityMethod.Method.TOTP,
+        )
+        self.assertIsNone(method.last_totp_step)
+
+
+class TwoFactorLockoutTests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="twofactor-lockout@example.com",
+            mobile_number="01700000002",
+        )
+        self.profile = SecurityProfile.objects.get(identity=self.identity)
+
+    def test_three_failed_attempts_lock_for_fifteen_minutes(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from security.two_factor import register_failed_two_factor_attempt
+
+        for attempt in range(3):
+            locked, locked_until = register_failed_two_factor_attempt(
+                self.profile
+            )
+
+        self.profile.refresh_from_db()
+
+        self.assertTrue(locked)
+        self.assertIsNotNone(locked_until)
+        self.assertEqual(self.profile.two_factor_verification_attempts, 3)
+        self.assertGreaterEqual(
+            locked_until,
+            timezone.now() + timedelta(minutes=14, seconds=59),
+        )
+        self.assertLessEqual(
+            locked_until,
+            timezone.now() + timedelta(minutes=15, seconds=1),
+        )
+
+    def test_successful_verification_resets_attempts_and_lockout(self):
+        from security.two_factor import (
+            register_failed_two_factor_attempt,
+            reset_two_factor_attempts,
+        )
+
+        for _ in range(3):
+            register_failed_two_factor_attempt(self.profile)
+
+        reset_two_factor_attempts(self.profile)
+        self.profile.refresh_from_db()
+
+        self.assertEqual(self.profile.two_factor_verification_attempts, 0)
+        self.assertIsNone(self.profile.two_factor_locked_until)

@@ -3276,3 +3276,172 @@ class TrustedLocationLoginTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("access", response.json())
+
+
+
+class TwoFactorLoginTests(TestCase):
+    def setUp(self):
+        import pyotp
+        from security.models import SecurityProfile, SecurityMethod
+        from security.two_factor import (
+            generate_totp_secret,
+            encrypt_totp_secret,
+        )
+
+        self.identity = UserIdentity.objects.create(
+            email="twofactor-login@example.com",
+            username="twofactor-login",
+            mobile_number="01800000002",
+            status=UserIdentity.Status.ACTIVE,
+            is_active=True,
+        )
+        self.identity.set_password("SecureTestPass123!")
+        self.identity.save(update_fields=["password"])
+
+        self.profile = SecurityProfile.objects.get(
+            identity=self.identity,
+        )
+        self.secret = generate_totp_secret()
+
+        self.method = SecurityMethod.objects.create(
+            profile=self.profile,
+            method=SecurityMethod.Method.TOTP,
+            status=SecurityMethod.Status.ACTIVE,
+            is_primary=True,
+            encrypted_secret=encrypt_totp_secret(self.secret),
+        )
+
+        self.profile.two_factor_enabled = True
+        self.profile.save(update_fields=["two_factor_enabled"])
+
+    def login(self):
+        return self.client.post(
+            "/api/identity/login/",
+            data=json.dumps({
+                "identifier": self.identity.username,
+                "password": "SecureTestPass123!",
+            }),
+            content_type="application/json",
+        )
+
+    def verify_challenge(self, challenge_token, code=None, recovery_code=None):
+        payload = {"challenge_token": challenge_token}
+        if code is not None:
+            payload["code"] = code
+        if recovery_code is not None:
+            payload["recovery_code"] = recovery_code
+
+        return self.client.post(
+            "/api/security/verify-two-factor-login/",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+    def test_login_with_2fa_returns_challenge_without_jwt(self):
+        response = self.login()
+        data = response.json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(data["two_factor_required"])
+        self.assertIn("challenge_token", data)
+        self.assertNotIn("access", data)
+        self.assertNotIn("refresh", data)
+        self.assertEqual(data["expires_in"], 300)
+
+    def test_valid_totp_challenge_returns_jwt(self):
+        import pyotp
+
+        login_response = self.login()
+        challenge_token = login_response.json()["challenge_token"]
+        code = pyotp.TOTP(self.secret).now()
+
+        response = self.verify_challenge(challenge_token, code)
+        data = response.json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("access", data)
+        self.assertIn("refresh", data)
+        self.assertFalse(data["recovery_code_used"])
+
+    def test_three_invalid_totp_attempts_lock_login_for_fifteen_minutes(self):
+        login_response = self.login()
+        challenge_token = login_response.json()["challenge_token"]
+
+        for _ in range(3):
+            response = self.verify_challenge(challenge_token, "000000")
+
+        self.profile.refresh_from_db()
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(
+            self.profile.two_factor_verification_attempts,
+            3,
+        )
+        self.assertIsNotNone(self.profile.two_factor_locked_until)
+
+        blocked_response = self.verify_challenge(
+            challenge_token,
+            "000000",
+        )
+        self.assertEqual(blocked_response.status_code, 429)
+
+
+
+    def test_valid_recovery_code_returns_jwt_and_is_one_time(self):
+        from security.two_factor import replace_recovery_codes, consume_recovery_code
+
+        recovery_codes = replace_recovery_codes(self.profile)
+        recovery_code = recovery_codes[0]
+
+        login_response = self.login()
+        challenge_token = login_response.json()["challenge_token"]
+
+        response = self.verify_challenge(
+            challenge_token,
+            recovery_code=recovery_code,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("access", response.json())
+        self.assertIn("refresh", response.json())
+        self.assertTrue(response.json()["recovery_code_used"])
+        self.assertFalse(consume_recovery_code(self.profile, recovery_code))
+
+
+    def test_expired_challenge_is_rejected(self):
+        import hashlib
+        from datetime import timedelta
+        from django.utils import timezone
+        from security.models import TwoFactorLoginChallenge
+
+        login_response = self.login()
+        challenge_token = login_response.json()["challenge_token"]
+        token_hash = hashlib.sha256(challenge_token.encode()).hexdigest()
+
+        TwoFactorLoginChallenge.objects.filter(
+            token_hash=token_hash,
+        ).update(expires_at=timezone.now() - timedelta(seconds=1))
+
+        response = self.verify_challenge(
+            challenge_token,
+            code="000000",
+        )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("expired", response.json()["detail"].lower())
+
+    def test_consumed_challenge_cannot_be_reused(self):
+        import pyotp
+
+        login_response = self.login()
+        challenge_token = login_response.json()["challenge_token"]
+        code = pyotp.TOTP(self.secret).now()
+
+        first_response = self.verify_challenge(challenge_token, code)
+        self.assertEqual(first_response.status_code, 200)
+
+        second_response = self.verify_challenge(
+            challenge_token,
+            code,
+        )
+        self.assertEqual(second_response.status_code, 401)
