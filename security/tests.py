@@ -822,3 +822,172 @@ class TwoFactorLockoutTests(TestCase):
 
         self.assertEqual(self.profile.two_factor_verification_attempts, 0)
         self.assertIsNone(self.profile.two_factor_locked_until)
+
+
+class PasswordLoginLockoutTests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="password-lockout@example.com",
+            mobile_number="01700000003",
+        )
+        self.profile = SecurityProfile.objects.get(
+            identity=self.identity,
+        )
+
+    def test_three_failed_attempts_lock_for_one_hour(self):
+        from datetime import timedelta
+        from security.password_login import register_failed_password_attempt
+
+        for _ in range(3):
+            result = register_failed_password_attempt(self.profile)
+
+        self.profile.refresh_from_db()
+
+        self.assertFalse(result["disabled"])
+        self.assertIsNotNone(result["locked_until"])
+        self.assertEqual(self.profile.failed_password_attempts, 3)
+        self.assertGreaterEqual(
+            result["locked_until"],
+            timezone.now() + timedelta(minutes=59, seconds=59),
+        )
+        self.assertLessEqual(
+            result["locked_until"],
+            timezone.now() + timedelta(hours=1, seconds=1),
+        )
+
+    def test_fourth_failed_attempt_after_expiry_locks_for_six_hours(self):
+        from datetime import timedelta
+        from security.password_login import register_failed_password_attempt
+
+        for _ in range(3):
+            register_failed_password_attempt(self.profile)
+
+        self.profile.refresh_from_db()
+        self.profile.password_login_locked_until = (
+            timezone.now() - timedelta(seconds=1)
+        )
+        self.profile.save(update_fields=["password_login_locked_until"])
+
+        result = register_failed_password_attempt(self.profile)
+
+        self.profile.refresh_from_db()
+
+        self.assertEqual(result["attempts"], 4)
+        self.assertFalse(result["disabled"])
+        self.assertGreaterEqual(
+            result["locked_until"],
+            timezone.now() + timedelta(hours=5, minutes=59),
+        )
+        self.assertLessEqual(
+            result["locked_until"],
+            timezone.now() + timedelta(hours=6, seconds=1),
+        )
+
+    def test_fifth_failed_attempt_after_expiry_locks_for_twenty_four_hours(self):
+        from datetime import timedelta
+        from security.password_login import register_failed_password_attempt
+
+        for expected_attempt in range(1, 5):
+            result = register_failed_password_attempt(self.profile)
+            if expected_attempt in (3, 4):
+                self.profile.refresh_from_db()
+                self.profile.password_login_locked_until = (
+                    timezone.now() - timedelta(seconds=1)
+                )
+                self.profile.save(
+                    update_fields=["password_login_locked_until"]
+                )
+
+        result = register_failed_password_attempt(self.profile)
+
+        self.profile.refresh_from_db()
+
+        self.assertEqual(result["attempts"], 5)
+        self.assertFalse(result["disabled"])
+        self.assertGreaterEqual(
+            result["locked_until"],
+            timezone.now() + timedelta(hours=23, minutes=59),
+        )
+        self.assertLessEqual(
+            result["locked_until"],
+            timezone.now() + timedelta(hours=24, seconds=1),
+        )
+
+    def test_sixth_failed_attempt_disables_password_login(self):
+        from datetime import timedelta
+        from security.password_login import register_failed_password_attempt
+
+        for attempt in range(1, 6):
+            register_failed_password_attempt(self.profile)
+            if attempt in (3, 4, 5):
+                self.profile.refresh_from_db()
+                self.profile.password_login_locked_until = (
+                    timezone.now() - timedelta(seconds=1)
+                )
+                self.profile.save(
+                    update_fields=["password_login_locked_until"]
+                )
+
+        result = register_failed_password_attempt(self.profile)
+
+        self.profile.refresh_from_db()
+
+        self.assertTrue(result["disabled"])
+        self.assertTrue(self.profile.password_login_disabled)
+        self.assertEqual(self.profile.failed_password_attempts, 6)
+
+    def test_disabled_password_login_cannot_be_used(self):
+        from security.password_login import check_password_login_access
+
+        self.profile.password_login_disabled = True
+        self.profile.save(update_fields=["password_login_disabled"])
+
+        result = check_password_login_access(self.profile)
+
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["reason"], "password_login_disabled")
+
+    def test_expired_lockout_allows_next_attempt(self):
+        from datetime import timedelta
+        from security.password_login import (
+            check_password_login_access,
+            register_failed_password_attempt,
+        )
+
+        for _ in range(3):
+            register_failed_password_attempt(self.profile)
+
+        self.profile.refresh_from_db()
+        self.profile.password_login_locked_until = (
+            timezone.now() - timedelta(seconds=1)
+        )
+        self.profile.save(update_fields=["password_login_locked_until"])
+
+        result = check_password_login_access(self.profile)
+
+        self.assertTrue(result["allowed"])
+
+    def test_password_reset_clears_all_login_restrictions(self):
+        from datetime import timedelta
+        from security.password_login import (
+            register_failed_password_attempt,
+            reset_password_login_attempts,
+        )
+
+        self.profile.failed_password_attempts = 6
+        self.profile.password_login_disabled = True
+        self.profile.password_login_locked_until = (
+            timezone.now() + timedelta(hours=1)
+        )
+        self.profile.save(update_fields=[
+            "failed_password_attempts",
+            "password_login_disabled",
+            "password_login_locked_until",
+        ])
+
+        reset_password_login_attempts(self.profile)
+        self.profile.refresh_from_db()
+
+        self.assertEqual(self.profile.failed_password_attempts, 0)
+        self.assertFalse(self.profile.password_login_disabled)
+        self.assertIsNone(self.profile.password_login_locked_until)

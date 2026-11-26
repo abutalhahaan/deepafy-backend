@@ -1,5 +1,8 @@
 import io
 import json
+from unittest.mock import patch
+
+from django.core import mail
 
 from PIL import Image
 
@@ -3445,3 +3448,186 @@ class TwoFactorLoginTests(TestCase):
             code,
         )
         self.assertEqual(second_response.status_code, 401)
+
+
+class PasswordLoginProtectionTests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="password-login@example.com",
+            username="password-login",
+            mobile_number="01700000004",
+            status=UserIdentity.Status.ACTIVE,
+            is_active=True,
+        )
+        self.identity.set_password("SecureTestPass123!")
+        self.identity.save(update_fields=["password"])
+
+        from security.models import SecurityProfile
+        self.profile = SecurityProfile.objects.get(
+            identity=self.identity,
+        )
+
+    def login(self, password):
+        return self.client.post(
+            "/api/identity/login/",
+            data=json.dumps({
+                "identifier": self.identity.username,
+                "password": password,
+            }),
+            content_type="application/json",
+        )
+
+    def test_wrong_password_increments_counter(self):
+        response = self.login("WrongPassword123!")
+
+        self.profile.refresh_from_db()
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(self.profile.failed_password_attempts, 1)
+
+    def test_third_wrong_password_locks_login(self):
+        self.login("WrongPassword123!")
+        self.login("WrongPassword123!")
+        response = self.login("WrongPassword123!")
+
+        self.profile.refresh_from_db()
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.json()["code"], "password_login_locked")
+        self.assertEqual(self.profile.failed_password_attempts, 3)
+        self.assertIsNotNone(self.profile.password_login_locked_until)
+
+    def test_correct_password_is_rejected_during_lockout(self):
+        for _ in range(3):
+            self.login("WrongPassword123!")
+
+        response = self.login("SecureTestPass123!")
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.json()["code"], "password_login_locked")
+
+    def test_successful_login_resets_failed_attempts(self):
+        self.login("WrongPassword123!")
+        self.login("WrongPassword123!")
+
+        response = self.login("SecureTestPass123!")
+
+        self.profile.refresh_from_db()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("access", response.json())
+        self.assertEqual(self.profile.failed_password_attempts, 0)
+        self.assertIsNone(self.profile.password_login_locked_until)
+
+    def test_sixth_failed_attempt_disables_password_login(self):
+        from datetime import timedelta
+        from django.utils import timezone
+
+        for attempt in range(1, 7):
+            response = self.login("WrongPassword123!")
+
+            if attempt in (3, 4, 5):
+                self.profile.refresh_from_db()
+                self.profile.password_login_locked_until = (
+                    timezone.now() - timedelta(seconds=1)
+                )
+                self.profile.save(
+                    update_fields=["password_login_locked_until"]
+                )
+
+        self.profile.refresh_from_db()
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json()["code"],
+            "password_login_disabled",
+        )
+        self.assertTrue(self.profile.password_login_disabled)
+        self.assertEqual(self.profile.failed_password_attempts, 6)
+
+
+class LoginEmailAlertTests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="login-alert@example.com",
+            username="login-alert",
+            mobile_number="01700000005",
+            status=UserIdentity.Status.ACTIVE,
+            is_active=True,
+        )
+        self.identity.set_password("SecureTestPass123!")
+        self.identity.save(update_fields=["password"])
+
+    def login(self, identifier, password):
+        return self.client.post(
+            "/api/identity/login/",
+            data=json.dumps({
+                "identifier": identifier,
+                "password": password,
+            }),
+            content_type="application/json",
+        )
+
+    def test_wrong_password_sends_alert_to_saved_email(self):
+        with self.settings(
+            EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+            DEFAULT_FROM_EMAIL="security@deepafy.com",
+        ):
+            response = self.login(
+                self.identity.username,
+                "WrongPassword123!",
+            )
+
+            self.assertEqual(response.status_code, 401)
+            self.assertEqual(len(mail.outbox), 1)
+            self.assertEqual(
+                mail.outbox[0].to,
+                ["login-alert@example.com"],
+            )
+            self.assertNotIn(
+                "WrongPassword123!",
+                mail.outbox[0].body,
+            )
+
+    def test_successful_login_sends_success_alert(self):
+        with self.settings(
+            EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+            DEFAULT_FROM_EMAIL="security@deepafy.com",
+        ):
+            response = self.login(
+                self.identity.username,
+                "SecureTestPass123!",
+            )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(len(mail.outbox), 1)
+            self.assertEqual(
+                mail.outbox[0].to,
+                ["login-alert@example.com"],
+            )
+
+    def test_unknown_identifier_does_not_send_email(self):
+        with self.settings(
+            EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+            DEFAULT_FROM_EMAIL="security@deepafy.com",
+        ):
+            response = self.login(
+                "unknown-user@example.com",
+                "WrongPassword123!",
+            )
+
+            self.assertEqual(response.status_code, 401)
+            self.assertEqual(len(mail.outbox), 0)
+
+    def test_email_failure_does_not_break_successful_login(self):
+        with patch(
+            "security.login_email.send_mail",
+            side_effect=Exception("SMTP unavailable"),
+        ):
+            response = self.login(
+                self.identity.username,
+                "SecureTestPass123!",
+            )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("access", response.json())

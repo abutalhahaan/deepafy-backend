@@ -17,6 +17,10 @@ class SecurityProfile(models.Model):
     two_factor_verification_attempts = models.PositiveSmallIntegerField(default=0)
     two_factor_locked_until = models.DateTimeField(null=True, blank=True)
 
+    failed_password_attempts = models.PositiveSmallIntegerField(default=0)
+    password_login_locked_until = models.DateTimeField(null=True, blank=True)
+    password_login_disabled = models.BooleanField(default=False)
+
     password_changed_at = models.DateTimeField(
         null=True,
         blank=True,

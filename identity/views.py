@@ -14,6 +14,12 @@ from security.models import (
     TwoFactorLoginChallenge,
 )
 from security.trusted_location_verification import consume_trusted_location_verification
+from security.login_email import send_login_attempt_alert
+from security.password_login import (
+    check_password_login_access,
+    register_failed_password_attempt,
+    reset_password_login_attempts,
+)
 from security.two_factor import (
     get_active_totp_method,
     decrypt_totp_secret,
@@ -5735,21 +5741,79 @@ def login(request):
                 status=401,
             )
 
+        security_profile, _ = SecurityProfile.objects.get_or_create(
+            identity=identity,
+        )
+
+        password_access = check_password_login_access(security_profile)
+
+        if not password_access["allowed"]:
+            if password_access["reason"] == "password_login_disabled":
+                send_login_attempt_alert(identity, "disabled")
+                return JsonResponse(
+                    {
+                        "detail": "Password login is disabled. Reset your password to restore access.",
+                        "code": "password_login_disabled",
+                    },
+                    status=403,
+                )
+
+            send_login_attempt_alert(identity, "locked")
+            return JsonResponse(
+                {
+                    "detail": "Password login is temporarily locked.",
+                    "code": "password_login_locked",
+                    "locked_until": password_access["locked_until"].isoformat(),
+                },
+                status=429,
+            )
+
         if not identity.check_password(password):
+            failed_attempt = register_failed_password_attempt(
+                security_profile,
+            )
+
+            if failed_attempt["disabled"]:
+                send_login_attempt_alert(identity, "disabled")
+                return JsonResponse(
+                    {
+                        "detail": "Password login is disabled. Reset your password to restore access.",
+                        "code": "password_login_disabled",
+                    },
+                    status=403,
+                )
+
+            if failed_attempt["locked_until"]:
+                send_login_attempt_alert(identity, "locked")
+                return JsonResponse(
+                    {
+                        "detail": "Too many incorrect password attempts. Login is temporarily locked.",
+                        "code": "password_login_locked",
+                        "locked_until": failed_attempt["locked_until"].isoformat(),
+                    },
+                    status=429,
+                )
+
+            send_login_attempt_alert(identity, "failed")
             return JsonResponse(
                 {
                     "detail": "Invalid login credentials.",
+                    "code": "invalid_login_credentials",
+                    "failed_attempts": failed_attempt["attempts"],
                 },
                 status=401,
             )
 
         if not identity.is_active:
+            send_login_attempt_alert(identity, "inactive")
             return JsonResponse(
                 {
                     "detail": "This account is inactive.",
                 },
                 status=403,
             )
+
+        reset_password_login_attempts(security_profile)
 
         security_profile = SecurityProfile.objects.filter(
             identity=identity,
@@ -5776,6 +5840,7 @@ def login(request):
                     identity,
                     location_token,
                 ):
+                    send_login_attempt_alert(identity, "password_verified")
                     return JsonResponse(
                         {
                             "detail": (
@@ -5789,6 +5854,7 @@ def login(request):
         if security_profile and security_profile.two_factor_enabled:
             locked, locked_until = check_two_factor_lockout(security_profile)
             if locked:
+                send_login_attempt_alert(identity, "password_verified")
                 return JsonResponse(
                     {
                         "detail": "Too many failed 2FA attempts. Try again after 15 minutes.",
@@ -5800,6 +5866,7 @@ def login(request):
 
             active_method = get_active_totp_method(security_profile)
             if not active_method or not active_method.encrypted_secret:
+                send_login_attempt_alert(identity, "password_verified")
                 return JsonResponse(
                     {
                         "detail": "Two-factor authentication is enabled but not properly configured.",
@@ -5817,6 +5884,7 @@ def login(request):
                 expires_at=timezone.now() + timedelta(minutes=5),
             )
 
+            send_login_attempt_alert(identity, "password_verified")
             return JsonResponse(
                 {
                     "message": "Two-factor verification required.",
@@ -5835,6 +5903,7 @@ def login(request):
 
         refresh = RefreshToken.for_user(identity)
 
+        send_login_attempt_alert(identity, "success")
         return JsonResponse(
             {
                 "message": "Login successful.",
