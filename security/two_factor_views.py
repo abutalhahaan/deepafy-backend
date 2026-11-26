@@ -33,7 +33,7 @@ def create_totp_qr(provisioning_uri):
     image = qrcode.make(provisioning_uri)
     buffer = BytesIO()
     image.save(buffer, format="PNG")
-    return base64.b64encode(buffer.getvalue()).decode("ascii")
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
 @api_view(["GET"])
