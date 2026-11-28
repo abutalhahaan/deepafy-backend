@@ -26,6 +26,18 @@ class SecurityProfile(models.Model):
         blank=True,
     )
 
+    token_version = models.PositiveIntegerField(default=0)
+
+    recovery_email = models.EmailField(
+        blank=True,
+        default="",
+    )
+
+    pending_recovery_email = models.EmailField(
+        blank=True,
+        default="",
+    )
+
     last_verified_at = models.DateTimeField(
         null=True,
         blank=True,
@@ -44,6 +56,55 @@ class SecurityProfile(models.Model):
 
     def __str__(self):
         return f"Security Profile: {self.identity}"
+
+
+class RecoveryEmailVerification(models.Model):
+    profile = models.ForeignKey(
+        SecurityProfile,
+        on_delete=models.CASCADE,
+        related_name="recovery_email_verifications",
+    )
+
+    email = models.EmailField()
+
+    otp_hash = models.CharField(max_length=128)
+
+    expires_at = models.DateTimeField()
+
+    failed_attempts = models.PositiveSmallIntegerField(
+        default=0,
+    )
+
+    locked_until = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    verified_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    used_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["profile", "created_at"],
+                name="rec_email_prof_created_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Recovery Email Verification: {self.profile.identity}"
 
 
 class SecurityPolicy(models.Model):

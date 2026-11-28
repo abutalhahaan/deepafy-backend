@@ -4,6 +4,8 @@ from django.conf import settings
 from django.core.mail import send_mail
 from django.utils import timezone
 
+from .models import SecurityPreference
+
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,13 @@ def send_login_attempt_alert(identity, outcome):
     Email failures must never interrupt authentication.
     """
     try:
+        alerts_enabled = SecurityPreference.objects.filter(
+            profile__identity=identity,
+        ).values_list("login_alerts_enabled", flat=True).first()
+
+        if alerts_enabled is False:
+            return False
+
         recipient = (getattr(identity, "email", "") or "").strip()
 
         if not recipient:

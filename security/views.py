@@ -2,6 +2,7 @@ from decimal import Decimal, InvalidOperation
 
 from django.core.exceptions import ValidationError
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
@@ -409,4 +410,43 @@ def verify_login_location(request):
         "restriction_enabled": True,
         "verification_token": token,
         "expires_in": 90,
+    })
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def password_login_protection_status(request):
+    profile, preference = get_security_records(request.user)
+
+    now = timezone.now()
+    locked_until = profile.password_login_locked_until
+    is_locked = bool(locked_until and locked_until > now)
+
+    if profile.password_login_disabled:
+        login_status = "disabled"
+    elif is_locked:
+        login_status = "temporarily_locked"
+    else:
+        login_status = "active"
+
+    remaining_seconds = (
+        max(0, int((locked_until - now).total_seconds()))
+        if is_locked else 0
+    )
+
+    return Response({
+        "protection_enabled": True,
+        "login_status": login_status,
+        "failed_attempts": profile.failed_password_attempts,
+        "maximum_attempts": 6,
+        "password_login_disabled": profile.password_login_disabled,
+        "locked_until": locked_until.isoformat() if is_locked else None,
+        "remaining_seconds": remaining_seconds,
+        "login_alerts_enabled": preference.login_alerts_enabled,
+        "lockout_policy": [
+            {"attempts": 3, "duration_minutes": 60},
+            {"attempts": 4, "duration_minutes": 360},
+            {"attempts": 5, "duration_minutes": 1440},
+            {"attempts": 6, "duration_minutes": None},
+        ],
     })

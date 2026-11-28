@@ -13,6 +13,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 
 from .models import SecurityMethod, SecurityProfile, TwoFactorLoginChallenge
+from .jwt_authentication import create_versioned_refresh_token
 from .two_factor import (
     generate_totp_secret,
     encrypt_totp_secret,
@@ -454,7 +455,7 @@ def verify_two_factor_login(request):
         identity.last_login = now
         identity.save(update_fields=["last_login"])
 
-        refresh = RefreshToken.for_user(identity)
+        refresh = create_versioned_refresh_token(identity)
 
         from identity.views import serialize_identity
 

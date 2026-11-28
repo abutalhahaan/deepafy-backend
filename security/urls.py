@@ -9,7 +9,11 @@ from .two_factor_views import (
     disable_two_factor,
 )
 
+from .recovery_email_views import recovery_email_status, verify_recovery_email
+from .password_views import change_password
+
 from .views import (
+    password_login_protection_status,
     verify_login_location,
     trusted_location_list_create,
     trusted_location_detail,
@@ -18,6 +22,7 @@ from .views import (
 )
 
 urlpatterns = [
+    path("password-login-protection/", password_login_protection_status, name="password-login-protection-status"),
     path(
         "two-factor/status/",
         two_factor_status,
@@ -73,5 +78,21 @@ urlpatterns = [
         "verify-two-factor-login/",
         verify_two_factor_login,
         name="verify-two-factor-login",
+    ),
+
+    path(
+        "change-password/",
+        change_password,
+        name="change-password",
+    ),
+    path(
+        "recovery-email/",
+        recovery_email_status,
+        name="recovery-email-status",
+    ),
+    path(
+        "recovery-email/verify/",
+        verify_recovery_email,
+        name="recovery-email-verify",
     ),
 ]

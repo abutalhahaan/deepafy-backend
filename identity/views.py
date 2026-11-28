@@ -15,6 +15,7 @@ from security.models import (
 )
 from security.trusted_location_verification import consume_trusted_location_verification
 from security.login_email import send_login_attempt_alert
+from security.jwt_authentication import create_versioned_refresh_token
 from security.password_login import (
     check_password_login_access,
     register_failed_password_attempt,
@@ -5643,7 +5644,7 @@ def institution_signup(request):
 
             institution_profile.institution_types.set(institution_types)
             institution_profile.affiliations.set(authorities)
-        refresh = RefreshToken.for_user(identity)
+        refresh = create_versioned_refresh_token(identity)
         return JsonResponse({"message": "Institution account created successfully.", "access": str(refresh.access_token), "refresh": str(refresh), "user": serialize_identity(identity), "account_type": "institution"}, status=201)
     except json.JSONDecodeError:
         return JsonResponse({"detail": "Invalid JSON."}, status=400)
@@ -5666,7 +5667,7 @@ def signup(request):
 
         identity = serializer.save()
 
-        refresh = RefreshToken.for_user(identity)
+        refresh = create_versioned_refresh_token(identity)
 
         return JsonResponse(
             {
@@ -5901,7 +5902,7 @@ def login(request):
             update_fields=["last_login"],
         )
 
-        refresh = RefreshToken.for_user(identity)
+        refresh = create_versioned_refresh_token(identity)
 
         send_login_attempt_alert(identity, "success")
         return JsonResponse(

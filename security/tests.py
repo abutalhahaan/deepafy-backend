@@ -1,4 +1,17 @@
 from django.test import TestCase
+from unittest.mock import patch
+from rest_framework.test import APIRequestFactory, force_authenticate
+
+from security.models import RecoveryEmailVerification
+from security.login_email import send_login_attempt_alert
+from security.recovery_email import (
+    send_recovery_email_otp,
+    verify_recovery_email_otp,
+)
+from security.recovery_email_views import (
+    recovery_email_status,
+    verify_recovery_email,
+)
 
 from datetime import timedelta
 
@@ -991,3 +1004,490 @@ class PasswordLoginLockoutTests(TestCase):
         self.assertEqual(self.profile.failed_password_attempts, 0)
         self.assertFalse(self.profile.password_login_disabled)
         self.assertIsNone(self.profile.password_login_locked_until)
+
+
+
+
+class PasswordLoginProtectionStatusTests(TestCase):
+    def setUp(self):
+        self.factory = APIRequestFactory()
+        self.identity = UserIdentity.objects.create(
+            email="protection-status@example.com",
+            mobile_number="01700000999",
+        )
+        self.profile = SecurityProfile.objects.get(identity=self.identity)
+        self.preference = SecurityPreference.objects.get(profile=self.profile)
+
+    def get_status(self):
+        from security.views import password_login_protection_status
+
+        request = self.factory.get("/password-login-protection/")
+        force_authenticate(request, user=self.identity)
+        return password_login_protection_status(request)
+
+    def test_active_password_login_status(self):
+        response = self.get_status()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["login_status"], "active")
+        self.assertEqual(response.data["failed_attempts"], 0)
+
+    def test_temporary_lockout_status(self):
+        self.profile.password_login_locked_until = (
+            timezone.now() + timedelta(hours=1)
+        )
+        self.profile.save(update_fields=["password_login_locked_until"])
+
+        response = self.get_status()
+        self.assertEqual(response.data["login_status"], "temporarily_locked")
+        self.assertGreater(response.data["remaining_seconds"], 0)
+
+    def test_disabled_password_login_status(self):
+        self.profile.password_login_disabled = True
+        self.profile.save(update_fields=["password_login_disabled"])
+
+        response = self.get_status()
+        self.assertEqual(response.data["login_status"], "disabled")
+
+    def test_login_alert_status(self):
+        self.preference.login_alerts_enabled = False
+        self.preference.save(update_fields=["login_alerts_enabled"])
+
+        response = self.get_status()
+        self.assertFalse(response.data["login_alerts_enabled"])
+
+
+class LoginAttemptEmailAlertTests(TestCase):
+    def setUp(self):
+        self.identity = UserIdentity.objects.create(
+            email="login-alert-test@example.com",
+            mobile_number="01700000998",
+        )
+        self.profile = SecurityProfile.objects.get(identity=self.identity)
+        self.preference = SecurityPreference.objects.get(profile=self.profile)
+
+    @patch("security.login_email.send_mail", return_value=1)
+    def test_email_is_sent_when_alerts_enabled(self, mocked_mail):
+        self.preference.login_alerts_enabled = True
+        self.preference.save(update_fields=["login_alerts_enabled"])
+
+        result = send_login_attempt_alert(self.identity, "success")
+
+        self.assertTrue(result)
+        mocked_mail.assert_called_once()
+
+    @patch("security.login_email.send_mail", return_value=1)
+    def test_email_is_not_sent_when_alerts_disabled(self, mocked_mail):
+        self.preference.login_alerts_enabled = False
+        self.preference.save(update_fields=["login_alerts_enabled"])
+
+        result = send_login_attempt_alert(self.identity, "success")
+
+        self.assertFalse(result)
+        mocked_mail.assert_not_called()
+
+    @patch("security.login_email.send_mail", return_value=1)
+    def test_email_is_sent_when_preference_record_missing(self, mocked_mail):
+        self.preference.delete()
+
+        result = send_login_attempt_alert(self.identity, "success")
+
+        self.assertTrue(result)
+        mocked_mail.assert_called_once()
+
+
+class RecoveryEmailTests(TestCase):
+    def setUp(self):
+        self.factory = APIRequestFactory()
+        self.identity = UserIdentity.objects.create(
+            email="recovery-test@example.com",
+            mobile_number="01800000888",
+        )
+        self.profile = SecurityProfile.objects.get(
+            identity=self.identity,
+        )
+
+    def test_recovery_email_is_not_changed_before_verification(self):
+        self.profile.recovery_email = "old-recovery@example.com"
+        self.profile.save(update_fields=["recovery_email"])
+
+        with patch("security.recovery_email.send_mail", return_value=1):
+            request = self.factory.post(
+                "/api/security/recovery-email/",
+                {"email": "new-recovery@example.com"},
+                format="json",
+            )
+            force_authenticate(request, user=self.identity)
+            response = recovery_email_status(request)
+
+        self.profile.refresh_from_db()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            self.profile.recovery_email,
+            "old-recovery@example.com",
+        )
+        self.assertEqual(
+            self.profile.pending_recovery_email,
+            "new-recovery@example.com",
+        )
+
+    def test_otp_is_hashed_and_can_be_verified_once(self):
+        with patch(
+            "security.recovery_email.send_mail",
+            return_value=1,
+        ) as mocked_mail:
+            success, _ = send_recovery_email_otp(
+                self.profile,
+                "recovery-otp@example.com",
+            )
+
+        self.assertTrue(success)
+
+        verification = RecoveryEmailVerification.objects.get(
+            profile=self.profile,
+        )
+        sent_message = mocked_mail.call_args.kwargs["message"]
+        otp = sent_message.split("code is: ")[1].splitlines()[0]
+
+        self.assertNotEqual(verification.otp_hash, otp)
+        self.assertTrue(verification.otp_hash.startswith("pbkdf2_"))
+
+        verified, _ = verify_recovery_email_otp(
+            self.profile,
+            "recovery-otp@example.com",
+            otp,
+        )
+        self.assertTrue(verified)
+
+        verified_again, _ = verify_recovery_email_otp(
+            self.profile,
+            "recovery-otp@example.com",
+            otp,
+        )
+        self.assertFalse(verified_again)
+
+    def test_three_wrong_attempts_trigger_two_minute_lockout(self):
+        with patch(
+            "security.recovery_email.send_mail",
+            return_value=1,
+        ):
+            send_recovery_email_otp(
+                self.profile,
+                "recovery-lock@example.com",
+            )
+
+        for _ in range(3):
+            verify_recovery_email_otp(
+                self.profile,
+                "recovery-lock@example.com",
+                "000000",
+            )
+
+        verification = RecoveryEmailVerification.objects.get(
+            profile=self.profile,
+        )
+        self.assertEqual(verification.failed_attempts, 3)
+        self.assertIsNotNone(verification.locked_until)
+
+        verified, message = verify_recovery_email_otp(
+            self.profile,
+            "recovery-lock@example.com",
+            "123456",
+        )
+        self.assertFalse(verified)
+        self.assertIn("Too many", message)
+
+    def test_expired_otp_is_rejected(self):
+        with patch(
+            "security.recovery_email.send_mail",
+            return_value=1,
+        ):
+            send_recovery_email_otp(
+                self.profile,
+                "recovery-expired@example.com",
+            )
+
+        verification = RecoveryEmailVerification.objects.get(
+            profile=self.profile,
+        )
+        verification.expires_at = timezone.now() - timedelta(seconds=1)
+        verification.save(update_fields=["expires_at"])
+
+        verified, message = verify_recovery_email_otp(
+            self.profile,
+            "recovery-expired@example.com",
+            "123456",
+        )
+
+        self.assertFalse(verified)
+        self.assertIn("expired", message.lower())
+
+    def test_recovery_email_api_verifies_pending_email(self):
+        self.profile.pending_recovery_email = "recovery-api@example.com"
+        self.profile.save(update_fields=["pending_recovery_email"])
+
+        with patch(
+            "security.recovery_email.send_mail",
+            return_value=1,
+        ) as mocked_mail:
+            send_recovery_email_otp(
+                self.profile,
+                "recovery-api@example.com",
+            )
+
+        sent_message = mocked_mail.call_args.kwargs["message"]
+        otp = sent_message.split("code is: ")[1].splitlines()[0]
+
+        request = self.factory.post(
+            "/api/security/recovery-email/verify/",
+            {"otp": otp},
+            format="json",
+        )
+        force_authenticate(request, user=self.identity)
+        response = verify_recovery_email(request)
+
+        self.profile.refresh_from_db()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            self.profile.recovery_email,
+            "recovery-api@example.com",
+        )
+        self.assertEqual(self.profile.pending_recovery_email, "")
+
+
+class ChangePasswordTests(TestCase):
+    def setUp(self):
+        from rest_framework.test import APIClient
+        from security.jwt_authentication import create_versioned_refresh_token
+
+        self.client = APIClient()
+        self.identity = UserIdentity.objects.create(
+            email="change-password@example.com",
+            username="change-password-test",
+            status=UserIdentity.Status.ACTIVE,
+        )
+        self.identity.set_password("Current-Strong!Pass-2026")
+        self.identity.save()
+
+        self.profile = SecurityProfile.objects.get(
+            identity=self.identity,
+        )
+
+        self.old_refresh = create_versioned_refresh_token(self.identity)
+        self.old_access = self.old_refresh.access_token
+
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {self.old_access}",
+        )
+
+        self.url = "/api/security/change-password/"
+
+        self.valid_data = {
+            "current_password": "Current-Strong!Pass-2026",
+            "new_password": "Deepafy-New!Strong-2026",
+            "confirm_password": "Deepafy-New!Strong-2026",
+        }
+
+    def test_wrong_current_password_is_rejected(self):
+        data = {
+            **self.valid_data,
+            "current_password": "Wrong-Current-Password",
+        }
+
+        response = self.client.post(self.url, data, format="json")
+
+        self.assertEqual(response.status_code, 400)
+        self.identity.refresh_from_db()
+        self.assertTrue(
+            self.identity.check_password("Current-Strong!Pass-2026")
+        )
+
+    def test_password_confirmation_mismatch_is_rejected(self):
+        data = {
+            **self.valid_data,
+            "confirm_password": "Different-Password!2026",
+        }
+
+        response = self.client.post(self.url, data, format="json")
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_same_password_is_rejected(self):
+        data = {
+            **self.valid_data,
+            "new_password": "Current-Strong!Pass-2026",
+            "confirm_password": "Current-Strong!Pass-2026",
+        }
+
+        response = self.client.post(self.url, data, format="json")
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_weak_password_is_rejected(self):
+        data = {
+            **self.valid_data,
+            "new_password": "12345678",
+            "confirm_password": "12345678",
+        }
+
+        response = self.client.post(self.url, data, format="json")
+
+        self.assertEqual(response.status_code, 400)
+
+    @patch("security.password_views.send_password_change_alert")
+    def test_successful_change_rotates_tokens_and_resets_password_lockout(
+        self,
+        send_alert,
+    ):
+        self.profile.failed_password_attempts = 5
+        self.profile.password_login_disabled = True
+        self.profile.password_login_locked_until = timezone.now() + timedelta(
+            hours=1,
+        )
+        self.profile.save()
+
+        response = self.client.post(
+            self.url,
+            self.valid_data,
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+
+        self.identity.refresh_from_db()
+        self.profile.refresh_from_db()
+
+        self.assertTrue(
+            self.identity.check_password("Deepafy-New!Strong-2026")
+        )
+        self.assertEqual(self.profile.token_version, 1)
+        self.assertIsNotNone(self.profile.password_changed_at)
+        self.assertEqual(self.profile.failed_password_attempts, 0)
+        self.assertFalse(self.profile.password_login_disabled)
+        self.assertIsNone(self.profile.password_login_locked_until)
+
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {self.old_access}",
+        )
+        old_token_response = self.client.get(
+            "/api/security/two-factor/status/",
+        )
+        self.assertEqual(old_token_response.status_code, 401)
+
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {response.data['access']}",
+        )
+        new_token_response = self.client.get(
+            "/api/security/two-factor/status/",
+        )
+        self.assertEqual(new_token_response.status_code, 200)
+
+        old_refresh_response = self.client.post(
+            "/api/identity/token/refresh/",
+            {"refresh": str(self.old_refresh)},
+            format="json",
+        )
+        self.assertEqual(old_refresh_response.status_code, 401)
+
+        send_alert.assert_called_once()
+
+    def enable_totp(self):
+        import pyotp
+        from security.models import SecurityMethod
+        from security.two_factor import encrypt_totp_secret
+
+        secret = pyotp.random_base32()
+        method = SecurityMethod.objects.create(
+            profile=self.profile,
+            method=SecurityMethod.Method.TOTP,
+            status=SecurityMethod.Status.ACTIVE,
+            is_primary=True,
+            encrypted_secret=encrypt_totp_secret(secret),
+        )
+        self.profile.two_factor_enabled = True
+        self.profile.save(update_fields=["two_factor_enabled"])
+        return secret, method
+
+    @patch("security.password_views.send_password_change_alert")
+    def test_password_change_requires_valid_totp(self, send_alert):
+        import pyotp
+
+        secret, method = self.enable_totp()
+        data = {
+            **self.valid_data,
+            "code": pyotp.TOTP(secret).now(),
+        }
+
+        response = self.client.post(self.url, data, format="json")
+
+        self.assertEqual(response.status_code, 200)
+        self.identity.refresh_from_db()
+        self.assertTrue(
+            self.identity.check_password("Deepafy-New!Strong-2026")
+        )
+        send_alert.assert_called_once()
+
+    def test_invalid_totp_does_not_change_password(self):
+        self.enable_totp()
+        data = {
+            **self.valid_data,
+            "code": "000000",
+        }
+
+        response = self.client.post(self.url, data, format="json")
+
+        self.assertEqual(response.status_code, 400)
+        self.identity.refresh_from_db()
+        self.assertTrue(
+            self.identity.check_password("Current-Strong!Pass-2026")
+        )
+
+    @patch("security.password_views.send_password_change_alert")
+    def test_password_change_accepts_single_use_recovery_code(
+        self,
+        send_alert,
+    ):
+        from security.two_factor import replace_recovery_codes
+
+        self.enable_totp()
+        codes = replace_recovery_codes(self.profile)
+
+        data = {
+            **self.valid_data,
+            "recovery_code": codes[0],
+        }
+
+        response = self.client.post(self.url, data, format="json")
+
+        self.assertEqual(response.status_code, 200)
+
+        self.identity.refresh_from_db()
+        self.assertTrue(
+            self.identity.check_password("Deepafy-New!Strong-2026")
+        )
+        send_alert.assert_called_once()
+
+    def test_three_invalid_totp_attempts_trigger_fifteen_minute_lockout(self):
+        from datetime import timedelta
+
+        self.enable_totp()
+
+        for attempt in range(3):
+            response = self.client.post(
+                self.url,
+                {**self.valid_data, "code": "000000"},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 429)
+
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.two_factor_verification_attempts, 3)
+        self.assertIsNotNone(self.profile.two_factor_locked_until)
+        self.assertGreaterEqual(
+            self.profile.two_factor_locked_until,
+            timezone.now() + timedelta(minutes=14, seconds=59),
+        )
